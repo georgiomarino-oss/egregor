@@ -1,0 +1,42 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  displayName String
+  createdAt   DateTime @default(now())
+}
+
+model Theme {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  events      Event[]
+}
+
+
+model Event {
+  id                  String   @id @default(cuid())
+  hostUserId          String
+  themeId             String?
+  title               String
+  description         String?
+  intentionStatement  String
+  visibility          String
+  guidanceMode        String
+  scriptId            String?
+  startTimeUtc        DateTime
+  endTimeUtc          DateTime
+  timezone            String
+  status              String   @default("SCHEDULED")
+  activeCountSnapshot Int      @default(0)
+  totalJoinCount      Int      @default(0)
+  theme               Theme?   @relation(fields: [themeId], references: [id])
+}

@@ -1,0 +1,13 @@
+{
+  "name": "egregor",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "db:migrate": "pnpm --filter @egregor/api exec prisma migrate dev --name init --schema prisma/schema.prisma",
+    "db:generate": "pnpm --filter @egregor/api exec prisma generate --schema prisma/schema.prisma"
+  }
+}

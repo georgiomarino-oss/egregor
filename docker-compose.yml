@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: egregor-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: egregor
+    ports:
+      - "5432:5432"
+    volumes:
+      - egregor_pg_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: egregor-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - egregor_redis_data:/data
+
+volumes:
+  egregor_pg_data:
+  egregor_redis_data:
