@@ -12,15 +12,17 @@ model User {
   email       String   @unique
   displayName String
   createdAt   DateTime @default(now())
+
+  hostedEvents Event[]  @relation("HostedEvents")
+  scripts      Script[] @relation("AuthoredScripts")
 }
 
 model Theme {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   name        String
   description String?
   events      Event[]
 }
-
 
 model Event {
   id                  String   @id @default(cuid())
@@ -29,14 +31,39 @@ model Event {
   title               String
   description         String?
   intentionStatement  String
-  visibility          String
-  guidanceMode        String
+  visibility          String   @default("PUBLIC")
+  guidanceMode        String   @default("AI")
   scriptId            String?
   startTimeUtc        DateTime
   endTimeUtc          DateTime
-  timezone            String
+  timezone            String   @default("Europe/London")
   status              String   @default("SCHEDULED")
   activeCountSnapshot Int      @default(0)
   totalJoinCount      Int      @default(0)
-  theme               Theme?   @relation(fields: [themeId], references: [id])
+
+  hostUser User    @relation("HostedEvents", fields: [hostUserId], references: [id])
+  theme    Theme?  @relation(fields: [themeId], references: [id])
+  script   Script? @relation(fields: [scriptId], references: [id])
+
+  @@index([hostUserId])
+  @@index([themeId])
+  @@index([scriptId])
+  @@index([startTimeUtc])
+}
+
+model Script {
+  id              String   @id @default(cuid())
+  authorUserId    String
+  title           String
+  intention       String
+  durationMinutes Int
+  tone            String
+  contentJson     String
+  createdAt       DateTime @default(now())
+
+  author User    @relation("AuthoredScripts", fields: [authorUserId], references: [id])
+  events Event[]
+
+  @@index([authorUserId])
+  @@index([createdAt])
 }
