@@ -65,7 +65,6 @@ function countActiveForEvent(eventId: string) {
   return count;
 }
 
-
 await app.register(cors, {
   origin: env.CORS_ORIGIN,
   credentials: true
@@ -121,7 +120,7 @@ app.post("/api/auth/signup", async (req) => {
 app.post(
   "/api/events",
   { preHandler: (app as any).authenticate },
-  async (req: any) => {
+  async (req: any, reply) => {
     const body = z
       .object({
         title: z.string().min(3),
@@ -137,13 +136,17 @@ app.post(
 
     const hostUserId = String(req.user?.sub || "");
     if (!hostUserId) {
-      throw new Error("Missing authenticated user id.");
+      return reply.code(401).send({ error: "Unauthorized" });
     }
 
     const start = new Date(body.startTimeUtc);
     const end = new Date(body.endTimeUtc);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-      throw new Error("Invalid start/end datetime.");
+      return reply.code(400).send({ error: "Invalid start/end datetime." });
+    }
+
+    if (end <= start) {
+      return reply.code(400).send({ error: "endTimeUtc must be after startTimeUtc." });
     }
 
     const event = await prisma.event.create({
@@ -183,8 +186,6 @@ app.get("/api/events", async () => {
 
   return { events: enriched };
 });
-
-
 
 app.post(
   "/api/events/:id/join",
@@ -246,7 +247,6 @@ app.post(
     };
   }
 );
-
 
 app.post(
   "/api/scripts/generate",
@@ -353,8 +353,9 @@ app.get(
   "/api/scripts",
   { preHandler: (app as any).authenticate },
   async (req: any) => {
+    const userId = String(req.user?.sub || "");
     const scripts = await prisma.script.findMany({
-      where: { authorUserId: req.user.sub },
+      where: { authorUserId: userId },
       orderBy: { createdAt: "desc" },
       take: 50
     });
@@ -371,7 +372,6 @@ app.get(
     };
   }
 );
-
 
 app.post(
   "/api/events/:id/attach-script",
@@ -392,13 +392,12 @@ app.post(
       return reply.code(403).send({ error: "Forbidden: not your event." });
     }
 
-const script = await prisma.script.findUnique({ where: { id: body.scriptId } });
-if (!script) return reply.code(404).send({ error: "Script not found." });
+    const script = await prisma.script.findUnique({ where: { id: body.scriptId } });
+    if (!script) return reply.code(404).send({ error: "Script not found." });
 
-if (script.authorUserId !== req.user.sub) {
-  return reply.code(403).send({ error: "Forbidden: not your script." });
-}
-
+    if (script.authorUserId !== userId) {
+      return reply.code(403).send({ error: "Forbidden: not your script." });
+    }
 
     const updated = await prisma.event.update({
       where: { id: params.id },

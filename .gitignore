@@ -5,3 +5,7 @@ dist
 .env.*
 !.env.example
 pnpm-lock.yaml
+# env
+# build
+# TS Cache
+*.tsbuildinfo
