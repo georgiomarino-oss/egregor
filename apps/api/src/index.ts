@@ -18,6 +18,8 @@ const app = Fastify({
   }
 });
 
+/* ------------------------- Presence (in-memory) ------------------------- */
+
 type PresenceEntry = {
   userId: string;
   eventId: string;
@@ -25,8 +27,7 @@ type PresenceEntry = {
 };
 
 const PRESENCE_TTL_MS = (env.PRESENCE_STALE_SECONDS || 30) * 1000;
-// key: `${eventId}:${userId}`
-const presence = new Map<string, PresenceEntry>();
+const presence = new Map<string, PresenceEntry>(); // key: `${eventId}:${userId}`
 
 function presenceKey(eventId: string, userId: string) {
   return `${eventId}:${userId}`;
@@ -65,6 +66,8 @@ function countActiveForEvent(eventId: string) {
   return count;
 }
 
+/* ------------------------------- Plugins -------------------------------- */
+
 await app.register(cors, {
   origin: env.CORS_ORIGIN,
   credentials: true
@@ -74,16 +77,26 @@ await app.register(jwt, {
   secret: env.JWT_SECRET
 });
 
+/* ----------------------------- Auth helper ------------------------------ */
+
 app.decorate("authenticate", async function (request: any, reply: any) {
   try {
     await request.jwtVerify();
-  } catch {
+    const userId = String(request.user?.sub || "");
+    if (!userId) {
+      return reply
+        .code(401)
+        .send({ error: "Unauthorized: missing token subject" });
+    }
+  } catch (err) {
+    request.log.error({ err }, "jwtVerify failed");
     return reply.code(401).send({ error: "Unauthorized" });
   }
 });
 
-// Clean error responses for validation/runtime
-app.setErrorHandler((error, _request, reply) => {
+/* ---------------------------- Error handler ----------------------------- */
+
+app.setErrorHandler((error, request, reply) => {
   if (error instanceof z.ZodError) {
     return reply.code(400).send({
       error: "Validation failed",
@@ -91,11 +104,13 @@ app.setErrorHandler((error, _request, reply) => {
     });
   }
 
-  app.log.error(error);
+  request.log.error(error);
   return reply.code(500).send({
     error: "Internal server error"
   });
 });
+
+/* -------------------------------- Routes -------------------------------- */
 
 app.get("/api/health", async () => ({ ok: true, service: "egregor-api" }));
 
@@ -116,6 +131,8 @@ app.post("/api/auth/signup", async (req) => {
   const token = app.jwt.sign({ sub: user.id, email: user.email });
   return { token, user };
 });
+
+/* ------------------------------- Events --------------------------------- */
 
 app.post(
   "/api/events",
@@ -141,12 +158,15 @@ app.post(
 
     const start = new Date(body.startTimeUtc);
     const end = new Date(body.endTimeUtc);
+
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
       return reply.code(400).send({ error: "Invalid start/end datetime." });
     }
 
     if (end <= start) {
-      return reply.code(400).send({ error: "endTimeUtc must be after startTimeUtc." });
+      return reply
+        .code(400)
+        .send({ error: "endTimeUtc must be after startTimeUtc." });
     }
 
     const event = await prisma.event.create({
@@ -180,7 +200,7 @@ app.get("/api/events", async () => {
     const isActive = ev.startTimeUtc <= now && ev.endTimeUtc >= now;
     return {
       ...ev,
-      activeNow: isActive ? ev.activeCountSnapshot : 0
+      activeNow: isActive ? countActiveForEvent(ev.id) : 0
     };
   });
 
@@ -191,21 +211,27 @@ app.post(
   "/api/events/:id/join",
   { preHandler: (app as any).authenticate },
   async (req: any, reply) => {
-    const params = z.object({ id: z.string().min(1) }).parse(req.params);
-    const userId = String(req.user?.sub || "");
-    if (!userId) return reply.code(401).send({ error: "Unauthorized" });
+    try {
+      const params = z.object({ id: z.string().min(1) }).parse(req.params);
+      const userId = String(req.user?.sub || "");
+      if (!userId) return reply.code(401).send({ error: "Unauthorized" });
 
-    const event = await prisma.event.findUnique({ where: { id: params.id } });
-    if (!event) return reply.code(404).send({ error: "Event not found." });
+      const event = await prisma.event.findUnique({ where: { id: params.id } });
+      if (!event) return reply.code(404).send({ error: "Event not found." });
 
-    upsertPresence(params.id, userId);
+      upsertPresence(params.id, userId);
+      const activeNow = countActiveForEvent(params.id);
 
-    return {
-      ok: true,
-      eventId: params.id,
-      activeNow: countActiveForEvent(params.id),
-      ttlSeconds: Math.floor(PRESENCE_TTL_MS / 1000)
-    };
+      return {
+        ok: true,
+        eventId: params.id,
+        activeNow,
+        ttlSeconds: Math.floor(PRESENCE_TTL_MS / 1000)
+      };
+    } catch (err: any) {
+      req.log.error({ err }, "join route failed");
+      return reply.code(500).send({ error: "Internal server error" });
+    }
   }
 );
 
@@ -213,20 +239,26 @@ app.post(
   "/api/events/:id/heartbeat",
   { preHandler: (app as any).authenticate },
   async (req: any, reply) => {
-    const params = z.object({ id: z.string().min(1) }).parse(req.params);
-    const userId = String(req.user?.sub || "");
-    if (!userId) return reply.code(401).send({ error: "Unauthorized" });
+    try {
+      const params = z.object({ id: z.string().min(1) }).parse(req.params);
+      const userId = String(req.user?.sub || "");
+      if (!userId) return reply.code(401).send({ error: "Unauthorized" });
 
-    const event = await prisma.event.findUnique({ where: { id: params.id } });
-    if (!event) return reply.code(404).send({ error: "Event not found." });
+      const event = await prisma.event.findUnique({ where: { id: params.id } });
+      if (!event) return reply.code(404).send({ error: "Event not found." });
 
-    upsertPresence(params.id, userId);
+      upsertPresence(params.id, userId);
+      const activeNow = countActiveForEvent(params.id);
 
-    return {
-      ok: true,
-      eventId: params.id,
-      activeNow: countActiveForEvent(params.id)
-    };
+      return {
+        ok: true,
+        eventId: params.id,
+        activeNow
+      };
+    } catch (err: any) {
+      req.log.error({ err }, "heartbeat route failed");
+      return reply.code(500).send({ error: "Internal server error" });
+    }
   }
 );
 
@@ -234,19 +266,30 @@ app.post(
   "/api/events/:id/leave",
   { preHandler: (app as any).authenticate },
   async (req: any, reply) => {
-    const params = z.object({ id: z.string().min(1) }).parse(req.params);
-    const userId = String(req.user?.sub || "");
-    if (!userId) return reply.code(401).send({ error: "Unauthorized" });
+    try {
+      const params = z.object({ id: z.string().min(1) }).parse(req.params);
+      const userId = String(req.user?.sub || "");
+      if (!userId) return reply.code(401).send({ error: "Unauthorized" });
 
-    removePresence(params.id, userId);
+      const event = await prisma.event.findUnique({ where: { id: params.id } });
+      if (!event) return reply.code(404).send({ error: "Event not found." });
 
-    return {
-      ok: true,
-      eventId: params.id,
-      activeNow: countActiveForEvent(params.id)
-    };
+      removePresence(params.id, userId);
+      const activeNow = countActiveForEvent(params.id);
+
+      return {
+        ok: true,
+        eventId: params.id,
+        activeNow
+      };
+    } catch (err: any) {
+      req.log.error({ err }, "leave route failed");
+      return reply.code(500).send({ error: "Internal server error" });
+    }
   }
 );
+
+/* ------------------------------- Scripts -------------------------------- */
 
 app.post(
   "/api/scripts/generate",
@@ -310,7 +353,8 @@ Only return valid JSON. No markdown.
       const status = err?.status ?? err?.statusCode ?? err?.code;
       if (status === 429) {
         return reply.code(429).send({
-          error: "AI provider is rate-limited right now. Please retry in ~20 seconds."
+          error:
+            "AI provider is rate-limited right now. Please retry in ~20 seconds."
         });
       }
 
@@ -352,8 +396,10 @@ Only return valid JSON. No markdown.
 app.get(
   "/api/scripts",
   { preHandler: (app as any).authenticate },
-  async (req: any) => {
+  async (req: any, reply) => {
     const userId = String(req.user?.sub || "");
+    if (!userId) return reply.code(401).send({ error: "Unauthorized" });
+
     const scripts = await prisma.script.findMany({
       where: { authorUserId: userId },
       orderBy: { createdAt: "desc" },
@@ -392,7 +438,9 @@ app.post(
       return reply.code(403).send({ error: "Forbidden: not your event." });
     }
 
-    const script = await prisma.script.findUnique({ where: { id: body.scriptId } });
+    const script = await prisma.script.findUnique({
+      where: { id: body.scriptId }
+    });
     if (!script) return reply.code(404).send({ error: "Script not found." });
 
     if (script.authorUserId !== userId) {
@@ -407,6 +455,8 @@ app.post(
     return { event: updated };
   }
 );
+
+/* -------------------------------- Root ---------------------------------- */
 
 app.get("/", async () => ({ service: "egregor-api", status: "ok" }));
 
