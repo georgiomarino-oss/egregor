@@ -7,7 +7,7 @@ import { useAppState } from "../state";
 type Mode = "signin" | "signup";
 
 export default function AuthScreen() {
-  const { user } = useAppState();
+  const { user, signOut } = useAppState();
 
   const [mode, setMode] = useState<Mode>("signin");
   const [loading, setLoading] = useState(false);
@@ -22,24 +22,31 @@ export default function AuthScreen() {
   const submit = async () => {
     const e = email.trim();
     if (!e) return Alert.alert("Missing email", "Please enter your email.");
-    if (password.length < 6)
+    if (password.length < 6) {
       return Alert.alert("Password too short", "Password must be at least 6 characters.");
+    }
 
     setLoading(true);
     try {
       if (mode === "signin") {
         const { error } = await supabase.auth.signInWithPassword({ email: e, password });
-        if (error) return Alert.alert("Sign in failed", error.message);
+        if (error) {
+          Alert.alert("Sign in failed", error.message);
+          return;
+        }
       } else {
         const { error } = await supabase.auth.signUp({ email: e, password });
-        if (error) return Alert.alert("Sign up failed", error.message);
+        if (error) {
+          Alert.alert("Sign up failed", error.message);
+          return;
+        }
 
         Alert.alert(
           "Account created",
           "If email confirmation is enabled in Supabase, check your inbox. If not, you should be signed in immediately."
         );
       }
-      // No navigation: App.tsx will swap screens when session changes.
+      // No navigation: App.tsx swaps screens when session changes.
     } finally {
       setLoading(false);
     }
@@ -48,8 +55,9 @@ export default function AuthScreen() {
   const doSignOut = async () => {
     setLoading(true);
     try {
-      const { error } = await supabase.auth.signOut();
-      if (error) Alert.alert("Sign out failed", error.message);
+      await signOut();
+    } catch (e: any) {
+      Alert.alert("Sign out failed", e?.message ?? "Unknown error");
     } finally {
       setLoading(false);
     }
@@ -59,14 +67,18 @@ export default function AuthScreen() {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.container}>
         <Text style={styles.h1}>Egregor</Text>
-        <Text style={styles.sub}>Sign in to create events, generate scripts, and join live presence.</Text>
+        <Text style={styles.sub}>
+          Sign in to create events, generate scripts, and join live presence.
+        </Text>
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Account</Text>
 
           <Text style={styles.meta}>
             Status:{" "}
-            <Text style={user ? styles.ok : styles.warn}>{user ? "Signed in" : "Signed out"}</Text>
+            <Text style={user ? styles.ok : styles.warn}>
+              {user ? "Signed in" : "Signed out"}
+            </Text>
           </Text>
 
           {user ? (
@@ -85,7 +97,10 @@ export default function AuthScreen() {
             <>
               <View style={styles.row}>
                 <Pressable
-                  style={[styles.pill, mode === "signin" ? styles.pillActive : styles.pillInactive]}
+                  style={[
+                    styles.pill,
+                    mode === "signin" ? styles.pillActive : styles.pillInactive,
+                  ]}
                   onPress={() => setMode("signin")}
                   disabled={loading}
                 >
@@ -93,7 +108,10 @@ export default function AuthScreen() {
                 </Pressable>
 
                 <Pressable
-                  style={[styles.pill, mode === "signup" ? styles.pillActive : styles.pillInactive]}
+                  style={[
+                    styles.pill,
+                    mode === "signup" ? styles.pillActive : styles.pillInactive,
+                  ]}
                   onPress={() => setMode("signup")}
                   disabled={loading}
                 >
