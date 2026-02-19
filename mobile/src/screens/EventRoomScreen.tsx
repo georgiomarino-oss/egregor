@@ -111,7 +111,6 @@ function secondsBetweenIso(aIso: string, bIso: string): number {
 }
 
 function statusPillStyle(mode: EventRunMode) {
-  // keep palette consistent with existing theme
   switch (mode) {
     case "running":
       return { borderColor: "#2E5BFF", backgroundColor: "#0F1C44", textColor: "#DCE4FF" };
@@ -163,25 +162,60 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return userId === hostId;
   }, [userId, event]);
 
-  const currentSectionIdx = useMemo(() => {
+  const hasScript = !!script && !!script.sections?.length;
+
+  // Attendee preview: if set, they are viewing a section different from host
+  const [previewSectionIdx, setPreviewSectionIdx] = useState<number | null>(null);
+
+  // Reset preview whenever script changes (attach/detach) or host changes section
+  useEffect(() => {
+    if (isHost) {
+      setPreviewSectionIdx(null);
+      return;
+    }
+    // if the host moves and you were previewing, keep preview; user can "follow host"
+    // but if script disappears, clear
+    if (!hasScript) setPreviewSectionIdx(null);
+  }, [isHost, hasScript, runState.sectionIndex]);
+
+  const hostSectionIdx = useMemo(() => {
     const len = script?.sections?.length ?? 0;
     if (len <= 0) return 0;
     const idx = Number.isFinite(runState.sectionIndex) ? runState.sectionIndex : 0;
     return Math.min(Math.max(0, idx), len - 1);
   }, [runState.sectionIndex, script?.sections?.length]);
 
+  const viewingSectionIdx = useMemo(() => {
+    if (isHost) return hostSectionIdx;
+    if (previewSectionIdx === null) return hostSectionIdx;
+    const len = script?.sections?.length ?? 0;
+    if (len <= 0) return 0;
+    return Math.min(Math.max(0, previewSectionIdx), len - 1);
+  }, [isHost, hostSectionIdx, previewSectionIdx, script?.sections?.length]);
+
+  const viewingHostLive = useMemo(() => {
+    if (isHost) return true;
+    return previewSectionIdx === null || viewingSectionIdx === hostSectionIdx;
+  }, [isHost, previewSectionIdx, viewingSectionIdx, hostSectionIdx]);
+
   const currentSection = useMemo(() => {
     if (!script?.sections?.length) return null;
-    return script.sections[currentSectionIdx] ?? null;
-  }, [script, currentSectionIdx]);
+    return script.sections[viewingSectionIdx] ?? null;
+  }, [script, viewingSectionIdx]);
 
   const sectionTotalSeconds = useMemo(() => {
     if (!currentSection) return 0;
     return Math.max(1, Math.floor(currentSection.minutes * 60));
   }, [currentSection]);
 
+  // Only show synced timer when you're following the host's live section AND host is on that section.
+  // If attendee is previewing another section, show a static "Preview" timer based on full duration.
   const secondsLeft = useMemo(() => {
     if (!script || !currentSection) return 0;
+
+    if (!viewingHostLive || viewingSectionIdx !== hostSectionIdx) {
+      return sectionTotalSeconds;
+    }
 
     const durationSec = sectionTotalSeconds;
     const baseElapsed = runState.elapsedBeforePauseSec ?? 0;
@@ -193,7 +227,16 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }
 
     return Math.max(0, durationSec - baseElapsed);
-  }, [script, currentSection, sectionTotalSeconds, runState, tick]);
+  }, [
+    script,
+    currentSection,
+    sectionTotalSeconds,
+    runState,
+    tick,
+    viewingHostLive,
+    viewingSectionIdx,
+    hostSectionIdx,
+  ]);
 
   const runStatusLabel = useMemo(() => {
     if (!runReady) return "…";
@@ -242,6 +285,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     const row = scData as Pick<ScriptDbRow, "id" | "title" | "content_json">;
     setScriptDbRow(row);
     setScript(parseScriptContent(row.content_json));
+    setPreviewSectionIdx(null);
   }, []);
 
   const loadEventRoom = useCallback(async () => {
@@ -494,8 +538,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }
   }, [eventId, hasValidEventId, loadPresence]);
 
-  const hasScript = !!script && !!script.sections?.length;
-
   const clampIndex = useCallback(
     (idx: number) => {
       const len = script?.sections?.length ?? 0;
@@ -529,7 +571,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   }, [clampIndex, hostSetViaServer, runState.sectionIndex]);
 
   const hostRestart = useCallback(async () => {
-    // Restart from the current section, timer reset
     const idx = clampIndex(runState.sectionIndex ?? 0);
     await hostSetViaServer("running", idx, 0, true);
   }, [clampIndex, hostSetViaServer, runState.sectionIndex]);
@@ -588,34 +629,53 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     if (autoAdvanceGuardRef.current) return;
     autoAdvanceGuardRef.current = true;
 
-    const nextIndex = currentSectionIdx + 1;
-    if (nextIndex <= script.sections.length - 1) {
+    const nextIndex = hostSectionIdx + 1;
+    if (nextIndex <= (script?.sections?.length ?? 1) - 1) {
       hostGoTo(nextIndex).catch(() => (autoAdvanceGuardRef.current = false));
     } else {
       hostEnd().catch(() => (autoAdvanceGuardRef.current = false));
     }
-  }, [isHost, script, runState.mode, secondsLeft, currentSectionIdx, hostGoTo, hostEnd]);
+  }, [isHost, script, runState.mode, secondsLeft, hostSectionIdx, hostGoTo, hostEnd]);
 
   const handleSelectSection = useCallback(
     async (idx: number) => {
       if (!script?.sections?.length) return;
-      if (!isHost) return;
-      await hostGoTo(idx);
+      if (isHost) {
+        await hostGoTo(idx);
+        return;
+      }
+      setPreviewSectionIdx(idx);
     },
     [script, isHost, hostGoTo]
   );
 
+  const handleFollowHost = useCallback(() => {
+    setPreviewSectionIdx(null);
+  }, []);
+
   const handlePrev = useCallback(async () => {
     if (!script?.sections?.length) return;
-    if (!isHost) return;
-    await hostGoTo(currentSectionIdx - 1);
-  }, [script, isHost, hostGoTo, currentSectionIdx]);
+    if (isHost) {
+      await hostGoTo(hostSectionIdx - 1);
+      return;
+    }
+    setPreviewSectionIdx((cur) => {
+      const base = cur === null ? hostSectionIdx : cur;
+      return clampIndex(base - 1);
+    });
+  }, [script, isHost, hostGoTo, hostSectionIdx, clampIndex]);
 
   const handleNext = useCallback(async () => {
     if (!script?.sections?.length) return;
-    if (!isHost) return;
-    await hostGoTo(currentSectionIdx + 1);
-  }, [script, isHost, hostGoTo, currentSectionIdx]);
+    if (isHost) {
+      await hostGoTo(hostSectionIdx + 1);
+      return;
+    }
+    setPreviewSectionIdx((cur) => {
+      const base = cur === null ? hostSectionIdx : cur;
+      return clampIndex(base + 1);
+    });
+  }, [script, isHost, hostGoTo, hostSectionIdx, clampIndex]);
 
   const handleBack = useCallback(() => {
     if (navigation.canGoBack()) navigation.goBack();
@@ -659,7 +719,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     );
   }
 
-  const atLast = hasScript ? currentSectionIdx >= script!.sections.length - 1 : true;
+  const atLast = hasScript ? viewingSectionIdx >= script!.sections.length - 1 : true;
+  const atFirst = viewingSectionIdx === 0;
   const pill = statusPillStyle(runState.mode);
 
   return (
@@ -757,12 +818,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                   </Text>
                 </View>
                 {isHost ? (
-                  <Text style={styles.meta}>
-                    You are the host.
-                  </Text>
+                  <Text style={styles.meta}>You are the host.</Text>
                 ) : (
                   <Text style={styles.meta}>
-                    You are following the host.
+                    {viewingHostLive ? "Following host." : "Previewing (not following host)."}
                   </Text>
                 )}
               </View>
@@ -781,9 +840,24 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                 </View>
               ) : null}
 
+              {!isHost && !viewingHostLive ? (
+                <View style={styles.banner}>
+                  <Text style={styles.bannerTitle}>Preview mode</Text>
+                  <Text style={styles.meta}>
+                    You’re reading a different section locally. Tap “Follow host” to return to the live section/timer.
+                  </Text>
+                  <View style={[styles.row, { marginTop: 8 }]}>
+                    <Pressable style={[styles.btn, styles.btnPrimary]} onPress={handleFollowHost}>
+                      <Text style={styles.btnText}>Follow host</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
+
               <View style={styles.timerBox}>
                 <Text style={styles.timerLabel}>
-                  Section {currentSectionIdx + 1} of {script.sections.length}
+                  Section {viewingSectionIdx + 1} of {script.sections.length}
+                  {!isHost && !viewingHostLive ? " (preview)" : ""}
                 </Text>
                 <Text style={styles.timerValue}>{formatSeconds(secondsLeft)}</Text>
                 <Text style={styles.timerSub}>{currentSection?.name ?? "Section"}</Text>
@@ -797,7 +871,11 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                   </Text>
                   {isHost ? (
                     <View style={styles.row}>
-                      <Pressable style={[styles.btn, styles.btnPrimary, !hasScript && styles.disabled]} onPress={hostRestart} disabled={!hasScript}>
+                      <Pressable
+                        style={[styles.btn, styles.btnPrimary, !hasScript && styles.disabled]}
+                        onPress={hostRestart}
+                        disabled={!hasScript}
+                      >
                         <Text style={styles.btnText}>Restart</Text>
                       </Pressable>
                     </View>
@@ -811,68 +889,77 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                 <Text style={styles.body}>{currentSection?.text ?? ""}</Text>
               </View>
 
-              {isHost ? (
-                <View style={styles.row}>
-                  {(runState.mode === "idle" || runState.mode === "ended") && (
-                    <Pressable style={[styles.btn, styles.btnPrimary, !hasScript && styles.disabled]} onPress={hostStart} disabled={!hasScript}>
-                      <Text style={styles.btnText}>Start</Text>
-                    </Pressable>
-                  )}
+              {/* Controls row:
+                  - Host: controls the shared run state
+                  - Attendee: prev/next are local preview controls (and do not affect host) */}
+              <View style={styles.row}>
+                {isHost ? (
+                  <>
+                    {(runState.mode === "idle" || runState.mode === "ended") && (
+                      <Pressable
+                        style={[styles.btn, styles.btnPrimary, !hasScript && styles.disabled]}
+                        onPress={hostStart}
+                        disabled={!hasScript}
+                      >
+                        <Text style={styles.btnText}>Start</Text>
+                      </Pressable>
+                    )}
 
-                  {runState.mode === "running" && (
-                    <Pressable style={[styles.btn, styles.btnGhost]} onPress={hostPause}>
-                      <Text style={styles.btnGhostText}>Pause</Text>
-                    </Pressable>
-                  )}
+                    {runState.mode === "running" && (
+                      <Pressable style={[styles.btn, styles.btnGhost]} onPress={hostPause}>
+                        <Text style={styles.btnGhostText}>Pause</Text>
+                      </Pressable>
+                    )}
 
-                  {runState.mode === "paused" && (
-                    <Pressable style={[styles.btn, styles.btnPrimary]} onPress={hostResume}>
-                      <Text style={styles.btnText}>Resume</Text>
-                    </Pressable>
-                  )}
+                    {runState.mode === "paused" && (
+                      <Pressable style={[styles.btn, styles.btnPrimary]} onPress={hostResume}>
+                        <Text style={styles.btnText}>Resume</Text>
+                      </Pressable>
+                    )}
+                  </>
+                ) : null}
 
-                  <Pressable
-                    style={[styles.btn, styles.btnGhost, currentSectionIdx === 0 && styles.disabled]}
-                    onPress={handlePrev}
-                    disabled={currentSectionIdx === 0}
-                  >
-                    <Text style={styles.btnGhostText}>Previous</Text>
+                <Pressable
+                  style={[styles.btn, styles.btnGhost, atFirst && styles.disabled]}
+                  onPress={handlePrev}
+                  disabled={atFirst}
+                >
+                  <Text style={styles.btnGhostText}>Previous</Text>
+                </Pressable>
+
+                <Pressable
+                  style={[styles.btn, styles.btnPrimary, atLast && styles.disabled]}
+                  onPress={handleNext}
+                  disabled={atLast}
+                >
+                  <Text style={styles.btnText}>Next</Text>
+                </Pressable>
+
+                {isHost && runState.mode !== "ended" ? (
+                  <Pressable style={[styles.btn, styles.btnGhost]} onPress={hostEnd}>
+                    <Text style={styles.btnGhostText}>End</Text>
                   </Pressable>
+                ) : null}
 
-                  <Pressable
-                    style={[styles.btn, styles.btnPrimary, atLast && styles.disabled]}
-                    onPress={handleNext}
-                    disabled={atLast}
-                  >
-                    <Text style={styles.btnText}>Next</Text>
+                {!isHost && !viewingHostLive ? (
+                  <Pressable style={[styles.btn, styles.btnGhost]} onPress={handleFollowHost}>
+                    <Text style={styles.btnGhostText}>Follow host</Text>
                   </Pressable>
-
-                  {runState.mode !== "ended" && (
-                    <Pressable style={[styles.btn, styles.btnGhost]} onPress={hostEnd}>
-                      <Text style={styles.btnGhostText}>End</Text>
-                    </Pressable>
-                  )}
-                </View>
-              ) : (
-                <View style={[styles.sectionCard, { marginTop: 10 }]}>
-                  <Text style={styles.meta}>
-                    Only the host can change sections/timers.
-                  </Text>
-                </View>
-              )}
+                ) : null}
+              </View>
 
               <View style={{ marginTop: 10 }}>
                 {script.sections.map((s, i) => {
-                  const isActive = i === currentSectionIdx;
+                  const isActive = i === viewingSectionIdx;
                   return (
                     <Pressable
                       key={`${s.name}-${i}`}
                       onPress={() => handleSelectSection(i)}
                       style={[styles.listItem, isActive ? styles.listItemActive : undefined]}
-                      disabled={!isHost}
                     >
                       <Text style={styles.listTitle}>
                         {i + 1}. {s.name}
+                        {!isHost && i === hostSectionIdx ? " (host)" : ""}
                       </Text>
                       <Text style={styles.meta}>{s.minutes} min</Text>
                     </Pressable>
