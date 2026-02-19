@@ -18,6 +18,7 @@ type Props = NativeStackScreenProps<RootStackParamList, "EventRoom">;
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type ScriptDbRow = Database["public"]["Tables"]["scripts"]["Row"];
+type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
 
 type ScriptSection = {
   name: string;
@@ -79,10 +80,14 @@ function formatSeconds(total: number) {
 }
 
 function isLikelyUuid(v: string) {
-  // lightweight check (prevents obvious crashes on undefined/empty)
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     v
   );
+}
+
+function shortId(id: string) {
+  if (!id) return "";
+  return `${id.slice(0, 6)}…${id.slice(-4)}`;
 }
 
 export default function EventRoomScreen({ route, navigation }: Props) {
@@ -92,12 +97,13 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [event, setEvent] = useState<EventRow | null>(null);
 
-  const [scriptDbRow, setScriptDbRow] = useState<Pick<
-    ScriptDbRow,
-    "id" | "title" | "content_json"
-  > | null>(null);
+  const [scriptDbRow, setScriptDbRow] = useState<
+    Pick<ScriptDbRow, "id" | "title" | "content_json"> | null
+  >(null);
   const [script, setScript] = useState<ScriptContent | null>(null);
 
+  // Presence
+  const [presenceRows, setPresenceRows] = useState<PresenceRow[]>([]);
   const [isJoined, setIsJoined] = useState(false);
   const [presenceMsg, setPresenceMsg] = useState("");
   const [presenceErr, setPresenceErr] = useState("");
@@ -133,12 +139,32 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }, 1000);
   }, [sectionTotalSeconds, stopTimer]);
 
+  const loadPresence = useCallback(async () => {
+    if (!hasValidEventId) {
+      setPresenceRows([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("event_presence")
+      .select("event_id,user_id,joined_at,last_seen_at,created_at")
+      .eq("event_id", eventId);
+
+    if (error) {
+      // keep screen usable; presence is secondary
+      return;
+    }
+
+    setPresenceRows((data ?? []) as PresenceRow[]);
+  }, [eventId, hasValidEventId]);
+
   const loadEventRoom = useCallback(async () => {
     if (!hasValidEventId) {
       setLoading(false);
       setEvent(null);
       setScript(null);
       setScriptDbRow(null);
+      setPresenceRows([]);
       return;
     }
 
@@ -168,6 +194,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     const eventRow = evData as EventRow;
     setEvent(eventRow);
 
+    // Load presence and script in parallel
+    await loadPresence();
+
     if (eventRow.script_id) {
       const { data: scData, error: scErr } = await supabase
         .from("scripts")
@@ -181,8 +210,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       } else {
         const row = scData as Pick<ScriptDbRow, "id" | "title" | "content_json">;
         setScriptDbRow(row);
-        const parsed = parseScriptContent(row.content_json);
-        setScript(parsed);
+        setScript(parseScriptContent(row.content_json));
         setCurrentSectionIdx(0);
       }
     } else {
@@ -191,13 +219,13 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }
 
     setLoading(false);
-  }, [eventId, hasValidEventId]);
+  }, [eventId, hasValidEventId, loadPresence]);
 
   useEffect(() => {
     loadEventRoom();
   }, [loadEventRoom]);
 
-  // Reset timer when section changes
+  // Timer reset on section change
   useEffect(() => {
     if (!script || !currentSection) {
       stopTimer();
@@ -208,20 +236,44 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return () => stopTimer();
   }, [script, currentSectionIdx, currentSection, startTimer, stopTimer]);
 
-  // Auto-advance when timer reaches 0
+  // Auto-advance when timer hits 0
   useEffect(() => {
     if (!script?.sections?.length) return;
     if (secondsLeft > 0) return;
 
     if (currentSectionIdx < script.sections.length - 1) {
-      const t = setTimeout(() => {
-        setCurrentSectionIdx((i) => i + 1);
-      }, 800);
+      const t = setTimeout(() => setCurrentSectionIdx((i) => i + 1), 800);
       return () => clearTimeout(t);
     }
   }, [secondsLeft, currentSectionIdx, script]);
 
-  // Heartbeat loop while joined
+  // Realtime subscription for event_presence changes
+  useEffect(() => {
+    if (!hasValidEventId) return;
+
+    const channel = supabase
+      .channel(`presence:${eventId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "event_presence",
+          filter: `event_id=eq.${eventId}`,
+        },
+        () => {
+          // simplest + robust: refetch current presence
+          loadPresence();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [eventId, hasValidEventId, loadPresence]);
+
+  // Heartbeat while joined (keeps you active)
   useEffect(() => {
     if (!isJoined) return;
     if (!hasValidEventId) return;
@@ -232,38 +284,23 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-
       if (!user || cancelled) return;
 
       const now = new Date().toISOString();
 
-      // Your DB has created_at NOT NULL (no default), so always provide it.
-      await supabase.from("event_presence").upsert(
+      const { error } = await supabase.from("event_presence").upsert(
         {
           event_id: eventId,
           user_id: user.id,
           last_seen_at: now,
-          created_at: now,
+          created_at: now, // safe even though default exists
         },
         { onConflict: "event_id,user_id" }
       );
 
-      const { data } = await supabase
-        .from("events")
-        .select("id,active_count_snapshot,total_join_count")
-        .eq("id", eventId)
-        .single();
-
-      if (!cancelled && data) {
-        setEvent((prev) =>
-          prev
-            ? {
-                ...prev,
-                active_count_snapshot: (data as any).active_count_snapshot ?? prev.active_count_snapshot,
-                total_join_count: (data as any).total_join_count ?? prev.total_join_count,
-              }
-            : prev
-        );
+      if (error && !cancelled) {
+        // best-effort; don't spam alerts
+        setPresenceErr(error.message);
       }
     };
 
@@ -275,6 +312,19 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       clearInterval(id);
     };
   }, [isJoined, eventId, hasValidEventId]);
+
+  // Compute active users: last_seen_at within 25 seconds
+  const activeWindowMs = 25_000;
+
+  const activePresence = useMemo(() => {
+    const now = Date.now();
+    return presenceRows.filter((r) => {
+      const t = new Date(r.last_seen_at).getTime();
+      return Number.isFinite(t) && now - t <= activeWindowMs;
+    });
+  }, [presenceRows]);
+
+  const activeCount = activePresence.length;
 
   const handleJoinLive = useCallback(async () => {
     if (!hasValidEventId) {
@@ -315,11 +365,11 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
       setIsJoined(true);
       setPresenceMsg("✅ You joined live.");
-      await loadEventRoom();
+      await loadPresence();
     } catch (e: any) {
       setPresenceErr(e?.message ?? "Failed to join live.");
     }
-  }, [eventId, hasValidEventId, loadEventRoom]);
+  }, [eventId, hasValidEventId, loadPresence]);
 
   const handleLeaveLive = useCallback(async () => {
     if (!hasValidEventId) return;
@@ -350,25 +400,20 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
       setIsJoined(false);
       setPresenceMsg("✅ You left live.");
-      await loadEventRoom();
+      await loadPresence();
     } catch (e: any) {
       setPresenceErr(e?.message ?? "Failed to leave.");
     }
-  }, [eventId, hasValidEventId, loadEventRoom]);
+  }, [eventId, hasValidEventId, loadPresence]);
 
-  const handlePrev = useCallback(() => {
-    setCurrentSectionIdx((i) => Math.max(0, i - 1));
-  }, []);
-
+  const handlePrev = useCallback(() => setCurrentSectionIdx((i) => Math.max(0, i - 1)), []);
   const handleNext = useCallback(() => {
     if (!script?.sections?.length) return;
     setCurrentSectionIdx((i) => Math.min(script.sections.length - 1, i + 1));
   }, [script]);
 
   useEffect(() => {
-    return () => {
-      stopTimer();
-    };
+    return () => stopTimer();
   }, [stopTimer]);
 
   if (!hasValidEventId) {
@@ -430,14 +475,30 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Live Presence</Text>
+
           <Text style={styles.meta}>
-            Active snapshot: {event.active_count_snapshot ?? 0} | Total joined:{" "}
-            {event.total_join_count ?? 0}
+            Active now: <Text style={{ fontWeight: "900", color: "white" }}>{activeCount}</Text>
           </Text>
+
           <Text style={styles.meta}>
             {new Date(event.start_time_utc).toLocaleString()} →{" "}
             {new Date(event.end_time_utc).toLocaleString()} ({event.timezone ?? "UTC"})
           </Text>
+
+          {activePresence.length > 0 ? (
+            <View style={{ marginTop: 8 }}>
+              {activePresence.slice(0, 10).map((p) => (
+                <Text key={p.user_id} style={styles.meta}>
+                  • {shortId(p.user_id)} (seen {Math.max(0, Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000))}s ago)
+                </Text>
+              ))}
+              {activePresence.length > 10 ? (
+                <Text style={styles.meta}>…and {activePresence.length - 10} more</Text>
+              ) : null}
+            </View>
+          ) : (
+            <Text style={[styles.meta, { marginTop: 8 }]}>No one active yet.</Text>
+          )}
 
           <View style={styles.row}>
             <Pressable
