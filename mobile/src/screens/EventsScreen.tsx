@@ -13,6 +13,7 @@ import { supabase } from "../supabase/client";
 import type { Database } from "../types/db";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
+type ScriptRow = Database["public"]["Tables"]["scripts"]["Row"];
 
 function plusMinutesToLocalInput(minutes: number) {
   const d = new Date(Date.now() + minutes * 60_000);
@@ -42,6 +43,9 @@ export default function EventsScreen() {
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EventRow[]>([]);
 
+  // Scripts for display (id -> title)
+  const [scriptsById, setScriptsById] = useState<Record<string, ScriptRow>>({});
+
   // Create form
   const [title, setTitle] = useState("Global Peace Circle");
   const [intention, setIntention] = useState(
@@ -64,6 +68,35 @@ export default function EventsScreen() {
     () => events.find((e) => e.id === selectedEventId) ?? null,
     [events, selectedEventId]
   );
+
+  const loadScriptsForDisplay = useCallback(async () => {
+    // We load only your scripts for display; if you want to display script titles
+    // for scripts by other authors too, remove the author filter (and ensure RLS allows it).
+    const {
+      data: { user },
+      error: userErr,
+    } = await supabase.auth.getUser();
+
+    if (userErr || !user) return;
+
+    // Only need id/title for display; but selecting "*" is fine too.
+    const { data, error } = await supabase
+      .from("scripts")
+      .select("id,title,created_at")
+      // If your RLS allows reading only own scripts, this keeps it aligned.
+      .eq("author_user_id" as any, user.id) // 'as any' only in case column name differs in generated types
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      // Don't hard-fail the screen if scripts can't load; we can still show IDs.
+      return;
+    }
+
+    const rows = (data ?? []) as ScriptRow[];
+    const map: Record<string, ScriptRow> = {};
+    for (const s of rows) map[s.id] = s;
+    setScriptsById(map);
+  }, []);
 
   const loadEvents = useCallback(async () => {
     setLoading(true);
@@ -102,8 +135,10 @@ export default function EventsScreen() {
   }, [selectedEventId]);
 
   useEffect(() => {
+    // Load both on mount
+    loadScriptsForDisplay();
     loadEvents();
-  }, [loadEvents]);
+  }, [loadEvents, loadScriptsForDisplay]);
 
   const upsertPresence = useCallback(async (eventId: string) => {
     const {
@@ -194,7 +229,6 @@ export default function EventsScreen() {
 
       setLoading(true);
 
-      // Use generated Insert type for correctness
       const payload: Database["public"]["Tables"]["events"]["Insert"] = {
         title: title.trim(),
         description: description.trim() || null,
@@ -209,7 +243,6 @@ export default function EventsScreen() {
 
         timezone: timezone.trim() || "Europe/London",
 
-        // optional (defaults exist, but explicit is fine)
         visibility: "PUBLIC",
         guidance_mode: "AI",
         status: "SCHEDULED",
@@ -229,12 +262,23 @@ export default function EventsScreen() {
       }
 
       Alert.alert("Success", "Event created.");
-      await loadEvents();
+
+      // Refresh both: event list + script titles (in case you attach soon after)
+      await Promise.all([loadEvents(), loadScriptsForDisplay()]);
     } catch (e: any) {
       setLoading(false);
       Alert.alert("Create event failed", e?.message ?? "Unknown error");
     }
-  }, [title, description, intention, startLocal, endLocal, timezone, loadEvents]);
+  }, [
+    title,
+    description,
+    intention,
+    startLocal,
+    endLocal,
+    timezone,
+    loadEvents,
+    loadScriptsForDisplay,
+  ]);
 
   const handleJoin = useCallback(async () => {
     try {
@@ -291,6 +335,12 @@ export default function EventsScreen() {
     }
   }, [selectedEventId, loadEvents]);
 
+  const getScriptLabel = (scriptId: string | null) => {
+    if (!scriptId) return "(none)";
+    const title = scriptsById[scriptId]?.title;
+    return title ? title : scriptId; // fall back to uuid if we can't resolve
+  };
+
   const renderEvent = ({ item }: { item: EventRow }) => (
     <Pressable
       onPress={() => setSelectedEventId(item.id)}
@@ -303,7 +353,6 @@ export default function EventsScreen() {
 
       {!!item.description && <Text style={styles.cardText}>{item.description}</Text>}
 
-      {/* intention_statement is NOT NULL in your schema */}
       <Text style={styles.cardText}>Intention: {item.intention_statement}</Text>
 
       <Text style={styles.meta}>
@@ -318,7 +367,7 @@ export default function EventsScreen() {
         {item.total_join_count ?? 0}
       </Text>
 
-      <Text style={styles.meta}>Script: {item.script_id ?? "(none)"}</Text>
+      <Text style={styles.meta}>Script: {getScriptLabel(item.script_id)}</Text>
       <Text style={styles.meta}>ID: {item.id}</Text>
     </Pressable>
   );
@@ -381,7 +430,14 @@ export default function EventsScreen() {
 
                 <Pressable
                   style={[styles.btn, styles.btnGhost, loading && styles.disabled]}
-                  onPress={loadEvents}
+                  onPress={async () => {
+                    setLoading(true);
+                    try {
+                      await Promise.all([loadEvents(), loadScriptsForDisplay()]);
+                    } finally {
+                      setLoading(false);
+                    }
+                  }}
                   disabled={loading}
                 >
                   <Text style={styles.btnGhostText}>Refresh</Text>
