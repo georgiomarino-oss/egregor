@@ -101,16 +101,13 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     Pick<ScriptDbRow, "id" | "title" | "content_json"> | null
   >(null);
   const [script, setScript] = useState<ScriptContent | null>(null);
+  const [scriptLoadError, setScriptLoadError] = useState<string>("");
 
   // Presence
   const [presenceRows, setPresenceRows] = useState<PresenceRow[]>([]);
   const [isJoined, setIsJoined] = useState(false);
   const [presenceMsg, setPresenceMsg] = useState("");
   const [presenceErr, setPresenceErr] = useState("");
-
-  // Error spam guard for heartbeat
-  const lastHeartbeatErrRef = useRef<string>("");
-  const lastHeartbeatErrAtRef = useRef<number>(0);
 
   // Guided flow state
   const [currentSectionIdx, setCurrentSectionIdx] = useState(0);
@@ -146,59 +143,70 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const loadPresence = useCallback(async () => {
     if (!hasValidEventId) {
       setPresenceRows([]);
-      return { rows: [] as PresenceRow[], myUserId: null as string | null };
+      return;
     }
-
-    // We can detect join state by checking for my (event_id,user_id) row.
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
 
     const { data, error } = await supabase
       .from("event_presence")
       .select("event_id,user_id,joined_at,last_seen_at,created_at")
       .eq("event_id", eventId);
 
-    if (error) {
-      // keep screen usable; presence is secondary
-      return { rows: [] as PresenceRow[], myUserId: user?.id ?? null };
-    }
+    if (error) return;
 
-    const rows = (data ?? []) as PresenceRow[];
-    setPresenceRows(rows);
-
-    if (user?.id) {
-      const amIJoined = rows.some((r) => r.user_id === user.id);
-      setIsJoined(amIJoined);
-    }
-
-    return { rows, myUserId: user?.id ?? null };
+    setPresenceRows((data ?? []) as PresenceRow[]);
   }, [eventId, hasValidEventId]);
 
-  const loadScriptById = useCallback(async (scriptId: string | null) => {
-    if (!scriptId) {
-      setScriptDbRow(null);
-      setScript(null);
-      return;
-    }
+  // ✅ Key fix: use maybeSingle() for scripts to avoid "cannot coerce..." when 0 rows (RLS)
+  const loadScriptById = useCallback(
+    async (scriptId: string | null, opts?: { retries?: number }) => {
+      const retries = opts?.retries ?? 0;
 
-    const { data: scData, error: scErr } = await supabase
-      .from("scripts")
-      .select("id,title,content_json")
-      .eq("id", scriptId)
-      .single();
+      if (!scriptId) {
+        setScriptDbRow(null);
+        setScript(null);
+        setScriptLoadError("");
+        return;
+      }
 
-    if (scErr || !scData) {
-      setScriptDbRow(null);
-      setScript(null);
-      return;
-    }
+      const { data: scData, error: scErr } = await supabase
+        .from("scripts")
+        .select("id,title,content_json")
+        .eq("id", scriptId)
+        .maybeSingle(); // <-- important
 
-    const row = scData as Pick<ScriptDbRow, "id" | "title" | "content_json">;
-    setScriptDbRow(row);
-    setScript(parseScriptContent(row.content_json));
-    setCurrentSectionIdx(0);
-  }, []);
+      if (scErr) {
+        setScriptDbRow(null);
+        setScript(null);
+        setScriptLoadError(scErr.message);
+
+        if (retries > 0) {
+          setTimeout(() => loadScriptById(scriptId, { retries: retries - 1 }), 1200);
+        }
+        return;
+      }
+
+      if (!scData) {
+        // Most likely RLS hiding the row for this user/session
+        setScriptDbRow(null);
+        setScript(null);
+        setScriptLoadError("Script row not visible (likely blocked by scripts RLS for this user).");
+
+        if (retries > 0) {
+          setTimeout(() => loadScriptById(scriptId, { retries: retries - 1 }), 1200);
+        }
+        return;
+      }
+
+      const row = scData as Pick<ScriptDbRow, "id" | "title" | "content_json">;
+      setScriptDbRow(row);
+      setScriptLoadError("");
+
+      const parsed = parseScriptContent(row.content_json);
+      setScript(parsed);
+      setCurrentSectionIdx(0);
+    },
+    []
+  );
 
   const loadEventRoom = useCallback(async () => {
     if (!hasValidEventId) {
@@ -207,7 +215,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setScript(null);
       setScriptDbRow(null);
       setPresenceRows([]);
-      setIsJoined(false);
+      setScriptLoadError("");
       return;
     }
 
@@ -230,8 +238,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setEvent(null);
       setScript(null);
       setScriptDbRow(null);
-      setPresenceRows([]);
-      setIsJoined(false);
+      setScriptLoadError("");
       Alert.alert("Event load failed", evErr?.message ?? "Event not found");
       return;
     }
@@ -239,8 +246,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     const eventRow = evData as EventRow;
     setEvent(eventRow);
 
-    // Load presence and script in parallel (presence will also set isJoined)
-    await Promise.all([loadPresence(), loadScriptById(eventRow.script_id ?? null)]);
+    await Promise.all([
+      loadPresence(),
+      loadScriptById(eventRow.script_id ?? null, { retries: 1 }),
+    ]);
 
     setLoading(false);
   }, [eventId, hasValidEventId, loadPresence, loadScriptById]);
@@ -267,13 +276,11 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           const next = payload.new as Partial<EventRow> | null;
           const prev = payload.old as Partial<EventRow> | null;
 
-          // Update local event state quickly
           setEvent((cur) => {
             if (!cur) return cur;
             return { ...cur, ...(next as any) };
           });
 
-          // If script changed, reload script and reset guided flow cleanly
           const nextScriptId = (next as any)?.script_id ?? null;
           const prevScriptId = (prev as any)?.script_id ?? null;
 
@@ -281,7 +288,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             stopTimer();
             setSecondsLeft(0);
             setCurrentSectionIdx(0);
-            await loadScriptById(nextScriptId);
+            await loadScriptById(nextScriptId, { retries: 2 });
           }
         }
       )
@@ -339,33 +346,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [eventId, hasValidEventId, loadPresence]);
 
-  // Heartbeat while joined (keeps you active) — quiet error handling
+  // Heartbeat while joined (keeps you active)
   useEffect(() => {
     if (!isJoined) return;
     if (!hasValidEventId) return;
 
     let cancelled = false;
-
-    const maybeSetHeartbeatError = (msg: string) => {
-      const now = Date.now();
-      const lastMsg = lastHeartbeatErrRef.current;
-      const lastAt = lastHeartbeatErrAtRef.current;
-
-      // Only update if different OR enough time passed
-      if (msg !== lastMsg || now - lastAt > 10_000) {
-        lastHeartbeatErrRef.current = msg;
-        lastHeartbeatErrAtRef.current = now;
-        setPresenceErr(msg);
-      }
-    };
-
-    const clearHeartbeatErrorIfAny = () => {
-      if (lastHeartbeatErrRef.current) {
-        lastHeartbeatErrRef.current = "";
-        lastHeartbeatErrAtRef.current = Date.now();
-        setPresenceErr("");
-      }
-    };
 
     const beat = async () => {
       const {
@@ -373,26 +359,20 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       } = await supabase.auth.getUser();
       if (!user || cancelled) return;
 
-      const nowIso = new Date().toISOString();
+      const now = new Date().toISOString();
 
       const { error } = await supabase.from("event_presence").upsert(
         {
           event_id: eventId,
           user_id: user.id,
-          last_seen_at: nowIso,
-          created_at: nowIso,
+          last_seen_at: now,
+          created_at: now,
         },
         { onConflict: "event_id,user_id" }
       );
 
-      if (cancelled) return;
-
-      if (error) {
-        // best-effort; don't spam
-        maybeSetHeartbeatError(error.message);
-      } else {
-        // success: clear stale error quietly
-        clearHeartbeatErrorIfAny();
+      if (error && !cancelled) {
+        setPresenceErr(error.message);
       }
     };
 
@@ -498,7 +478,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }
   }, [eventId, hasValidEventId, loadPresence]);
 
-  const handlePrev = useCallback(() => setCurrentSectionIdx((i) => Math.max(0, i - 1)), []);
+  const handlePrev = useCallback(
+    () => setCurrentSectionIdx((i) => Math.max(0, i - 1)),
+    []
+  );
   const handleNext = useCallback(() => {
     if (!script?.sections?.length) return;
     setCurrentSectionIdx((i) => Math.min(script.sections.length - 1, i + 1));
@@ -545,6 +528,13 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     );
   }
 
+  const attachedScriptLabel =
+    event.script_id && scriptDbRow?.title
+      ? scriptDbRow.title
+      : event.script_id
+      ? event.script_id
+      : "(none)";
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ScrollView contentContainerStyle={styles.content}>
@@ -556,13 +546,20 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Attached Script</Text>
-          <Text style={styles.meta}>
-            {event.script_id
-              ? scriptDbRow?.title
-                ? scriptDbRow.title
-                : event.script_id
-              : "(none)"}
-          </Text>
+          <Text style={styles.meta}>{attachedScriptLabel}</Text>
+
+          {!!event.script_id && !scriptDbRow?.title ? (
+            <Text style={[styles.meta, { marginTop: 6 }]}>
+              Showing script id ({shortId(event.script_id)}).{" "}
+              {scriptLoadError ? `Script load error: ${scriptLoadError}` : "Loading title…"}
+            </Text>
+          ) : null}
+
+          <View style={styles.row}>
+            <Pressable style={[styles.btn, styles.btnGhost]} onPress={loadEventRoom}>
+              <Text style={styles.btnGhostText}>Refresh</Text>
+            </Pressable>
+          </View>
         </View>
 
         <View style={styles.section}>
@@ -613,10 +610,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             >
               <Text style={styles.btnGhostText}>Leave live</Text>
             </Pressable>
-
-            <Pressable style={[styles.btn, styles.btnGhost]} onPress={loadEventRoom}>
-              <Text style={styles.btnGhostText}>Refresh</Text>
-            </Pressable>
           </View>
 
           {!!presenceMsg && <Text style={styles.ok}>{presenceMsg}</Text>}
@@ -628,7 +621,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
           {!script ? (
             <Text style={styles.meta}>
-              No script attached to this event yet. Attach one from the Scripts screen.
+              No script content loaded yet. If a script is attached, this may be a permissions issue.
             </Text>
           ) : (
             <>

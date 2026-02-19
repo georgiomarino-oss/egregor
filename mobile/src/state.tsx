@@ -6,6 +6,8 @@ export type AppStateContextValue = {
   initializing: boolean;
   session: Session | null;
   user: User | null;
+  signedIn: boolean;
+  refreshSession: () => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -15,19 +17,35 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [initializing, setInitializing] = useState(true);
   const [session, setSession] = useState<Session | null>(null);
 
+  const refreshSession = async () => {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) {
+      setSession(null);
+      return;
+    }
+    setSession(data.session ?? null);
+  };
+
   useEffect(() => {
     let mounted = true;
 
-    supabase.auth.getSession().then(({ data, error }) => {
-      if (!mounted) return;
-      if (error) {
+    (async () => {
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        if (!mounted) return;
+        if (error) {
+          setSession(null);
+          setInitializing(false);
+          return;
+        }
+        setSession(data.session ?? null);
+        setInitializing(false);
+      } catch {
+        if (!mounted) return;
         setSession(null);
         setInitializing(false);
-        return;
       }
-      setSession(data.session ?? null);
-      setInitializing(false);
-    });
+    })();
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       if (!mounted) return;
@@ -43,6 +61,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = async () => {
     await supabase.auth.signOut();
+    // session will be cleared by onAuthStateChange; this is just belt-and-braces
+    setSession(null);
   };
 
   const value = useMemo<AppStateContextValue>(
@@ -50,6 +70,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       initializing,
       session,
       user: session?.user ?? null,
+      signedIn: !!session?.user,
+      refreshSession,
       signOut,
     }),
     [initializing, session]
