@@ -12,23 +12,12 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { supabase } from "../supabase/client";
 import type { RootStackParamList } from "../types";
+import type { Database } from "../types/db";
 
 type Props = NativeStackScreenProps<RootStackParamList, "EventRoom">;
 
-type EventRow = {
-  id: string;
-  title: string;
-  description: string | null;
-  intention_statement: string | null;
-  script_id: string | null;
-  start_time_utc: string;
-  end_time_utc: string;
-  timezone: string | null;
-  status: string | null;
-  active_count_snapshot: number | null;
-  total_join_count: number | null;
-  host_user_id: string;
-};
+type EventRow = Database["public"]["Tables"]["events"]["Row"];
+type ScriptDbRow = Database["public"]["Tables"]["scripts"]["Row"];
 
 type ScriptSection = {
   name: string;
@@ -42,12 +31,6 @@ type ScriptContent = {
   tone: "calm" | "uplifting" | "focused" | string;
   sections: ScriptSection[];
   speakerNotes?: string;
-};
-
-type ScriptRow = {
-  id: string;
-  content_json: any;
-  title: string | null;
 };
 
 function parseScriptContent(raw: any): ScriptContent | null {
@@ -71,13 +54,17 @@ function parseScriptContent(raw: any): ScriptContent | null {
       minutes: Number(s?.minutes ?? 1),
       text: String(s?.text ?? ""),
     }))
-    .filter((s: ScriptSection) => s.minutes > 0);
+    .filter((s: ScriptSection) => Number.isFinite(s.minutes) && s.minutes > 0);
 
   if (sections.length === 0) return null;
 
+  const durationMinutes =
+    Number(obj.durationMinutes) ||
+    sections.reduce((a, b) => a + (Number.isFinite(b.minutes) ? b.minutes : 0), 0);
+
   return {
     title: String(obj.title ?? "Guided Intention Script"),
-    durationMinutes: Number(obj.durationMinutes ?? sections.reduce((a, b) => a + b.minutes, 0)),
+    durationMinutes: Number.isFinite(durationMinutes) ? durationMinutes : 0,
     tone: String(obj.tone ?? "calm"),
     sections,
     speakerNotes: obj.speakerNotes ? String(obj.speakerNotes) : undefined,
@@ -91,11 +78,24 @@ function formatSeconds(total: number) {
   return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 }
 
+function isLikelyUuid(v: string) {
+  // lightweight check (prevents obvious crashes on undefined/empty)
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    v
+  );
+}
+
 export default function EventRoomScreen({ route, navigation }: Props) {
-  const eventId = route.params.eventId;
+  const eventId = route.params?.eventId ?? "";
+  const hasValidEventId = !!eventId && isLikelyUuid(eventId);
 
   const [loading, setLoading] = useState(true);
   const [event, setEvent] = useState<EventRow | null>(null);
+
+  const [scriptDbRow, setScriptDbRow] = useState<Pick<
+    ScriptDbRow,
+    "id" | "title" | "content_json"
+  > | null>(null);
   const [script, setScript] = useState<ScriptContent | null>(null);
 
   const [isJoined, setIsJoined] = useState(false);
@@ -129,16 +129,19 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     setSecondsLeft(sectionTotalSeconds);
 
     timerRef.current = setInterval(() => {
-      setSecondsLeft((prev) => {
-        if (prev <= 1) {
-          return 0;
-        }
-        return prev - 1;
-      });
+      setSecondsLeft((prev) => (prev <= 1 ? 0 : prev - 1));
     }, 1000);
   }, [sectionTotalSeconds, stopTimer]);
 
   const loadEventRoom = useCallback(async () => {
+    if (!hasValidEventId) {
+      setLoading(false);
+      setEvent(null);
+      setScript(null);
+      setScriptDbRow(null);
+      return;
+    }
+
     setLoading(true);
 
     const { data: evData, error: evErr } = await supabase
@@ -155,6 +158,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
     if (evErr || !evData) {
       setLoading(false);
+      setEvent(null);
+      setScript(null);
+      setScriptDbRow(null);
       Alert.alert("Event load failed", evErr?.message ?? "Event not found");
       return;
     }
@@ -169,21 +175,23 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         .eq("id", eventRow.script_id)
         .single();
 
-      if (scErr) {
-        // Keep screen usable even without script parsing
+      if (scErr || !scData) {
+        setScriptDbRow(null);
         setScript(null);
       } else {
-        const row = scData as ScriptRow;
+        const row = scData as Pick<ScriptDbRow, "id" | "title" | "content_json">;
+        setScriptDbRow(row);
         const parsed = parseScriptContent(row.content_json);
         setScript(parsed);
         setCurrentSectionIdx(0);
       }
     } else {
+      setScriptDbRow(null);
       setScript(null);
     }
 
     setLoading(false);
-  }, [eventId]);
+  }, [eventId, hasValidEventId]);
 
   useEffect(() => {
     loadEventRoom();
@@ -205,7 +213,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     if (!script?.sections?.length) return;
     if (secondsLeft > 0) return;
 
-    // when 0, move next if possible
     if (currentSectionIdx < script.sections.length - 1) {
       const t = setTimeout(() => {
         setCurrentSectionIdx((i) => i + 1);
@@ -217,6 +224,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   // Heartbeat loop while joined
   useEffect(() => {
     if (!isJoined) return;
+    if (!hasValidEventId) return;
 
     let cancelled = false;
 
@@ -227,16 +235,19 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
       if (!user || cancelled) return;
 
+      const now = new Date().toISOString();
+
+      // Your DB has created_at NOT NULL (no default), so always provide it.
       await supabase.from("event_presence").upsert(
         {
           event_id: eventId,
           user_id: user.id,
-          last_seen_at: new Date().toISOString(),
+          last_seen_at: now,
+          created_at: now,
         },
         { onConflict: "event_id,user_id" }
       );
 
-      // refresh event snapshot counts
       const { data } = await supabase
         .from("events")
         .select("id,active_count_snapshot,total_join_count")
@@ -256,7 +267,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       }
     };
 
-    // immediate beat + interval
     beat();
     const id = setInterval(beat, 10_000);
 
@@ -264,9 +274,14 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       cancelled = true;
       clearInterval(id);
     };
-  }, [isJoined, eventId]);
+  }, [isJoined, eventId, hasValidEventId]);
 
   const handleJoinLive = useCallback(async () => {
+    if (!hasValidEventId) {
+      Alert.alert("Missing event", "This screen was opened without a valid event id.");
+      return;
+    }
+
     try {
       setPresenceErr("");
       setPresenceMsg("");
@@ -281,11 +296,14 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         return;
       }
 
+      const now = new Date().toISOString();
+
       const { error: upErr } = await supabase.from("event_presence").upsert(
         {
           event_id: eventId,
           user_id: user.id,
-          last_seen_at: new Date().toISOString(),
+          last_seen_at: now,
+          created_at: now,
         },
         { onConflict: "event_id,user_id" }
       );
@@ -301,9 +319,11 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     } catch (e: any) {
       setPresenceErr(e?.message ?? "Failed to join live.");
     }
-  }, [eventId, loadEventRoom]);
+  }, [eventId, hasValidEventId, loadEventRoom]);
 
   const handleLeaveLive = useCallback(async () => {
+    if (!hasValidEventId) return;
+
     try {
       setPresenceErr("");
       setPresenceMsg("");
@@ -334,7 +354,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     } catch (e: any) {
       setPresenceErr(e?.message ?? "Failed to leave.");
     }
-  }, [eventId, loadEventRoom]);
+  }, [eventId, hasValidEventId, loadEventRoom]);
 
   const handlePrev = useCallback(() => {
     setCurrentSectionIdx((i) => Math.max(0, i - 1));
@@ -350,6 +370,19 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       stopTimer();
     };
   }, [stopTimer]);
+
+  if (!hasValidEventId) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        <View style={styles.center}>
+          <Text style={styles.err}>Missing or invalid event id.</Text>
+          <Pressable style={[styles.btn, styles.btnGhost]} onPress={() => navigation.goBack()}>
+            <Text style={styles.btnGhostText}>Back</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (loading) {
     return (
@@ -379,10 +412,21 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.h1}>{event.title}</Text>
+
         {!!event.description && <Text style={styles.body}>{event.description}</Text>}
-        {!!event.intention_statement && (
-          <Text style={styles.body}>Intention: {event.intention_statement}</Text>
-        )}
+
+        <Text style={styles.body}>Intention: {event.intention_statement}</Text>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Attached Script</Text>
+          <Text style={styles.meta}>
+            {event.script_id
+              ? scriptDbRow?.title
+                ? scriptDbRow.title
+                : event.script_id
+              : "(none)"}
+          </Text>
+        </View>
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Live Presence</Text>
@@ -440,26 +484,18 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                   Section {currentSectionIdx + 1} of {script.sections.length}
                 </Text>
                 <Text style={styles.timerValue}>{formatSeconds(secondsLeft)}</Text>
-                <Text style={styles.timerSub}>
-                  {currentSection?.name ?? "Section"}
-                </Text>
+                <Text style={styles.timerSub}>{currentSection?.name ?? "Section"}</Text>
               </View>
 
               <View style={styles.sectionCard}>
                 <Text style={styles.cardTitle}>{currentSection?.name}</Text>
-                <Text style={styles.meta}>
-                  {currentSection?.minutes ?? 0} min
-                </Text>
+                <Text style={styles.meta}>{currentSection?.minutes ?? 0} min</Text>
                 <Text style={styles.body}>{currentSection?.text ?? ""}</Text>
               </View>
 
               <View style={styles.row}>
                 <Pressable
-                  style={[
-                    styles.btn,
-                    styles.btnGhost,
-                    currentSectionIdx === 0 && styles.disabled,
-                  ]}
+                  style={[styles.btn, styles.btnGhost, currentSectionIdx === 0 && styles.disabled]}
                   onPress={handlePrev}
                   disabled={currentSectionIdx === 0}
                 >
