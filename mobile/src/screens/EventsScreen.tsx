@@ -10,24 +10,9 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../supabase/client";
+import type { Database } from "../types/db";
 
-type EventRow = {
-  id: string;
-  title: string;
-  description: string | null;
-  intention_statement: string | null;
-  visibility: string | null;
-  guidance_mode: string | null;
-  script_id: string | null;
-  start_time_utc: string;
-  end_time_utc: string;
-  timezone: string | null;
-  status: string | null;
-  active_count_snapshot: number | null;
-  total_join_count: number | null;
-  host_user_id: string;
-  created_at: string;
-};
+type EventRow = Database["public"]["Tables"]["events"]["Row"];
 
 function plusMinutesToLocalInput(minutes: number) {
   const d = new Date(Date.now() + minutes * 60_000);
@@ -44,6 +29,13 @@ function localInputToIso(v: string) {
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString();
+}
+
+function diffMinutes(startIso: string, endIso: string) {
+  const start = new Date(startIso).getTime();
+  const end = new Date(endIso).getTime();
+  const mins = Math.round((end - start) / 60_000);
+  return Number.isFinite(mins) ? mins : null;
 }
 
 export default function EventsScreen() {
@@ -63,7 +55,7 @@ export default function EventsScreen() {
   const [timezone, setTimezone] = useState("Europe/London");
 
   // Presence
-  const [selectedEventId, setSelectedEventId] = useState("");
+  const [selectedEventId, setSelectedEventId] = useState<string>("");
   const [isJoined, setIsJoined] = useState(false);
   const [presenceStatus, setPresenceStatus] = useState("");
   const [presenceError, setPresenceError] = useState("");
@@ -80,8 +72,13 @@ export default function EventsScreen() {
       .from("events")
       .select(
         `
-        id,title,description,intention_statement,visibility,guidance_mode,script_id,
-        start_time_utc,end_time_utc,timezone,status,active_count_snapshot,total_join_count,
+        id,title,description,
+        intention,intention_statement,
+        starts_at,
+        start_time_utc,end_time_utc,
+        duration_minutes,
+        visibility,guidance_mode,script_id,
+        timezone,status,active_count_snapshot,total_join_count,
         host_user_id,created_at
       `
       )
@@ -108,35 +105,30 @@ export default function EventsScreen() {
     loadEvents();
   }, [loadEvents]);
 
-  const upsertPresence = useCallback(
-    async (eventId: string) => {
-      const {
-        data: { user },
-        error: userErr,
-      } = await supabase.auth.getUser();
+  const upsertPresence = useCallback(async (eventId: string) => {
+    const {
+      data: { user },
+      error: userErr,
+    } = await supabase.auth.getUser();
 
-      if (userErr || !user) {
-        throw new Error("Not signed in.");
-      }
+    if (userErr || !user) {
+      throw new Error("Not signed in.");
+    }
 
-      const now = new Date().toISOString();
+    const now = new Date().toISOString();
 
-      // IMPORTANT:
-      // Your DB has created_at NOT NULL (and likely no default), so we always provide it.
-      const { error } = await supabase.from("event_presence").upsert(
-        {
-          event_id: eventId,
-          user_id: user.id,
-          last_seen_at: now,
-          created_at: now,
-        },
-        { onConflict: "event_id,user_id" }
-      );
+    const { error } = await supabase.from("event_presence").upsert(
+      {
+        event_id: eventId,
+        user_id: user.id,
+        last_seen_at: now,
+        created_at: now,
+      },
+      { onConflict: "event_id,user_id" }
+    );
 
-      if (error) throw error;
-    },
-    []
-  );
+    if (error) throw error;
+  }, []);
 
   useEffect(() => {
     if (!isJoined || !selectedEventId) return;
@@ -146,7 +138,7 @@ export default function EventsScreen() {
         await upsertPresence(selectedEventId);
         await loadEvents();
       } catch {
-        // heartbeat best-effort (don’t spam alerts)
+        // heartbeat best-effort
       }
     }, 10_000);
 
@@ -178,6 +170,12 @@ export default function EventsScreen() {
         return;
       }
 
+      const mins = diffMinutes(startIso, endIso);
+      if (!mins || mins <= 0) {
+        Alert.alert("Validation", "Duration must be positive.");
+        return;
+      }
+
       const {
         data: { user },
         error: userErr,
@@ -188,20 +186,37 @@ export default function EventsScreen() {
         return;
       }
 
+      const intentionText = intention.trim();
+      if (!intentionText) {
+        Alert.alert("Validation", "Intention is required.");
+        return;
+      }
+
       setLoading(true);
 
-      const payload = {
+      // Use generated Insert type for correctness
+      const payload: Database["public"]["Tables"]["events"]["Insert"] = {
         title: title.trim(),
         description: description.trim() || null,
-        intention_statement: intention.trim() || null,
+
+        intention: intentionText,
+        intention_statement: intentionText,
+
+        starts_at: startIso,
         start_time_utc: startIso,
         end_time_utc: endIso,
+        duration_minutes: mins,
+
         timezone: timezone.trim() || "Europe/London",
+
+        // optional (defaults exist, but explicit is fine)
         visibility: "PUBLIC",
         guidance_mode: "AI",
         status: "SCHEDULED",
+
         host_user_id: user.id,
         created_by: user.id,
+        script_id: null,
       };
 
       const { error } = await supabase.from("events").insert(payload);
@@ -285,18 +300,24 @@ export default function EventsScreen() {
       ]}
     >
       <Text style={styles.cardTitle}>{item.title}</Text>
+
       {!!item.description && <Text style={styles.cardText}>{item.description}</Text>}
-      {!!item.intention_statement && (
-        <Text style={styles.cardText}>Intention: {item.intention_statement}</Text>
-      )}
+
+      {/* intention_statement is NOT NULL in your schema */}
+      <Text style={styles.cardText}>Intention: {item.intention_statement}</Text>
+
       <Text style={styles.meta}>
         {new Date(item.start_time_utc).toLocaleString()} →{" "}
         {new Date(item.end_time_utc).toLocaleString()} ({item.timezone ?? "UTC"})
       </Text>
+
+      <Text style={styles.meta}>Duration: {item.duration_minutes ?? 0} min</Text>
+
       <Text style={styles.meta}>
         Active snapshot: {item.active_count_snapshot ?? 0} | Total joined:{" "}
         {item.total_join_count ?? 0}
       </Text>
+
       <Text style={styles.meta}>Script: {item.script_id ?? "(none)"}</Text>
       <Text style={styles.meta}>ID: {item.id}</Text>
     </Pressable>
@@ -324,7 +345,7 @@ export default function EventsScreen() {
               <Text style={styles.label}>Title</Text>
               <TextInput style={styles.input} value={title} onChangeText={setTitle} />
 
-              <Text style={styles.label}>Intention Statement</Text>
+              <Text style={styles.label}>Intention</Text>
               <TextInput
                 style={[styles.input, styles.multi]}
                 value={intention}
@@ -376,7 +397,11 @@ export default function EventsScreen() {
 
               <View style={styles.row}>
                 <Pressable
-                  style={[styles.btn, styles.btnPrimary, (!selectedEventId || isJoined) && styles.disabled]}
+                  style={[
+                    styles.btn,
+                    styles.btnPrimary,
+                    (!selectedEventId || isJoined) && styles.disabled,
+                  ]}
                   onPress={handleJoin}
                   disabled={!selectedEventId || isJoined}
                 >
@@ -384,7 +409,11 @@ export default function EventsScreen() {
                 </Pressable>
 
                 <Pressable
-                  style={[styles.btn, styles.btnGhost, (!selectedEventId || !isJoined) && styles.disabled]}
+                  style={[
+                    styles.btn,
+                    styles.btnGhost,
+                    (!selectedEventId || !isJoined) && styles.disabled,
+                  ]}
                   onPress={handleLeave}
                   disabled={!selectedEventId || !isJoined}
                 >
