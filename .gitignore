@@ -437,3 +437,7 @@ mobile/.expo/
 mobile/.env
 mobile/.env.*
 .DS_Store
+
+# Supabase CLI temp
+supabase/.temp/
+
