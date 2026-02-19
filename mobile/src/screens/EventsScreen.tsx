@@ -45,7 +45,8 @@ function diffMinutes(startIso: string, endIso: string) {
 }
 
 export default function EventsScreen() {
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const navigation =
+    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EventRow[]>([]);
@@ -127,6 +128,7 @@ export default function EventsScreen() {
     const rows = (data ?? []) as EventRow[];
     setEvents(rows);
 
+    // keep selection stable
     if (!selectedEventId && rows.length > 0) {
       setSelectedEventId(rows[0].id);
     } else if (selectedEventId && !rows.some((r) => r.id === selectedEventId)) {
@@ -146,6 +148,43 @@ export default function EventsScreen() {
   useEffect(() => {
     refreshAll();
   }, [refreshAll]);
+
+  // Realtime updates from events table
+  useEffect(() => {
+    const channel = supabase
+      .channel("events:list")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "events" },
+        async () => {
+          // re-fetch for correctness (handles inserts/updates/deletes + RLS visibility)
+          await loadEvents();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadEvents]);
+
+  // (Optional) If you ever allow script title edits, this keeps titles in sync too.
+  useEffect(() => {
+    const channel = supabase
+      .channel("scripts:titles")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "scripts" },
+        async () => {
+          await loadScriptsForDisplay();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadScriptsForDisplay]);
 
   const upsertPresence = useCallback(async (eventId: string) => {
     const {
@@ -172,20 +211,20 @@ export default function EventsScreen() {
     if (error) throw error;
   }, []);
 
+  // Heartbeat while joined (presence only; events list is realtime now)
   useEffect(() => {
     if (!isJoined || !selectedEventId) return;
 
     const id = setInterval(async () => {
       try {
         await upsertPresence(selectedEventId);
-        await loadEvents();
       } catch {
         // heartbeat best-effort
       }
     }, 10_000);
 
     return () => clearInterval(id);
-  }, [isJoined, selectedEventId, loadEvents, upsertPresence]);
+  }, [isJoined, selectedEventId, upsertPresence]);
 
   const handleCreateEvent = useCallback(async () => {
     try {
@@ -262,6 +301,7 @@ export default function EventsScreen() {
       }
 
       Alert.alert("Success", "Event created.");
+      // no need to refresh; realtime will pick it up, but refresh is cheap
       await refreshAll();
     } catch (e: any) {
       Alert.alert("Create event failed", e?.message ?? "Unknown error");
@@ -292,11 +332,10 @@ export default function EventsScreen() {
 
       setIsJoined(true);
       setPresenceStatus("✅ Joined live.");
-      await loadEvents();
     } catch (e: any) {
       setPresenceError(e?.message ?? "Failed to join");
     }
-  }, [selectedEventId, loadEvents, upsertPresence]);
+  }, [selectedEventId, upsertPresence]);
 
   const handleLeave = useCallback(async () => {
     try {
@@ -305,9 +344,8 @@ export default function EventsScreen() {
 
       if (!selectedEventId) return;
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const { data } = await supabase.auth.getUser();
+      const user = data.user;
 
       if (!user) {
         setPresenceError("Not signed in.");
@@ -327,11 +365,10 @@ export default function EventsScreen() {
 
       setIsJoined(false);
       setPresenceStatus("✅ Left live.");
-      await loadEvents();
     } catch (e: any) {
       setPresenceError(e?.message ?? "Failed to leave");
     }
-  }, [selectedEventId, loadEvents]);
+  }, [selectedEventId]);
 
   const openRoom = useCallback(
     (eventId: string) => {
@@ -342,8 +379,8 @@ export default function EventsScreen() {
 
   const getScriptLabel = (scriptId: string | null) => {
     if (!scriptId) return "(none)";
-    const title = scriptsById[scriptId]?.title;
-    return title ? title : scriptId;
+    const t = scriptsById[scriptId]?.title;
+    return t ? t : scriptId;
   };
 
   const renderEvent = ({ item }: { item: EventRow }) => (
@@ -540,7 +577,13 @@ const styles = StyleSheet.create({
   },
   multi: { minHeight: 72, textAlignVertical: "top" },
 
-  row: { flexDirection: "row", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center" },
+  row: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 10,
+    flexWrap: "wrap",
+    alignItems: "center",
+  },
 
   btn: {
     borderRadius: 10,
@@ -575,7 +618,13 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 10,
   },
-  cardTitle: { color: "white", fontSize: 16, fontWeight: "700", marginBottom: 6, flex: 1 },
+  cardTitle: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "700",
+    marginBottom: 6,
+    flex: 1,
+  },
   cardText: { color: "#C6D0F5", marginBottom: 6 },
   meta: { color: "#93A3D9", fontSize: 12 },
 
