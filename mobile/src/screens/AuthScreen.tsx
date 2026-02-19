@@ -1,184 +1,144 @@
-// mobile/src/screens/AuthScreen.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../supabase/client";
+import { useAppState } from "../state";
+
+type Mode = "signin" | "signup";
 
 export default function AuthScreen() {
-  const [loading, setLoading] = useState(false);
+  const { user } = useAppState();
 
-  const [sessionUserId, setSessionUserId] = useState<string | null>(null);
+  const [mode, setMode] = useState<Mode>("signin");
+  const [loading, setLoading] = useState(false);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const isSignedIn = useMemo(() => !!sessionUserId, [sessionUserId]);
+  const canSubmit = useMemo(() => {
+    return !!email.trim() && password.length >= 6 && !loading;
+  }, [email, password, loading]);
 
-  useEffect(() => {
-    let mounted = true;
+  const submit = async () => {
+    const e = email.trim();
+    if (!e) return Alert.alert("Missing email", "Please enter your email.");
+    if (password.length < 6)
+      return Alert.alert("Password too short", "Password must be at least 6 characters.");
 
-    // initial session
-    supabase.auth.getSession().then(({ data, error }) => {
-      if (!mounted) return;
-      if (error) {
-        // non-fatal; just show logged out
-        setSessionUserId(null);
-        return;
+    setLoading(true);
+    try {
+      if (mode === "signin") {
+        const { error } = await supabase.auth.signInWithPassword({ email: e, password });
+        if (error) return Alert.alert("Sign in failed", error.message);
+      } else {
+        const { error } = await supabase.auth.signUp({ email: e, password });
+        if (error) return Alert.alert("Sign up failed", error.message);
+
+        Alert.alert(
+          "Account created",
+          "If email confirmation is enabled in Supabase, check your inbox. If not, you should be signed in immediately."
+        );
       }
-      setSessionUserId(data.session?.user?.id ?? null);
-    });
-
-    // realtime updates
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (!mounted) return;
-      setSessionUserId(nextSession?.user?.id ?? null);
-    });
-
-    return () => {
-      mounted = false;
-      sub.subscription.unsubscribe();
-    };
-  }, []);
-
-  const signIn = async () => {
-    if (!email.trim() || !password) {
-      Alert.alert("Missing details", "Please enter email and password.");
-      return;
+      // No navigation: App.tsx will swap screens when session changes.
+    } finally {
+      setLoading(false);
     }
-    setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    });
-    setLoading(false);
-
-    if (error) {
-      Alert.alert("Sign in failed", error.message);
-      return;
-    }
-    // ✅ NO navigation here — App.tsx should switch screens based on session.
   };
 
-  const signUp = async () => {
-    if (!email.trim() || !password) {
-      Alert.alert("Missing details", "Please enter email and password.");
-      return;
-    }
+  const doSignOut = async () => {
     setLoading(true);
-    const { error } = await supabase.auth.signUp({
-      email: email.trim(),
-      password,
-    });
-    setLoading(false);
-
-    if (error) {
-      Alert.alert("Sign up failed", error.message);
-      return;
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) Alert.alert("Sign out failed", error.message);
+    } finally {
+      setLoading(false);
     }
-
-    Alert.alert(
-      "Account created",
-      "If email confirmations are enabled in Supabase, check your inbox. Otherwise you should be signed in."
-    );
-    // ✅ NO navigation here either.
-  };
-
-  const signOut = async () => {
-    setLoading(true);
-    const { error } = await supabase.auth.signOut();
-    setLoading(false);
-
-    if (error) {
-      Alert.alert("Sign out failed", error.message);
-      return;
-    }
-    // ✅ App.tsx should react to session becoming null.
   };
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.container}>
-        <Text style={styles.h1}>Account</Text>
+        <Text style={styles.h1}>Egregor</Text>
+        <Text style={styles.sub}>Sign in to create events, generate scripts, and join live presence.</Text>
 
         <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Account</Text>
+
           <Text style={styles.meta}>
             Status:{" "}
-            <Text style={isSignedIn ? styles.ok : styles.warn}>
-              {isSignedIn ? "Signed in" : "Signed out"}
-            </Text>
+            <Text style={user ? styles.ok : styles.warn}>{user ? "Signed in" : "Signed out"}</Text>
           </Text>
 
-          {isSignedIn ? (
+          {user ? (
             <>
-              <Text style={styles.meta}>User ID: {sessionUserId}</Text>
+              <Text style={styles.meta}>Signed in as: {user.email ?? user.id}</Text>
 
               <Pressable
                 style={[styles.btn, styles.btnDanger, loading && styles.disabled]}
-                onPress={signOut}
+                onPress={doSignOut}
                 disabled={loading}
               >
                 <Text style={styles.btnText}>{loading ? "Working..." : "Sign out"}</Text>
               </Pressable>
-
-              <Text style={styles.hint}>
-                Tip: If you want a “Sign out” button inside the app screens too (Events/Scripts),
-                tell me and I’ll add it there as well.
-              </Text>
             </>
           ) : (
             <>
-              <Text style={styles.label}>Email</Text>
-              <TextInput
-                style={styles.input}
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="email-address"
-                value={email}
-                onChangeText={setEmail}
-                placeholder="you@example.com"
-                placeholderTextColor="#6F7AA8"
-              />
-
-              <Text style={styles.label}>Password</Text>
-              <TextInput
-                style={styles.input}
-                secureTextEntry
-                value={password}
-                onChangeText={setPassword}
-                placeholder="••••••••"
-                placeholderTextColor="#6F7AA8"
-              />
-
               <View style={styles.row}>
                 <Pressable
-                  style={[styles.btn, styles.btnPrimary, loading && styles.disabled]}
-                  onPress={signIn}
+                  style={[styles.pill, mode === "signin" ? styles.pillActive : styles.pillInactive]}
+                  onPress={() => setMode("signin")}
                   disabled={loading}
                 >
-                  <Text style={styles.btnText}>{loading ? "Working..." : "Sign in"}</Text>
+                  <Text style={styles.pillText}>Sign in</Text>
                 </Pressable>
 
                 <Pressable
-                  style={[styles.btn, styles.btnGhost, loading && styles.disabled]}
-                  onPress={signUp}
+                  style={[styles.pill, mode === "signup" ? styles.pillActive : styles.pillInactive]}
+                  onPress={() => setMode("signup")}
                   disabled={loading}
                 >
-                  <Text style={styles.btnGhostText}>Sign up</Text>
+                  <Text style={styles.pillText}>Sign up</Text>
                 </Pressable>
               </View>
 
+              <Text style={styles.label}>Email</Text>
+              <TextInput
+                style={styles.input}
+                value={email}
+                onChangeText={setEmail}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
+                placeholder="you@example.com"
+                placeholderTextColor="#6F7FB2"
+              />
+
+              <Text style={styles.label}>Password (min 6 chars)</Text>
+              <TextInput
+                style={styles.input}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+                placeholder="••••••••"
+                placeholderTextColor="#6F7FB2"
+              />
+
+              <Pressable
+                style={[styles.btn, styles.btnPrimary, !canSubmit && styles.disabled]}
+                onPress={submit}
+                disabled={!canSubmit}
+              >
+                <Text style={styles.btnText}>
+                  {loading ? "Working..." : mode === "signin" ? "Sign in" : "Create account"}
+                </Text>
+              </Pressable>
+
               <Text style={styles.hint}>
-                If you disabled email confirmation in Supabase, sign-up should immediately create
-                a session. Otherwise you may need to confirm via email.
+                Tip: if you disabled email confirmation in Supabase, Sign up should immediately sign you in.
               </Text>
             </>
           )}
         </View>
-
-        <Text style={styles.footer}>
-          This screen does not navigate anywhere. App.tsx should decide what to show based on the
-          Supabase session.
-        </Text>
       </View>
     </SafeAreaView>
   );
@@ -188,6 +148,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B1020" },
   container: { flex: 1, padding: 16, gap: 12 },
   h1: { color: "white", fontSize: 28, fontWeight: "800" },
+  sub: { color: "#93A3D9", fontSize: 13, lineHeight: 18 },
 
   card: {
     backgroundColor: "#151C33",
@@ -197,7 +158,7 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 10,
   },
-
+  sectionTitle: { color: "#DCE4FF", fontSize: 16, fontWeight: "700" },
   meta: { color: "#B9C3E6", fontSize: 13 },
   ok: { color: "#6EE7B7", fontWeight: "800" },
   warn: { color: "#FBBF24", fontWeight: "800" },
@@ -213,7 +174,11 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
 
-  row: { flexDirection: "row", gap: 10, flexWrap: "wrap", marginTop: 6 },
+  row: { flexDirection: "row", gap: 10, flexWrap: "wrap" },
+  pill: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1 },
+  pillActive: { backgroundColor: "#233159", borderColor: "#5B8CFF" },
+  pillInactive: { backgroundColor: "transparent", borderColor: "#3E4C78" },
+  pillText: { color: "white", fontWeight: "700" },
 
   btn: {
     borderRadius: 10,
@@ -221,16 +186,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     alignItems: "center",
     justifyContent: "center",
-    minWidth: 120,
+    minWidth: 140,
+    marginTop: 8,
   },
   btnPrimary: { backgroundColor: "#5B8CFF" },
-  btnGhost: { backgroundColor: "transparent", borderWidth: 1, borderColor: "#3E4C78" },
   btnDanger: { backgroundColor: "#FB7185" },
-
   btnText: { color: "white", fontWeight: "800" },
-  btnGhostText: { color: "#C8D3FF", fontWeight: "800" },
   disabled: { opacity: 0.5 },
 
   hint: { color: "#93A3D9", fontSize: 12, marginTop: 6, lineHeight: 16 },
-  footer: { color: "#93A3D9", fontSize: 12, lineHeight: 16, marginTop: 6 },
 });

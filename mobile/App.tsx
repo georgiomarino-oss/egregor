@@ -1,6 +1,6 @@
-// mobile/App.tsx
 import "react-native-gesture-handler";
 import React from "react";
+import { Alert, Pressable, Text } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -17,6 +17,24 @@ import type { RootStackParamList, RootTabParamList } from "./src/types";
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tabs = createBottomTabNavigator<RootTabParamList>();
 
+function SignOutHeaderButton() {
+  const { signOut } = useAppState();
+
+  const onPress = async () => {
+    try {
+      await signOut();
+    } catch (e: any) {
+      Alert.alert("Sign out failed", e?.message ?? "Unknown error");
+    }
+  };
+
+  return (
+    <Pressable onPress={onPress} style={{ paddingHorizontal: 12, paddingVertical: 6 }}>
+      <Text style={{ color: "#C8D3FF", fontWeight: "800" }}>Sign out</Text>
+    </Pressable>
+  );
+}
+
 function AuthedTabs() {
   return (
     <Tabs.Navigator
@@ -27,6 +45,7 @@ function AuthedTabs() {
         tabBarInactiveTintColor: "#93A3D9",
         headerStyle: { backgroundColor: "#0B1020" },
         headerTintColor: "white",
+        headerRight: () => <SignOutHeaderButton />,
       }}
     >
       <Tabs.Screen name="Events" component={EventsScreen} />
@@ -49,23 +68,11 @@ function RootNav() {
         }}
       >
         {!user ? (
-          <Stack.Screen
-            name="Auth"
-            component={AuthScreen}
-            options={{ headerShown: false }}
-          />
+          <Stack.Screen name="Auth" component={AuthScreen} options={{ headerShown: false }} />
         ) : (
           <>
-            <Stack.Screen
-              name="Tabs"
-              component={AuthedTabs}
-              options={{ headerShown: false }}
-            />
-            <Stack.Screen
-              name="EventRoom"
-              component={EventRoomScreen}
-              options={{ title: "Event Room" }}
-            />
+            <Stack.Screen name="Tabs" component={AuthedTabs} options={{ headerShown: false }} />
+            <Stack.Screen name="EventRoom" component={EventRoomScreen} options={{ title: "Event Room" }} />
           </>
         )}
       </Stack.Navigator>
