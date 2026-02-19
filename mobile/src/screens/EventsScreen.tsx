@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Modal,
   Pressable,
   StyleSheet,
   Text,
@@ -44,15 +45,23 @@ function diffMinutes(startIso: string, endIso: string) {
   return Number.isFinite(mins) ? mins : null;
 }
 
+function isLikelyUuid(v: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    v
+  );
+}
+
 export default function EventsScreen() {
-  const navigation =
-    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EventRow[]>([]);
 
-  // Scripts for display (id -> title)
+  const [myUserId, setMyUserId] = useState<string>("");
+
+  // Scripts for display (id -> title) + picker list
   const [scriptsById, setScriptsById] = useState<Record<string, ScriptRow>>({});
+  const [myScripts, setMyScripts] = useState<ScriptRow[]>([]);
 
   // Create form
   const [title, setTitle] = useState("Global Peace Circle");
@@ -72,10 +81,40 @@ export default function EventsScreen() {
   const [presenceStatus, setPresenceStatus] = useState("");
   const [presenceError, setPresenceError] = useState("");
 
+  // Attach modal state
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [attachEventId, setAttachEventId] = useState<string>("");
+  const [scriptQuery, setScriptQuery] = useState("");
+
   const selectedEvent = useMemo(
     () => events.find((e) => e.id === selectedEventId) ?? null,
     [events, selectedEventId]
   );
+
+  const attachEvent = useMemo(
+    () => events.find((e) => e.id === attachEventId) ?? null,
+    [events, attachEventId]
+  );
+
+  const filteredScripts = useMemo(() => {
+    const q = scriptQuery.trim().toLowerCase();
+    if (!q) return myScripts;
+
+    return myScripts.filter((s) => {
+      const t = String((s as any).title ?? "").toLowerCase();
+      const i = String((s as any).intention ?? "").toLowerCase();
+      return t.includes(q) || i.includes(q);
+    });
+  }, [myScripts, scriptQuery]);
+
+  const loadMyUserId = useCallback(async () => {
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser();
+    if (error || !user) return;
+    setMyUserId(user.id);
+  }, []);
 
   const loadScriptsForDisplay = useCallback(async () => {
     const {
@@ -87,7 +126,7 @@ export default function EventsScreen() {
 
     const { data, error } = await supabase
       .from("scripts")
-      .select("id,title,created_at")
+      .select("id,title,intention,created_at")
       // align with your current RLS (own scripts)
       .eq("author_user_id" as any, user.id)
       .order("created_at", { ascending: false });
@@ -100,7 +139,9 @@ export default function EventsScreen() {
     const rows = (data ?? []) as ScriptRow[];
     const map: Record<string, ScriptRow> = {};
     for (const s of rows) map[s.id] = s;
+
     setScriptsById(map);
+    setMyScripts(rows);
   }, []);
 
   const loadEvents = useCallback(async () => {
@@ -134,16 +175,22 @@ export default function EventsScreen() {
     } else if (selectedEventId && !rows.some((r) => r.id === selectedEventId)) {
       setSelectedEventId(rows[0]?.id ?? "");
     }
-  }, [selectedEventId]);
+
+    // If modal is open and the event disappeared due to RLS / delete, close it
+    if (attachOpen && attachEventId && !rows.some((r) => r.id === attachEventId)) {
+      setAttachOpen(false);
+      setAttachEventId("");
+    }
+  }, [attachEventId, attachOpen, selectedEventId]);
 
   const refreshAll = useCallback(async () => {
     setLoading(true);
     try {
-      await Promise.all([loadEvents(), loadScriptsForDisplay()]);
+      await Promise.all([loadMyUserId(), loadEvents(), loadScriptsForDisplay()]);
     } finally {
       setLoading(false);
     }
-  }, [loadEvents, loadScriptsForDisplay]);
+  }, [loadEvents, loadMyUserId, loadScriptsForDisplay]);
 
   useEffect(() => {
     refreshAll();
@@ -153,14 +200,9 @@ export default function EventsScreen() {
   useEffect(() => {
     const channel = supabase
       .channel("events:list")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "events" },
-        async () => {
-          // re-fetch for correctness (handles inserts/updates/deletes + RLS visibility)
-          await loadEvents();
-        }
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "events" }, async () => {
+        await loadEvents();
+      })
       .subscribe();
 
     return () => {
@@ -168,17 +210,13 @@ export default function EventsScreen() {
     };
   }, [loadEvents]);
 
-  // (Optional) If you ever allow script title edits, this keeps titles in sync too.
+  // Keep script titles in sync
   useEffect(() => {
     const channel = supabase
       .channel("scripts:titles")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "scripts" },
-        async () => {
-          await loadScriptsForDisplay();
-        }
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "scripts" }, async () => {
+        await loadScriptsForDisplay();
+      })
       .subscribe();
 
     return () => {
@@ -219,7 +257,7 @@ export default function EventsScreen() {
       try {
         await upsertPresence(selectedEventId);
       } catch {
-        // heartbeat best-effort
+        // best-effort
       }
     }, 10_000);
 
@@ -301,22 +339,13 @@ export default function EventsScreen() {
       }
 
       Alert.alert("Success", "Event created.");
-      // no need to refresh; realtime will pick it up, but refresh is cheap
       await refreshAll();
     } catch (e: any) {
       Alert.alert("Create event failed", e?.message ?? "Unknown error");
     } finally {
       setLoading(false);
     }
-  }, [
-    title,
-    description,
-    intention,
-    startLocal,
-    endLocal,
-    timezone,
-    refreshAll,
-  ]);
+  }, [title, description, intention, startLocal, endLocal, timezone, refreshAll]);
 
   const handleJoin = useCallback(async () => {
     try {
@@ -383,45 +412,195 @@ export default function EventsScreen() {
     return t ? t : scriptId;
   };
 
-  const renderEvent = ({ item }: { item: EventRow }) => (
-    <Pressable
-      onPress={() => setSelectedEventId(item.id)}
-      style={[
-        styles.card,
-        item.id === selectedEventId ? styles.cardSelected : undefined,
-      ]}
-    >
-      <View style={styles.cardTopRow}>
-        <Text style={styles.cardTitle}>{item.title}</Text>
+  // ---- Attach UX (Events tab) ----
 
-        <Pressable
-          onPress={() => openRoom(item.id)}
-          style={[styles.smallBtn, styles.smallBtnPrimary]}
-        >
-          <Text style={styles.smallBtnText}>Open</Text>
-        </Pressable>
-      </View>
+  const openAttachForEvent = useCallback(
+    async (eventId: string) => {
+      if (!eventId || !isLikelyUuid(eventId)) return;
 
-      {!!item.description && <Text style={styles.cardText}>{item.description}</Text>}
+      setAttachEventId(eventId);
+      setScriptQuery("");
+      setAttachOpen(true);
 
-      <Text style={styles.cardText}>Intention: {item.intention_statement}</Text>
-
-      <Text style={styles.meta}>
-        {new Date(item.start_time_utc).toLocaleString()} →{" "}
-        {new Date(item.end_time_utc).toLocaleString()} ({item.timezone ?? "UTC"})
-      </Text>
-
-      <Text style={styles.meta}>Duration: {item.duration_minutes ?? 0} min</Text>
-
-      <Text style={styles.meta}>
-        Active snapshot: {item.active_count_snapshot ?? 0} | Total joined:{" "}
-        {item.total_join_count ?? 0}
-      </Text>
-
-      <Text style={styles.meta}>Script: {getScriptLabel(item.script_id)}</Text>
-      <Text style={styles.meta}>ID: {item.id}</Text>
-    </Pressable>
+      // Ensure we have scripts loaded for the picker
+      await loadScriptsForDisplay();
+    },
+    [loadScriptsForDisplay]
   );
+
+  const updateEventScript = useCallback(
+    async (event: EventRow, nextScriptId: string | null) => {
+      const {
+        data: { user },
+        error: userErr,
+      } = await supabase.auth.getUser();
+
+      if (userErr || !user) {
+        Alert.alert("Not signed in", "Please sign in first.");
+        return;
+      }
+
+      // Client-side guard (RLS must enforce too)
+      if (event.host_user_id !== user.id) {
+        Alert.alert("Not allowed", "Only the host can change this event’s script.");
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const { error } = await supabase.from("events").update({ script_id: nextScriptId }).eq("id", event.id);
+
+        if (error) {
+          Alert.alert("Update failed", error.message);
+          return;
+        }
+
+        // Realtime should update, but fetch keeps UI immediate + consistent
+        await loadEvents();
+      } finally {
+        setLoading(false);
+      }
+    },
+    [loadEvents]
+  );
+
+  const attachOrReplace = useCallback(
+    async (scriptId: string) => {
+      if (!attachEvent) return;
+
+      if (attachEvent.script_id === scriptId) {
+        Alert.alert("Already attached", "This event already uses that script.");
+        return;
+      }
+
+      if (attachEvent.script_id && attachEvent.script_id !== scriptId) {
+        Alert.alert("Replace script?", "This event already has a script attached. Replace it?", [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Replace",
+            style: "destructive",
+            onPress: async () => {
+              await updateEventScript(attachEvent, scriptId);
+              setAttachOpen(false);
+            },
+          },
+        ]);
+        return;
+      }
+
+      await updateEventScript(attachEvent, scriptId);
+      setAttachOpen(false);
+    },
+    [attachEvent, updateEventScript]
+  );
+
+  const detach = useCallback(async () => {
+    if (!attachEvent) return;
+    if (!attachEvent.script_id) return;
+
+    Alert.alert("Detach script?", "Remove the script from this event?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Detach",
+        style: "destructive",
+        onPress: async () => {
+          await updateEventScript(attachEvent, null);
+          setAttachOpen(false);
+        },
+      },
+    ]);
+  }, [attachEvent, updateEventScript]);
+
+  const renderScriptRow = ({ item }: { item: ScriptRow }) => {
+    const isSelected = !!attachEvent?.script_id && attachEvent.script_id === item.id;
+
+    return (
+      <View style={styles.pickerCard}>
+        <Text style={styles.pickerTitle} numberOfLines={1}>
+          {(item as any).title ?? "Untitled"}
+        </Text>
+        {(item as any).intention ? (
+          <Text style={styles.pickerMeta} numberOfLines={2}>
+            {(item as any).intention}
+          </Text>
+        ) : null}
+
+        <View style={styles.row}>
+          <Pressable
+            onPress={() => attachOrReplace(item.id)}
+            style={[
+              styles.btn,
+              isSelected ? styles.btnGhost : styles.btnPrimary,
+              (loading || !attachEvent) && styles.disabled,
+            ]}
+            disabled={loading || !attachEvent}
+          >
+            <Text style={isSelected ? styles.btnGhostText : styles.btnText}>
+              {isSelected ? "Currently Attached" : "Attach"}
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  };
+
+  const renderEvent = ({ item }: { item: EventRow }) => {
+    const isHost = !!myUserId && item.host_user_id === myUserId;
+
+    return (
+      <Pressable
+        onPress={() => setSelectedEventId(item.id)}
+        style={[
+          styles.card,
+          item.id === selectedEventId ? styles.cardSelected : undefined,
+        ]}
+      >
+        <View style={styles.cardTopRow}>
+          <Text style={styles.cardTitle}>{item.title}</Text>
+
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <Pressable
+              onPress={() => openRoom(item.id)}
+              style={[styles.smallBtn, styles.smallBtnPrimary]}
+            >
+              <Text style={styles.smallBtnText}>Open</Text>
+            </Pressable>
+
+            {isHost ? (
+              <Pressable
+                onPress={() => openAttachForEvent(item.id)}
+                style={[styles.smallBtn, styles.smallBtnGhost, loading && styles.disabled]}
+                disabled={loading}
+              >
+                <Text style={styles.smallBtnGhostText}>
+                  {item.script_id ? "Change" : "Attach"}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
+
+        {!!item.description && <Text style={styles.cardText}>{item.description}</Text>}
+
+        <Text style={styles.cardText}>Intention: {item.intention_statement}</Text>
+
+        <Text style={styles.meta}>
+          {new Date(item.start_time_utc).toLocaleString()} →{" "}
+          {new Date(item.end_time_utc).toLocaleString()} ({item.timezone ?? "UTC"})
+        </Text>
+
+        <Text style={styles.meta}>Duration: {item.duration_minutes ?? 0} min</Text>
+
+        <Text style={styles.meta}>
+          Active snapshot: {item.active_count_snapshot ?? 0} | Total joined:{" "}
+          {item.total_join_count ?? 0}
+        </Text>
+
+        <Text style={styles.meta}>Script: {getScriptLabel(item.script_id)}</Text>
+        <Text style={styles.meta}>ID: {item.id}</Text>
+      </Pressable>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -469,9 +648,7 @@ export default function EventsScreen() {
                   onPress={handleCreateEvent}
                   disabled={loading}
                 >
-                  <Text style={styles.btnText}>
-                    {loading ? "Working..." : "Create event"}
-                  </Text>
+                  <Text style={styles.btnText}>{loading ? "Working..." : "Create event"}</Text>
                 </Pressable>
 
                 <Pressable
@@ -488,9 +665,7 @@ export default function EventsScreen() {
 
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Live Presence</Text>
-              <Text style={styles.meta}>
-                Selected: {selectedEvent ? selectedEvent.title : "(none)"}
-              </Text>
+              <Text style={styles.meta}>Selected: {selectedEvent ? selectedEvent.title : "(none)"}</Text>
 
               <View style={styles.row}>
                 <Pressable
@@ -518,11 +693,7 @@ export default function EventsScreen() {
                 </Pressable>
 
                 <Pressable
-                  style={[
-                    styles.btn,
-                    styles.btnGhost,
-                    !selectedEventId && styles.disabled,
-                  ]}
+                  style={[styles.btn, styles.btnGhost, !selectedEventId && styles.disabled]}
                   onPress={() => {
                     if (!selectedEventId) {
                       Alert.alert("Select event", "Please select an event first.");
@@ -547,6 +718,90 @@ export default function EventsScreen() {
           <Text style={styles.empty}>{loading ? "Loading..." : "No events yet."}</Text>
         }
       />
+
+      {/* Attach Script Modal */}
+      <Modal
+        visible={attachOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAttachOpen(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Event Script</Text>
+              <Pressable
+                onPress={() => setAttachOpen(false)}
+                style={styles.modalClose}
+                disabled={loading}
+              >
+                <Text style={styles.btnText}>Close</Text>
+              </Pressable>
+            </View>
+
+            {attachEvent ? (
+              <>
+                <Text style={styles.modalMeta}>
+                  Event:{" "}
+                  <Text style={{ fontWeight: "900", color: "white" }}>
+                    {attachEvent.title}
+                  </Text>
+                </Text>
+
+                <Text style={styles.modalMeta}>
+                  Current:{" "}
+                  <Text style={{ fontWeight: "900", color: "white" }}>
+                    {attachEvent.script_id ? getScriptLabel(attachEvent.script_id) : "(none)"}
+                  </Text>
+                </Text>
+
+                <View style={styles.row}>
+                  <Pressable
+                    onPress={detach}
+                    style={[
+                      styles.btn,
+                      styles.btnDanger,
+                      (!attachEvent.script_id || loading) && styles.disabled,
+                    ]}
+                    disabled={!attachEvent.script_id || loading}
+                  >
+                    <Text style={styles.btnText}>Detach</Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={loadScriptsForDisplay}
+                    style={[styles.btn, styles.btnGhost, loading && styles.disabled]}
+                    disabled={loading}
+                  >
+                    <Text style={styles.btnGhostText}>Refresh scripts</Text>
+                  </Pressable>
+                </View>
+
+                <TextInput
+                  value={scriptQuery}
+                  onChangeText={setScriptQuery}
+                  style={styles.input}
+                  placeholder="Search your scripts…"
+                  placeholderTextColor="#6B7BB2"
+                />
+
+                {myScripts.length === 0 ? (
+                  <Text style={styles.empty}>No scripts found. Create one in Scripts first.</Text>
+                ) : (
+                  <FlatList
+                    data={filteredScripts}
+                    keyExtractor={(s) => s.id}
+                    renderItem={renderScriptRow}
+                    contentContainerStyle={{ paddingTop: 10, paddingBottom: 6, gap: 10 }}
+                  />
+                )}
+              </>
+            ) : (
+              <Text style={styles.empty}>No event selected.</Text>
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -599,6 +854,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#3E4C78",
   },
+  btnDanger: { backgroundColor: "#FB7185" },
   btnText: { color: "white", fontWeight: "700" },
   btnGhostText: { color: "#C8D3FF", fontWeight: "700" },
   disabled: { opacity: 0.45 },
@@ -636,9 +892,57 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   smallBtnPrimary: { backgroundColor: "#5B8CFF" },
+  smallBtnGhost: {
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: "#3E4C78",
+  },
   smallBtnText: { color: "white", fontWeight: "800" },
+  smallBtnGhostText: { color: "#C8D3FF", fontWeight: "800" },
 
   ok: { color: "#6EE7B7", marginTop: 8 },
   err: { color: "#FB7185", marginTop: 8 },
   empty: { color: "#9EB0E3", marginTop: 8 },
+
+  // Modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    padding: 16,
+    justifyContent: "flex-end",
+  },
+  modalCard: {
+    maxHeight: "85%",
+    backgroundColor: "#0B1020",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#2A365E",
+    padding: 12,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginBottom: 10,
+  },
+  modalTitle: { color: "white", fontSize: 18, fontWeight: "900" },
+  modalClose: {
+    backgroundColor: "#3E4C78",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  modalMeta: { color: "#B9C3E6", marginBottom: 10 },
+
+  // Picker cards (scripts list)
+  pickerCard: {
+    backgroundColor: "#121A31",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#27345C",
+    padding: 12,
+  },
+  pickerTitle: { color: "white", fontSize: 14, fontWeight: "800" },
+  pickerMeta: { color: "#93A3D9", fontSize: 12, marginTop: 4 },
 });
