@@ -158,6 +158,31 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     setPresenceRows((data ?? []) as PresenceRow[]);
   }, [eventId, hasValidEventId]);
 
+  const loadScriptById = useCallback(async (scriptId: string | null) => {
+    if (!scriptId) {
+      setScriptDbRow(null);
+      setScript(null);
+      return;
+    }
+
+    const { data: scData, error: scErr } = await supabase
+      .from("scripts")
+      .select("id,title,content_json")
+      .eq("id", scriptId)
+      .single();
+
+    if (scErr || !scData) {
+      setScriptDbRow(null);
+      setScript(null);
+      return;
+    }
+
+    const row = scData as Pick<ScriptDbRow, "id" | "title" | "content_json">;
+    setScriptDbRow(row);
+    setScript(parseScriptContent(row.content_json));
+    setCurrentSectionIdx(0);
+  }, []);
+
   const loadEventRoom = useCallback(async () => {
     if (!hasValidEventId) {
       setLoading(false);
@@ -194,36 +219,57 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     const eventRow = evData as EventRow;
     setEvent(eventRow);
 
-    // Load presence and script in parallel
-    await loadPresence();
-
-    if (eventRow.script_id) {
-      const { data: scData, error: scErr } = await supabase
-        .from("scripts")
-        .select("id,title,content_json")
-        .eq("id", eventRow.script_id)
-        .single();
-
-      if (scErr || !scData) {
-        setScriptDbRow(null);
-        setScript(null);
-      } else {
-        const row = scData as Pick<ScriptDbRow, "id" | "title" | "content_json">;
-        setScriptDbRow(row);
-        setScript(parseScriptContent(row.content_json));
-        setCurrentSectionIdx(0);
-      }
-    } else {
-      setScriptDbRow(null);
-      setScript(null);
-    }
+    await Promise.all([loadPresence(), loadScriptById(eventRow.script_id ?? null)]);
 
     setLoading(false);
-  }, [eventId, hasValidEventId, loadPresence]);
+  }, [eventId, hasValidEventId, loadPresence, loadScriptById]);
 
   useEffect(() => {
     loadEventRoom();
   }, [loadEventRoom]);
+
+  // Realtime subscription: keep EventRoom synced with events row changes (incl script_id attach/detach)
+  useEffect(() => {
+    if (!hasValidEventId) return;
+
+    const channel = supabase
+      .channel(`event:${eventId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "events",
+          filter: `id=eq.${eventId}`,
+        },
+        async (payload) => {
+          const next = payload.new as Partial<EventRow> | null;
+          const prev = payload.old as Partial<EventRow> | null;
+
+          // Update the local event state quickly
+          setEvent((cur) => {
+            if (!cur) return cur;
+            return { ...cur, ...(next as any) };
+          });
+
+          // If script changed, reload script and reset guided flow cleanly
+          const nextScriptId = (next as any)?.script_id ?? null;
+          const prevScriptId = (prev as any)?.script_id ?? null;
+
+          if (nextScriptId !== prevScriptId) {
+            stopTimer();
+            setSecondsLeft(0);
+            setCurrentSectionIdx(0);
+            await loadScriptById(nextScriptId);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [eventId, hasValidEventId, loadScriptById, stopTimer]);
 
   // Timer reset on section change
   useEffect(() => {
@@ -262,7 +308,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           filter: `event_id=eq.${eventId}`,
         },
         () => {
-          // simplest + robust: refetch current presence
           loadPresence();
         }
       )
@@ -293,13 +338,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           event_id: eventId,
           user_id: user.id,
           last_seen_at: now,
-          created_at: now, // safe even though default exists
+          created_at: now,
         },
         { onConflict: "event_id,user_id" }
       );
 
       if (error && !cancelled) {
-        // best-effort; don't spam alerts
         setPresenceErr(error.message);
       }
     };
@@ -489,7 +533,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             <View style={{ marginTop: 8 }}>
               {activePresence.slice(0, 10).map((p) => (
                 <Text key={p.user_id} style={styles.meta}>
-                  • {shortId(p.user_id)} (seen {Math.max(0, Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000))}s ago)
+                  • {shortId(p.user_id)} (seen{" "}
+                  {Math.max(
+                    0,
+                    Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000)
+                  )}
+                  s ago)
                 </Text>
               ))}
               {activePresence.length > 10 ? (
