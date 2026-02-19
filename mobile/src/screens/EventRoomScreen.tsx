@@ -163,6 +163,8 @@ async function writeJoinPref(eventId: string, joined: boolean): Promise<void> {
   return writeBool(joinPrefKey(eventId), joined);
 }
 
+type ProfileMini = Pick<ProfileRow, "id" | "display_name" | "avatar_url">;
+
 export default function EventRoomScreen({ route, navigation }: Props) {
   const eventId = route.params?.eventId ?? "";
   const hasValidEventId = !!eventId && isLikelyUuid(eventId);
@@ -184,10 +186,14 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const [presenceMsg, setPresenceMsg] = useState("");
   const [presenceErr, setPresenceErr] = useState("");
 
-  // Profiles cache for presence display
-  const [profilesById, setProfilesById] = useState<Record<string, Pick<ProfileRow, "id" | "display_name" | "avatar_url">>>(
-    {}
-  );
+  // Profiles cache for presence display (STATE for UI)
+  const [profilesById, setProfilesById] = useState<Record<string, ProfileMini>>({});
+  // Ref cache to avoid dependency loops
+  const profilesByIdRef = useRef<Record<string, ProfileMini>>({});
+
+  useEffect(() => {
+    profilesByIdRef.current = profilesById;
+  }, [profilesById]);
 
   // Join preference loaded
   const [joinPrefLoaded, setJoinPrefLoaded] = useState(false);
@@ -295,21 +301,18 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return String(runState.mode);
   }, [runReady, runState.mode]);
 
-  const displayNameForUserId = useCallback(
-    (id: string) => {
-      const p = profilesById[id];
-      const name = (p?.display_name ?? "").trim();
-      return name.length > 0 ? name : shortId(id);
-    },
-    [profilesById]
-  );
+  const displayNameForUserId = useCallback((id: string) => {
+    const p = profilesByIdRef.current[id];
+    const name = (p?.display_name ?? "").trim();
+    return name.length > 0 ? name : shortId(id);
+  }, []);
 
   const loadProfiles = useCallback(async (ids: string[]) => {
     const uniq = Array.from(new Set(ids.filter(Boolean)));
     if (uniq.length === 0) return;
 
-    // Only fetch IDs we don't already have cached.
-    const missing = uniq.filter((id) => !profilesById[id]);
+    // Use REF cache to avoid dependency loops.
+    const missing = uniq.filter((id) => !profilesByIdRef.current[id]);
     if (missing.length === 0) return;
 
     const { data, error } = await supabase
@@ -317,18 +320,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       .select("id,display_name,avatar_url")
       .in("id", missing);
 
-    if (error) {
-      // If RLS blocks this, you'll see it here (we can add a policy if needed).
-      return;
-    }
+    if (error) return;
 
-    const rows = (data ?? []) as Pick<ProfileRow, "id" | "display_name" | "avatar_url">[];
+    const rows = (data ?? []) as ProfileMini[];
+    if (rows.length === 0) return;
+
     setProfilesById((prev) => {
       const next = { ...prev };
       for (const r of rows) next[r.id] = r;
       return next;
     });
-  }, [profilesById]);
+  }, []);
 
   const loadPresence = useCallback(async () => {
     if (!hasValidEventId) {
@@ -346,7 +348,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     const rows = (data ?? []) as PresenceRow[];
     setPresenceRows(rows);
 
-    // opportunistically fetch profiles for everyone in this event presence set
+    // Fetch profiles for all present users (async, non-blocking)
     void loadProfiles(rows.map((r) => r.user_id));
   }, [eventId, hasValidEventId, loadProfiles]);
 
@@ -478,6 +480,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, []);
 
+  // Events row realtime
   useEffect(() => {
     if (!hasValidEventId) return;
 
@@ -510,6 +513,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [eventId, hasValidEventId, loadScriptById]);
 
+  // Run state realtime
   useEffect(() => {
     if (!hasValidEventId) return;
 
@@ -521,6 +525,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return () => sub.unsubscribe();
   }, [eventId, hasValidEventId]);
 
+  // Presence realtime
   useEffect(() => {
     if (!hasValidEventId) return;
 
@@ -540,8 +545,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   // Auto-join if:
   // - global setting enabled
-  // - per-event sticky join enabled (they joined this event before)
-  // - we are not already joined
+  // - per-event sticky join enabled
+  // - not already joined
   useEffect(() => {
     let cancelled = false;
 
@@ -639,12 +644,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   const activeCount = activePresence.length;
 
-  // Fetch profiles for currently active users too (covers edge where presenceRows populated via realtime first)
-  useEffect(() => {
-    const ids = activePresence.map((r) => r.user_id);
-    void loadProfiles(ids);
-  }, [activePresence, loadProfiles]);
-
   const handleJoinLive = useCallback(async () => {
     if (!hasValidEventId) {
       Alert.alert("Missing event", "This screen was opened without a valid event id.");
@@ -739,7 +738,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   );
 
   const hostSetViaServer = useCallback(
-    async (mode: EventRunMode, sectionIndex: number, elapsedBeforePauseSec: number, resetTimer: boolean) => {
+    async (
+      mode: EventRunMode,
+      sectionIndex: number,
+      elapsedBeforePauseSec: number,
+      resetTimer: boolean
+    ) => {
       if (!hasValidEventId) return;
 
       const row = await setRunStateServerTime({
@@ -924,7 +928,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.h1}>{(event as any).title}</Text>
 
-        {!!(event as any).description && <Text style={styles.body}>{(event as any).description}</Text>}
+        {!!(event as any).description && (
+          <Text style={styles.body}>{(event as any).description}</Text>
+        )}
 
         <Text style={styles.body}>Intention: {(event as any).intention_statement}</Text>
 
@@ -969,7 +975,11 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                 <Text key={p.user_id} style={styles.meta}>
                   • {displayNameForUserId(p.user_id)}{" "}
                   <Text style={{ color: "#5B8CFF" }}>({shortId(p.user_id)})</Text> (seen{" "}
-                  {Math.max(0, Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000))}s ago)
+                  {Math.max(
+                    0,
+                    Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000)
+                  )}
+                  s ago)
                 </Text>
               ))}
               {activePresence.length > 10 ? (
