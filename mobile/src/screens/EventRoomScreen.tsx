@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { RootStackParamList } from "../types/navigation";
+import { RootStackParamList } from "../types";
 import { supabase } from "../supabase/client";
 
 import {
@@ -15,8 +15,7 @@ import {
   type EventRunMode,
 } from "../features/events/runStateRepo";
 
-// If you already have a presence repo, you can swap these helper functions to your existing ones.
-// This file keeps presence behavior exactly as you described: upsert on join + heartbeat, and active list by last_seen_at.
+// Presence (kept inline as before)
 type PresenceRow = {
   event_id: string;
   user_id: string;
@@ -47,7 +46,7 @@ type EventRow = {
 type Section = {
   title: string;
   body?: string;
-  timer_seconds?: number; // optional
+  timer_seconds?: number;
 };
 
 type Props = NativeStackScreenProps<RootStackParamList, "EventRoom">;
@@ -77,6 +76,7 @@ function formatTime(sec: number): string {
 
 export default function EventRoomScreen({ navigation, route }: Props) {
   const eventIdParam = (route.params as any)?.eventId;
+  const eventId = useMemo(() => (isUuid(eventIdParam) ? eventIdParam : null), [eventIdParam]);
 
   const [loading, setLoading] = useState(true);
   const [eventRow, setEventRow] = useState<EventRow | null>(null);
@@ -87,7 +87,7 @@ export default function EventRoomScreen({ navigation, route }: Props) {
   // Presence
   const [joinedLive, setJoinedLive] = useState(false);
   const [activePresence, setActivePresence] = useState<PresenceRow[]>([]);
-  const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Run state
   const [runState, setRunState] = useState<EventRunStateV1>({ version: 1, mode: "idle", sectionIndex: 0 });
@@ -95,9 +95,7 @@ export default function EventRoomScreen({ navigation, route }: Props) {
 
   // Local ticking (to update countdown display)
   const [tick, setTick] = useState(0);
-  const localTickRef = useRef<NodeJS.Timeout | null>(null);
-
-  const eventId = useMemo(() => (isUuid(eventIdParam) ? eventIdParam : null), [eventIdParam]);
+  const localTickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const hostId = useMemo(() => {
     if (!eventRow) return null;
@@ -117,8 +115,7 @@ export default function EventRoomScreen({ navigation, route }: Props) {
       .map((s: any) => {
         const title = typeof s?.title === "string" ? s.title : "Untitled";
         const body = typeof s?.body === "string" ? s.body : undefined;
-        const timer_seconds =
-          Number.isFinite(s?.timer_seconds) ? Math.max(0, Math.floor(s.timer_seconds)) : undefined;
+        const timer_seconds = Number.isFinite(s?.timer_seconds) ? Math.max(0, Math.floor(s.timer_seconds)) : undefined;
         return { title, body, timer_seconds };
       })
       .filter((s) => !!s.title);
@@ -139,14 +136,12 @@ export default function EventRoomScreen({ navigation, route }: Props) {
       return { hasTimer: false, durationSec: 0, remainingSec: 0, elapsedSec: 0 };
     }
 
-    // Compute elapsed based on host timestamps
     let elapsed = 0;
 
     if (mode === "running" && runState.startedAt) {
       elapsed = secondsBetweenIso(runState.startedAt, nowIso());
       if (runState.elapsedBeforePauseSec) elapsed += runState.elapsedBeforePauseSec;
     } else if (mode === "paused") {
-      // When paused, freeze elapsed at elapsedBeforePauseSec (host computed on pause)
       elapsed = runState.elapsedBeforePauseSec ?? 0;
     } else {
       elapsed = runState.elapsedBeforePauseSec ?? 0;
@@ -154,13 +149,13 @@ export default function EventRoomScreen({ navigation, route }: Props) {
 
     const remaining = Math.max(0, duration - elapsed);
 
-    return {
-      hasTimer: true,
-      durationSec: duration,
-      remainingSec: remaining,
-      elapsedSec: elapsed,
-    };
+    return { hasTimer: true, durationSec: duration, remainingSec: remaining, elapsedSec: elapsed };
   }, [currentSection, runState, tick]);
+
+  const onBack = useCallback(() => {
+    if (navigation.canGoBack()) navigation.goBack();
+    else navigation.navigate("RootTabs" as any);
+  }, [navigation]);
 
   const load = useCallback(async () => {
     if (!eventId) {
@@ -206,7 +201,6 @@ export default function EventRoomScreen({ navigation, route }: Props) {
       }
       setScriptRow(script);
 
-      // Ensure run state exists + subscribe
       const row = await ensureRunState(eventId);
       setRunState(normalizeRunState(row.state));
       setRunStateReady(true);
@@ -218,7 +212,6 @@ export default function EventRoomScreen({ navigation, route }: Props) {
     }
   }, [eventId, navigation]);
 
-  // Initial load
   useEffect(() => {
     load();
   }, [load]);
@@ -257,10 +250,7 @@ export default function EventRoomScreen({ navigation, route }: Props) {
       };
       if (forceJoinedAt) payload.joined_at = nowIso();
 
-      const { error } = await supabase
-        .from("event_presence")
-        .upsert(payload, { onConflict: "event_id,user_id" });
-
+      const { error } = await supabase.from("event_presence").upsert(payload, { onConflict: "event_id,user_id" });
       if (error) throw error;
     },
     [eventId, userId]
@@ -269,7 +259,6 @@ export default function EventRoomScreen({ navigation, route }: Props) {
   const refreshPresence = useCallback(async () => {
     if (!eventId) return;
 
-    // Active = last_seen_at within 25s
     const cutoff = new Date(Date.now() - 25_000).toISOString();
 
     const { data, error } = await supabase
@@ -283,7 +272,7 @@ export default function EventRoomScreen({ navigation, route }: Props) {
     setActivePresence((data ?? []) as PresenceRow[]);
   }, [eventId]);
 
-  // Subscribe presence changes for this event
+  // Subscribe presence changes
   useEffect(() => {
     if (!eventId) return;
 
@@ -292,14 +281,10 @@ export default function EventRoomScreen({ navigation, route }: Props) {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "event_presence", filter: `event_id=eq.${eventId}` },
-        () => {
-          // Cheap + reliable: refetch active list
-          refreshPresence().catch((e) => console.error("refreshPresence error", e));
-        }
+        () => refreshPresence().catch((e) => console.error("refreshPresence error", e))
       )
       .subscribe();
 
-    // initial list
     refreshPresence().catch(() => undefined);
 
     return () => {
@@ -336,7 +321,6 @@ export default function EventRoomScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     return () => {
-      // cleanup on unmount
       if (heartbeatRef.current) clearInterval(heartbeatRef.current);
       heartbeatRef.current = null;
     };
@@ -348,7 +332,6 @@ export default function EventRoomScreen({ navigation, route }: Props) {
       if (!eventId) return;
       try {
         await upsertRunState(eventId, next);
-        // optimistic (subscription will also update)
         setRunState(next);
       } catch (e: any) {
         console.error(e);
@@ -368,13 +351,7 @@ export default function EventRoomScreen({ navigation, route }: Props) {
 
   const hostStart = useCallback(async () => {
     const idx = clampSectionIndex(runState.sectionIndex ?? 0);
-    const next: EventRunStateV1 = {
-      version: 1,
-      mode: "running",
-      sectionIndex: idx,
-      startedAt: nowIso(),
-      elapsedBeforePauseSec: 0,
-    };
+    const next: EventRunStateV1 = { version: 1, mode: "running", sectionIndex: idx, startedAt: nowIso(), elapsedBeforePauseSec: 0 };
     await hostSetState(next);
   }, [clampSectionIndex, hostSetState, runState.sectionIndex]);
 
@@ -419,40 +396,20 @@ export default function EventRoomScreen({ navigation, route }: Props) {
   const hostGoTo = useCallback(
     async (idx: number) => {
       const nextIndex = clampSectionIndex(idx);
-      // When changing section:
-      // - if running: restart timer at 0 from now
-      // - if paused/idle/ended: keep mode, reset elapsed to 0 (so it's clean when started)
-      const base: EventRunStateV1 = {
-        version: 1,
-        mode: runState.mode,
-        sectionIndex: nextIndex,
-      };
+      const base: EventRunStateV1 = { version: 1, mode: runState.mode, sectionIndex: nextIndex };
 
       if (runState.mode === "running") {
-        await hostSetState({
-          ...base,
-          mode: "running",
-          startedAt: nowIso(),
-          elapsedBeforePauseSec: 0,
-        });
+        await hostSetState({ ...base, mode: "running", startedAt: nowIso(), elapsedBeforePauseSec: 0 });
       } else if (runState.mode === "paused") {
-        await hostSetState({
-          ...base,
-          mode: "paused",
-          pausedAt: nowIso(),
-          elapsedBeforePauseSec: 0,
-        });
+        await hostSetState({ ...base, mode: "paused", pausedAt: nowIso(), elapsedBeforePauseSec: 0 });
       } else {
-        await hostSetState({
-          ...base,
-          elapsedBeforePauseSec: 0,
-        });
+        await hostSetState({ ...base, elapsedBeforePauseSec: 0 });
       }
     },
     [clampSectionIndex, hostSetState, runState.mode]
   );
 
-  // Host auto-advance when timer hits 0 (only host does this)
+  // Host auto-advance when timer hits 0
   const autoAdvanceGuardRef = useRef(false);
   useEffect(() => {
     if (!isHost) return;
@@ -464,27 +421,16 @@ export default function EventRoomScreen({ navigation, route }: Props) {
       autoAdvanceGuardRef.current = false;
       return;
     }
-
     if (autoAdvanceGuardRef.current) return;
     autoAdvanceGuardRef.current = true;
 
-    // Next section or end
     const nextIndex = runState.sectionIndex + 1;
     if (nextIndex <= sections.length - 1) {
-      hostGoTo(nextIndex).catch(() => {
-        autoAdvanceGuardRef.current = false;
-      });
+      hostGoTo(nextIndex).catch(() => (autoAdvanceGuardRef.current = false));
     } else {
-      hostEnd().catch(() => {
-        autoAdvanceGuardRef.current = false;
-      });
+      hostEnd().catch(() => (autoAdvanceGuardRef.current = false));
     }
   }, [isHost, timerInfo.hasTimer, timerInfo.remainingSec, runState.mode, runState.sectionIndex, sections.length, hostGoTo, hostEnd]);
-
-  const onBack = useCallback(() => {
-    if (navigation.canGoBack()) navigation.goBack();
-    else navigation.navigate("RootTabs" as any);
-  }, [navigation]);
 
   if (!eventId) return null;
 
@@ -519,7 +465,6 @@ export default function EventRoomScreen({ navigation, route }: Props) {
         </View>
       </View>
 
-      {/* Presence */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Live presence</Text>
         <View style={styles.row}>
@@ -551,7 +496,6 @@ export default function EventRoomScreen({ navigation, route }: Props) {
         />
       </View>
 
-      {/* Guided flow */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Guided flow</Text>
 
@@ -567,9 +511,7 @@ export default function EventRoomScreen({ navigation, route }: Props) {
               {currentSection.index + 1}/{sections.length}: {currentSection.section.title}
             </Text>
 
-            {currentSection.section.body ? (
-              <Text style={styles.sectionBody}>{currentSection.section.body}</Text>
-            ) : null}
+            {currentSection.section.body ? <Text style={styles.sectionBody}>{currentSection.section.body}</Text> : null}
 
             {timerInfo.hasTimer ? (
               <View style={styles.timerBox}>
@@ -582,7 +524,6 @@ export default function EventRoomScreen({ navigation, route }: Props) {
               <Text style={styles.mutedSmall}>No timer for this section.</Text>
             )}
 
-            {/* Host controls */}
             {isHost ? (
               <View style={styles.hostControls}>
                 <Text style={styles.hostTitle}>Host controls</Text>
@@ -616,10 +557,7 @@ export default function EventRoomScreen({ navigation, route }: Props) {
 
                   <Pressable
                     onPress={() => hostGoTo(currentSection.index + 1)}
-                    style={[
-                      styles.secondaryBtn,
-                      currentSection.index >= sections.length - 1 ? styles.disabled : null,
-                    ]}
+                    style={[styles.secondaryBtn, currentSection.index >= sections.length - 1 ? styles.disabled : null]}
                     disabled={currentSection.index >= sections.length - 1}
                   >
                     <Text style={styles.secondaryBtnText}>Next</Text>
@@ -633,14 +571,12 @@ export default function EventRoomScreen({ navigation, route }: Props) {
                 </View>
 
                 <Text style={styles.mutedSmall}>
-                  Tip: timers stay synced because everyone calculates time from the host’s <Text style={styles.mono}>startedAt</Text>.
+                  Timers stay synced because everyone calculates from the host’s <Text style={styles.mono}>startedAt</Text>.
                 </Text>
               </View>
             ) : (
               <View style={styles.attendeeNote}>
-                <Text style={styles.mutedSmall}>
-                  You’re viewing the host’s session. Only the host can change steps/timers.
-                </Text>
+                <Text style={styles.mutedSmall}>You’re viewing the host’s session. Only the host can change steps/timers.</Text>
               </View>
             )}
           </>
