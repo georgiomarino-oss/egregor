@@ -56,12 +56,23 @@ export default function EventsScreen() {
 
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EventRow[]>([]);
-
   const [myUserId, setMyUserId] = useState<string>("");
 
-  // Scripts for display (id -> title) + picker list
-  const [scriptsById, setScriptsById] = useState<Record<string, ScriptRow>>({});
-  const [myScripts, setMyScripts] = useState<ScriptRow[]>([]);
+  /**
+   * scriptsById:
+   * - used ONLY for displaying titles in the Events list + "Current:" label in modal
+   * - populated from scripts referenced by visible events (script_id IN (...))
+   */
+  const [scriptsById, setScriptsById] = useState<Record<string, Pick<ScriptRow, "id" | "title">>>(
+    {}
+  );
+
+  /**
+   * myScripts:
+   * - used ONLY for the Attach/Change modal picker
+   * - populated from scripts owned by the logged-in user
+   */
+  const [myScripts, setMyScripts] = useState<Pick<ScriptRow, "id" | "title" | "intention" | "created_at">[]>([]);
 
   // Create form
   const [title, setTitle] = useState("Global Peace Circle");
@@ -81,7 +92,7 @@ export default function EventsScreen() {
   const [presenceStatus, setPresenceStatus] = useState("");
   const [presenceError, setPresenceError] = useState("");
 
-  // Attach modal state
+  // Attach modal state (Events tab)
   const [attachOpen, setAttachOpen] = useState(false);
   const [attachEventId, setAttachEventId] = useState<string>("");
   const [scriptQuery, setScriptQuery] = useState("");
@@ -101,7 +112,7 @@ export default function EventsScreen() {
     if (!q) return myScripts;
 
     return myScripts.filter((s) => {
-      const t = String((s as any).title ?? "").toLowerCase();
+      const t = String(s.title ?? "").toLowerCase();
       const i = String((s as any).intention ?? "").toLowerCase();
       return t.includes(q) || i.includes(q);
     });
@@ -116,7 +127,42 @@ export default function EventsScreen() {
     setMyUserId(user.id);
   }, []);
 
-  const loadScriptsForDisplay = useCallback(async () => {
+  /**
+   * Load scripts referenced by the currently visible events
+   * so we can show script titles on the Events tab even if the viewer
+   * doesn't own the script (RLS now allows attached scripts).
+   */
+  const loadScriptTitlesForEvents = useCallback(async (rows: EventRow[]) => {
+    const ids = Array.from(
+      new Set(rows.map((e) => e.script_id).filter((id): id is string => !!id && isLikelyUuid(id)))
+    );
+
+    if (ids.length === 0) {
+      setScriptsById({});
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("scripts")
+      .select("id,title")
+      .in("id", ids);
+
+    if (error) {
+      // non-fatal: we will fallback to id in UI
+      return;
+    }
+
+    const map: Record<string, Pick<ScriptRow, "id" | "title">> = {};
+    for (const s of (data ?? []) as any[]) {
+      map[s.id] = { id: s.id, title: s.title };
+    }
+    setScriptsById(map);
+  }, []);
+
+  /**
+   * Load scripts owned by the current user (for the Attach/Change picker list).
+   */
+  const loadMyScriptsForPicker = useCallback(async () => {
     const {
       data: { user },
       error: userErr,
@@ -127,21 +173,12 @@ export default function EventsScreen() {
     const { data, error } = await supabase
       .from("scripts")
       .select("id,title,intention,created_at")
-      // align with your current RLS (own scripts)
       .eq("author_user_id" as any, user.id)
       .order("created_at", { ascending: false });
 
-    if (error) {
-      // non-fatal; we can still display ids
-      return;
-    }
+    if (error) return;
 
-    const rows = (data ?? []) as ScriptRow[];
-    const map: Record<string, ScriptRow> = {};
-    for (const s of rows) map[s.id] = s;
-
-    setScriptsById(map);
-    setMyScripts(rows);
+    setMyScripts((data ?? []) as any);
   }, []);
 
   const loadEvents = useCallback(async () => {
@@ -163,7 +200,7 @@ export default function EventsScreen() {
 
     if (error) {
       Alert.alert("Load events failed", error.message);
-      return;
+      return [] as EventRow[];
     }
 
     const rows = (data ?? []) as EventRow[];
@@ -181,48 +218,56 @@ export default function EventsScreen() {
       setAttachOpen(false);
       setAttachEventId("");
     }
+
+    return rows;
   }, [attachEventId, attachOpen, selectedEventId]);
 
   const refreshAll = useCallback(async () => {
     setLoading(true);
     try {
-      await Promise.all([loadMyUserId(), loadEvents(), loadScriptsForDisplay()]);
+      await loadMyUserId();
+      const rows = await loadEvents();
+      await Promise.all([loadScriptTitlesForEvents(rows), loadMyScriptsForPicker()]);
     } finally {
       setLoading(false);
     }
-  }, [loadEvents, loadMyUserId, loadScriptsForDisplay]);
+  }, [loadEvents, loadMyScriptsForPicker, loadMyUserId, loadScriptTitlesForEvents]);
 
   useEffect(() => {
     refreshAll();
   }, [refreshAll]);
 
-  // Realtime updates from events table
+  // Realtime updates from events table (re-fetch events, then re-fetch referenced script titles)
   useEffect(() => {
     const channel = supabase
       .channel("events:list")
       .on("postgres_changes", { event: "*", schema: "public", table: "events" }, async () => {
-        await loadEvents();
+        const rows = await loadEvents();
+        await loadScriptTitlesForEvents(rows);
       })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [loadEvents]);
+  }, [loadEvents, loadScriptTitlesForEvents]);
 
-  // Keep script titles in sync
+  // Optional: if scripts are edited/renamed, refresh titles map
   useEffect(() => {
     const channel = supabase
       .channel("scripts:titles")
       .on("postgres_changes", { event: "*", schema: "public", table: "scripts" }, async () => {
-        await loadScriptsForDisplay();
+        // Only need titles for event-referenced scripts
+        await loadScriptTitlesForEvents(events);
+        // Also keep picker list fresh for the current user
+        await loadMyScriptsForPicker();
       })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [loadScriptsForDisplay]);
+  }, [events, loadMyScriptsForPicker, loadScriptTitlesForEvents]);
 
   const upsertPresence = useCallback(async (eventId: string) => {
     const {
@@ -230,9 +275,7 @@ export default function EventsScreen() {
       error: userErr,
     } = await supabase.auth.getUser();
 
-    if (userErr || !user) {
-      throw new Error("Not signed in.");
-    }
+    if (userErr || !user) throw new Error("Not signed in.");
 
     const now = new Date().toISOString();
 
@@ -249,7 +292,7 @@ export default function EventsScreen() {
     if (error) throw error;
   }, []);
 
-  // Heartbeat while joined (presence only; events list is realtime now)
+  // Heartbeat while joined (presence only)
   useEffect(() => {
     if (!isJoined || !selectedEventId) return;
 
@@ -266,45 +309,30 @@ export default function EventsScreen() {
 
   const handleCreateEvent = useCallback(async () => {
     try {
-      if (!title.trim()) {
-        Alert.alert("Validation", "Title is required.");
-        return;
-      }
+      if (!title.trim()) return Alert.alert("Validation", "Title is required.");
 
       const startIso = localInputToIso(startLocal);
       const endIso = localInputToIso(endLocal);
 
-      if (!startIso || !endIso) {
-        Alert.alert("Validation", "Start and end must be valid date-times.");
-        return;
-      }
+      if (!startIso || !endIso)
+        return Alert.alert("Validation", "Start and end must be valid date-times.");
 
-      if (new Date(endIso) <= new Date(startIso)) {
-        Alert.alert("Validation", "End time must be after start time.");
-        return;
-      }
+      if (new Date(endIso) <= new Date(startIso))
+        return Alert.alert("Validation", "End time must be after start time.");
 
       const mins = diffMinutes(startIso, endIso);
-      if (!mins || mins <= 0) {
-        Alert.alert("Validation", "Duration must be positive.");
-        return;
-      }
+      if (!mins || mins <= 0)
+        return Alert.alert("Validation", "Duration must be positive.");
 
       const {
         data: { user },
         error: userErr,
       } = await supabase.auth.getUser();
 
-      if (userErr || !user) {
-        Alert.alert("Not signed in", "Please sign in first.");
-        return;
-      }
+      if (userErr || !user) return Alert.alert("Not signed in", "Please sign in first.");
 
       const intentionText = intention.trim();
-      if (!intentionText) {
-        Alert.alert("Validation", "Intention is required.");
-        return;
-      }
+      if (!intentionText) return Alert.alert("Validation", "Intention is required.");
 
       setLoading(true);
 
@@ -333,10 +361,7 @@ export default function EventsScreen() {
 
       const { error } = await supabase.from("events").insert(payload);
 
-      if (error) {
-        Alert.alert("Create event failed", error.message);
-        return;
-      }
+      if (error) return Alert.alert("Create event failed", error.message);
 
       Alert.alert("Success", "Event created.");
       await refreshAll();
@@ -352,10 +377,7 @@ export default function EventsScreen() {
       setPresenceError("");
       setPresenceStatus("");
 
-      if (!selectedEventId) {
-        Alert.alert("Select event", "Please select an event first.");
-        return;
-      }
+      if (!selectedEventId) return Alert.alert("Select event", "Please select an event first.");
 
       await upsertPresence(selectedEventId);
 
@@ -400,16 +422,14 @@ export default function EventsScreen() {
   }, [selectedEventId]);
 
   const openRoom = useCallback(
-    (eventId: string) => {
-      navigation.navigate("EventRoom", { eventId });
-    },
+    (eventId: string) => navigation.navigate("EventRoom", { eventId }),
     [navigation]
   );
 
   const getScriptLabel = (scriptId: string | null) => {
     if (!scriptId) return "(none)";
     const t = scriptsById[scriptId]?.title;
-    return t ? t : scriptId;
+    return t ? t : scriptId; // fallback
   };
 
   // ---- Attach UX (Events tab) ----
@@ -422,10 +442,10 @@ export default function EventsScreen() {
       setScriptQuery("");
       setAttachOpen(true);
 
-      // Ensure we have scripts loaded for the picker
-      await loadScriptsForDisplay();
+      // Ensure picker list is up to date
+      await loadMyScriptsForPicker();
     },
-    [loadScriptsForDisplay]
+    [loadMyScriptsForPicker]
   );
 
   const updateEventScript = useCallback(
@@ -440,7 +460,6 @@ export default function EventsScreen() {
         return;
       }
 
-      // Client-side guard (RLS must enforce too)
       if (event.host_user_id !== user.id) {
         Alert.alert("Not allowed", "Only the host can change this event’s script.");
         return;
@@ -448,20 +467,24 @@ export default function EventsScreen() {
 
       setLoading(true);
       try {
-        const { error } = await supabase.from("events").update({ script_id: nextScriptId }).eq("id", event.id);
+        const { error } = await supabase
+          .from("events")
+          .update({ script_id: nextScriptId })
+          .eq("id", event.id);
 
         if (error) {
           Alert.alert("Update failed", error.message);
           return;
         }
 
-        // Realtime should update, but fetch keeps UI immediate + consistent
-        await loadEvents();
+        // Realtime will update; this keeps UI immediate
+        const rows = await loadEvents();
+        await loadScriptTitlesForEvents(rows);
       } finally {
         setLoading(false);
       }
     },
-    [loadEvents]
+    [loadEvents, loadScriptTitlesForEvents]
   );
 
   const attachOrReplace = useCallback(
@@ -474,17 +497,21 @@ export default function EventsScreen() {
       }
 
       if (attachEvent.script_id && attachEvent.script_id !== scriptId) {
-        Alert.alert("Replace script?", "This event already has a script attached. Replace it?", [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Replace",
-            style: "destructive",
-            onPress: async () => {
-              await updateEventScript(attachEvent, scriptId);
-              setAttachOpen(false);
+        Alert.alert(
+          "Replace script?",
+          "This event already has a script attached. Replace it?",
+          [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Replace",
+              style: "destructive",
+              onPress: async () => {
+                await updateEventScript(attachEvent, scriptId);
+                setAttachOpen(false);
+              },
             },
-          },
-        ]);
+          ]
+        );
         return;
       }
 
@@ -495,8 +522,7 @@ export default function EventsScreen() {
   );
 
   const detach = useCallback(async () => {
-    if (!attachEvent) return;
-    if (!attachEvent.script_id) return;
+    if (!attachEvent || !attachEvent.script_id) return;
 
     Alert.alert("Detach script?", "Remove the script from this event?", [
       { text: "Cancel", style: "cancel" },
@@ -511,17 +537,18 @@ export default function EventsScreen() {
     ]);
   }, [attachEvent, updateEventScript]);
 
-  const renderScriptRow = ({ item }: { item: ScriptRow }) => {
+  const renderScriptRow = ({ item }: { item: any }) => {
     const isSelected = !!attachEvent?.script_id && attachEvent.script_id === item.id;
 
     return (
       <View style={styles.pickerCard}>
         <Text style={styles.pickerTitle} numberOfLines={1}>
-          {(item as any).title ?? "Untitled"}
+          {item.title ?? "Untitled"}
         </Text>
-        {(item as any).intention ? (
+
+        {item.intention ? (
           <Text style={styles.pickerMeta} numberOfLines={2}>
-            {(item as any).intention}
+            {item.intention}
           </Text>
         ) : null}
 
@@ -665,7 +692,9 @@ export default function EventsScreen() {
 
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Live Presence</Text>
-              <Text style={styles.meta}>Selected: {selectedEvent ? selectedEvent.title : "(none)"}</Text>
+              <Text style={styles.meta}>
+                Selected: {selectedEvent ? selectedEvent.title : "(none)"}
+              </Text>
 
               <View style={styles.row}>
                 <Pressable
@@ -769,7 +798,7 @@ export default function EventsScreen() {
                   </Pressable>
 
                   <Pressable
-                    onPress={loadScriptsForDisplay}
+                    onPress={loadMyScriptsForPicker}
                     style={[styles.btn, styles.btnGhost, loading && styles.disabled]}
                     disabled={loading}
                   >
@@ -789,7 +818,7 @@ export default function EventsScreen() {
                   <Text style={styles.empty}>No scripts found. Create one in Scripts first.</Text>
                 ) : (
                   <FlatList
-                    data={filteredScripts}
+                    data={filteredScripts as any}
                     keyExtractor={(s) => s.id}
                     renderItem={renderScriptRow}
                     contentContainerStyle={{ paddingTop: 10, paddingBottom: 6, gap: 10 }}
