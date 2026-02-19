@@ -18,8 +18,9 @@ import {
   ensureRunState,
   normalizeRunState,
   subscribeRunState,
-  upsertRunState,
+  setRunStateServerTime,
   type EventRunStateV1,
+  type EventRunMode,
 } from "../features/events/runStateRepo";
 
 type Props = NativeStackScreenProps<RootStackParamList, "EventRoom">;
@@ -165,7 +166,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return Math.max(1, Math.floor(currentSection.minutes * 60));
   }, [currentSection]);
 
-  // Derived remaining seconds based on host timestamps (synced)
   const secondsLeft = useMemo(() => {
     if (!script || !currentSection) return 0;
 
@@ -178,7 +178,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       return Math.max(0, durationSec - elapsed);
     }
 
-    // paused / idle / ended => freeze at accumulated elapsed
     return Math.max(0, durationSec - baseElapsed);
   }, [script, currentSection, sectionTotalSeconds, runState, tick]);
 
@@ -277,7 +276,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         loadPresence(),
         loadScriptById((eventRow as any).script_id ?? null),
         (async () => {
-          // Ensure run state exists and load it
           const row = await ensureRunState(eventId);
           setRunState(normalizeRunState(row.state));
           setRunReady(true);
@@ -295,7 +293,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     loadEventRoom();
   }, [loadEventRoom]);
 
-  // Local ticker interval (for updating timer display)
   useEffect(() => {
     if (tickRef.current) clearInterval(tickRef.current);
     tickRef.current = setInterval(() => setTick((t) => t + 1), 500);
@@ -305,7 +302,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, []);
 
-  // Realtime subscription: keep EventRoom synced with events row changes (incl script_id attach/detach)
   useEffect(() => {
     if (!hasValidEventId) return;
 
@@ -313,12 +309,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       .channel(`event:${eventId}`)
       .on(
         "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "events",
-          filter: `id=eq.${eventId}`,
-        },
+        { event: "UPDATE", schema: "public", table: "events", filter: `id=eq.${eventId}` },
         async (payload) => {
           const next = payload.new as Partial<EventRow> | null;
           const prev = payload.old as Partial<EventRow> | null;
@@ -343,7 +334,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [eventId, hasValidEventId, loadScriptById]);
 
-  // Realtime subscription for event_run_state changes
   useEffect(() => {
     if (!hasValidEventId) return;
 
@@ -355,7 +345,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return () => sub.unsubscribe();
   }, [eventId, hasValidEventId]);
 
-  // Realtime subscription for event_presence changes
   useEffect(() => {
     if (!hasValidEventId) return;
 
@@ -363,15 +352,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       .channel(`presence:${eventId}`)
       .on(
         "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "event_presence",
-          filter: `event_id=eq.${eventId}`,
-        },
-        () => {
-          loadPresence();
-        }
+        { event: "*", schema: "public", table: "event_presence", filter: `event_id=eq.${eventId}` },
+        () => loadPresence()
       )
       .subscribe();
 
@@ -380,7 +362,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [eventId, hasValidEventId, loadPresence]);
 
-  // Heartbeat while joined (keeps you active)
   useEffect(() => {
     if (!isJoined) return;
     if (!hasValidEventId) return;
@@ -396,18 +377,11 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       const now = new Date().toISOString();
 
       const { error } = await supabase.from("event_presence").upsert(
-        {
-          event_id: eventId,
-          user_id: user.id,
-          last_seen_at: now,
-          created_at: now,
-        },
+        { event_id: eventId, user_id: user.id, last_seen_at: now, created_at: now },
         { onConflict: "event_id,user_id" }
       );
 
-      if (error && !cancelled) {
-        setPresenceErr(error.message);
-      }
+      if (error && !cancelled) setPresenceErr(error.message);
     };
 
     beat();
@@ -419,7 +393,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [isJoined, eventId, hasValidEventId]);
 
-  // Compute active users: last_seen_at within 25 seconds
   const activeWindowMs = 25_000;
 
   const activePresence = useMemo(() => {
@@ -455,12 +428,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       const now = new Date().toISOString();
 
       const { error: upErr } = await supabase.from("event_presence").upsert(
-        {
-          event_id: eventId,
-          user_id: user.id,
-          last_seen_at: now,
-          created_at: now,
-        },
+        { event_id: eventId, user_id: user.id, last_seen_at: now, created_at: now },
         { onConflict: "event_id,user_id" }
       );
 
@@ -512,7 +480,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }
   }, [eventId, hasValidEventId, loadPresence]);
 
-  // Host actions for synced run state
   const clampIndex = useCallback(
     (idx: number) => {
       const len = script?.sections?.length ?? 0;
@@ -522,103 +489,64 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     [script?.sections?.length]
   );
 
-  const hostSetState = useCallback(
-    async (next: EventRunStateV1) => {
+  const hostSetViaServer = useCallback(
+    async (mode: EventRunMode, sectionIndex: number, elapsedBeforePauseSec: number, resetTimer: boolean) => {
       if (!hasValidEventId) return;
-      try {
-        await upsertRunState(eventId, next);
-        setRunState(next); // optimistic
-      } catch (e: any) {
-        Alert.alert("Failed to update session", e?.message ?? "Unknown error");
-      }
+
+      const row = await setRunStateServerTime({
+        eventId,
+        mode,
+        sectionIndex,
+        elapsedBeforePauseSec,
+        resetTimer,
+      });
+
+      setRunState(normalizeRunState(row.state));
+      setRunReady(true);
     },
     [eventId, hasValidEventId]
   );
 
   const hostStart = useCallback(async () => {
     const idx = clampIndex(runState.sectionIndex ?? 0);
-    await hostSetState({
-      version: 1,
-      mode: "running",
-      sectionIndex: idx,
-      startedAt: nowIso(),
-      elapsedBeforePauseSec: 0,
-    });
-  }, [clampIndex, hostSetState, runState.sectionIndex]);
+    await hostSetViaServer("running", idx, 0, true);
+  }, [clampIndex, hostSetViaServer, runState.sectionIndex]);
 
   const hostPause = useCallback(async () => {
     if (runState.mode !== "running" || !runState.startedAt) return;
+
     const elapsedThisRun = secondsBetweenIso(runState.startedAt, nowIso());
     const accumulated = (runState.elapsedBeforePauseSec ?? 0) + elapsedThisRun;
 
-    await hostSetState({
-      version: 1,
-      mode: "paused",
-      sectionIndex: clampIndex(runState.sectionIndex),
-      pausedAt: nowIso(),
-      elapsedBeforePauseSec: accumulated,
-      startedAt: runState.startedAt,
-    });
-  }, [clampIndex, hostSetState, runState]);
+    await hostSetViaServer("paused", clampIndex(runState.sectionIndex), accumulated, false);
+  }, [clampIndex, hostSetViaServer, runState]);
 
   const hostResume = useCallback(async () => {
     if (runState.mode !== "paused") return;
-    await hostSetState({
-      version: 1,
-      mode: "running",
-      sectionIndex: clampIndex(runState.sectionIndex),
-      startedAt: nowIso(),
-      elapsedBeforePauseSec: runState.elapsedBeforePauseSec ?? 0,
-    });
-  }, [clampIndex, hostSetState, runState]);
+    await hostSetViaServer("running", clampIndex(runState.sectionIndex), runState.elapsedBeforePauseSec ?? 0, false);
+  }, [clampIndex, hostSetViaServer, runState]);
 
   const hostEnd = useCallback(async () => {
-    await hostSetState({
-      version: 1,
-      mode: "ended",
-      sectionIndex: clampIndex(runState.sectionIndex),
-      elapsedBeforePauseSec: runState.elapsedBeforePauseSec ?? 0,
-    });
-  }, [clampIndex, hostSetState, runState]);
+    await hostSetViaServer("ended", clampIndex(runState.sectionIndex), runState.elapsedBeforePauseSec ?? 0, false);
+  }, [clampIndex, hostSetViaServer, runState]);
 
   const hostGoTo = useCallback(
     async (idx: number) => {
       const nextIndex = clampIndex(idx);
 
       if (runState.mode === "running") {
-        await hostSetState({
-          version: 1,
-          mode: "running",
-          sectionIndex: nextIndex,
-          startedAt: nowIso(),
-          elapsedBeforePauseSec: 0,
-        });
+        await hostSetViaServer("running", nextIndex, 0, true);
         return;
       }
-
       if (runState.mode === "paused") {
-        await hostSetState({
-          version: 1,
-          mode: "paused",
-          sectionIndex: nextIndex,
-          pausedAt: nowIso(),
-          elapsedBeforePauseSec: 0,
-        });
+        await hostSetViaServer("paused", nextIndex, 0, true);
         return;
       }
-
-      // idle/ended -> just move pointer and reset elapsed
-      await hostSetState({
-        version: 1,
-        mode: runState.mode,
-        sectionIndex: nextIndex,
-        elapsedBeforePauseSec: 0,
-      } as EventRunStateV1);
+      await hostSetViaServer(runState.mode, nextIndex, 0, true);
     },
-    [clampIndex, hostSetState, runState.mode]
+    [clampIndex, hostSetViaServer, runState.mode]
   );
 
-  // Host auto-advance when timer hits 0
   const autoAdvanceGuardRef = useRef(false);
   useEffect(() => {
     if (!isHost) return;
@@ -641,8 +569,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }
   }, [isHost, script, runState.mode, secondsLeft, currentSectionIdx, hostGoTo, hostEnd]);
 
-  // Attendee: tap section list should NOT change synced state (host only).
-  // Host: tap list to jump section (synced)
   const handleSelectSection = useCallback(
     async (idx: number) => {
       if (!script?.sections?.length) return;
@@ -819,7 +745,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                 <Text style={styles.body}>{currentSection?.text ?? ""}</Text>
               </View>
 
-              {/* Host controls (synced) */}
               {isHost ? (
                 <View style={styles.row}>
                   {(runState.mode === "idle" || runState.mode === "ended") && (
@@ -870,7 +795,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                 </View>
               )}
 
-              {/* Section list (host can tap to jump) */}
               <View style={{ marginTop: 10 }}>
                 {script.sections.map((s, i) => {
                   const isActive = i === currentSectionIdx;
@@ -882,7 +806,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                       disabled={!isHost}
                     >
                       <Text style={styles.listTitle}>
-                        {i + 1}. {s.name} {!isHost ? "" : ""}
+                        {i + 1}. {s.name}
                       </Text>
                       <Text style={styles.meta}>{s.minutes} min</Text>
                     </Pressable>
