@@ -11,6 +11,7 @@ import AuthScreen from "./src/screens/AuthScreen";
 import EventsScreen from "./src/screens/EventsScreen";
 import ScriptsScreen from "./src/screens/ScriptsScreen";
 import EventRoomScreen from "./src/screens/EventRoomScreen";
+import ProfileScreen from "./src/screens/ProfileScreen";
 
 import { AppStateProvider, useAppState } from "./src/state";
 import type { RootStackParamList, RootTabParamList } from "./src/types";
@@ -45,6 +46,17 @@ function AuthedTabs() {
     >
       <Tabs.Screen name="Events" component={EventsScreen} />
       <Tabs.Screen name="Scripts" component={ScriptsScreen} />
+
+      {/* Hidden tab route so tab screens can navigate to Profile reliably */}
+      <Tabs.Screen
+        name="Profile"
+        component={ProfileScreen}
+        options={{
+          title: "Profile",
+          tabBarButton: () => null, // hide from tab bar
+          tabBarItemStyle: { display: "none" }, // extra-harden on Android
+        }}
+      />
     </Tabs.Navigator>
   );
 }

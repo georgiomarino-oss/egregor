@@ -1,3 +1,5 @@
+// mobile/src/screens/ScriptsScreen.tsx
+
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
@@ -17,7 +19,11 @@ type ScriptRow = Database["public"]["Tables"]["scripts"]["Row"];
 type ScriptInsert = Database["public"]["Tables"]["scripts"]["Insert"];
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 
-export default function ScriptsScreen() {
+type Props = {
+  navigation?: any;
+};
+
+export default function ScriptsScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(false);
 
   // Create script form
@@ -128,14 +134,11 @@ export default function ScriptsScreen() {
     setLoading(true);
     try {
       const payload: ScriptInsert = {
-        // if your db.ts uses a different owner column, TS will complain here and we’ll adjust
         author_user_id: user.id as any,
-
         title: title.trim(),
         intention: intention.trim(),
         duration_minutes: mins as any,
         tone: tone as any,
-
         content_json: {
           title: title.trim(),
           durationMinutes: mins,
@@ -170,8 +173,6 @@ export default function ScriptsScreen() {
       setAttachScriptId(scriptId);
       setEventQuery("");
       setAttachOpen(true);
-
-      // Ensure events are current when opening modal
       await loadMyHostedEvents();
     },
     [loadMyHostedEvents]
@@ -189,7 +190,6 @@ export default function ScriptsScreen() {
         return false;
       }
 
-      // Client-side guard; RLS must enforce.
       if (event.host_user_id !== user.id) {
         Alert.alert("Not allowed", "Only the host can change this event’s script.");
         return false;
@@ -225,7 +225,6 @@ export default function ScriptsScreen() {
         return;
       }
 
-      // If another script is attached, confirm replace
       if (event.script_id && event.script_id !== attachScriptId) {
         Alert.alert(
           "Replace script?",
@@ -279,13 +278,19 @@ export default function ScriptsScreen() {
     [updateEventScript]
   );
 
+  const goProfile = useCallback(() => {
+    if (!navigation?.navigate) {
+      Alert.alert("Navigation not available", "This screen isn't receiving a navigation prop yet.");
+      return;
+    }
+    navigation.navigate("Profile");
+  }, [navigation]);
+
   const renderScript = ({ item }: { item: ScriptRow }) => (
     <View style={styles.card}>
       <Text style={styles.cardTitle}>{(item as any).title ?? "Untitled"}</Text>
 
-      {"tone" in (item as any) ? (
-        <Text style={styles.meta}>Tone: {(item as any).tone}</Text>
-      ) : null}
+      {"tone" in (item as any) ? <Text style={styles.meta}>Tone: {(item as any).tone}</Text> : null}
 
       {"duration_minutes" in (item as any) ? (
         <Text style={styles.meta}>Duration: {(item as any).duration_minutes} min</Text>
@@ -317,11 +322,7 @@ export default function ScriptsScreen() {
     const currentTitle =
       item.script_id ? scriptsById[item.script_id]?.title ?? item.script_id : "(none)";
 
-    const attachLabel = isUsingSelected
-      ? "Attached"
-      : item.script_id
-      ? "Replace"
-      : "Attach";
+    const attachLabel = isUsingSelected ? "Attached" : item.script_id ? "Replace" : "Attach";
 
     return (
       <View style={styles.eventCard}>
@@ -334,8 +335,7 @@ export default function ScriptsScreen() {
         </Text>
 
         <Text style={styles.eventMeta} numberOfLines={1}>
-          Current:{" "}
-          <Text style={{ color: "white", fontWeight: "800" }}>{currentTitle}</Text>
+          Current: <Text style={{ color: "white", fontWeight: "800" }}>{currentTitle}</Text>
         </Text>
 
         <View style={styles.row}>
@@ -355,11 +355,7 @@ export default function ScriptsScreen() {
 
           <Pressable
             onPress={() => detachFromEvent(item)}
-            style={[
-              styles.btn,
-              styles.btnDanger,
-              (loading || !item.script_id) && styles.disabled,
-            ]}
+            style={[styles.btn, styles.btnDanger, (loading || !item.script_id) && styles.disabled]}
             disabled={loading || !item.script_id}
           >
             <Text style={styles.btnText}>Detach</Text>
@@ -378,7 +374,13 @@ export default function ScriptsScreen() {
         contentContainerStyle={styles.content}
         ListHeaderComponent={
           <View style={{ gap: 12 }}>
-            <Text style={styles.h1}>Scripts</Text>
+            <View style={styles.headerRow}>
+              <Text style={styles.h1}>Scripts</Text>
+
+              <Pressable onPress={goProfile} style={styles.headerBtn}>
+                <Text style={styles.headerBtnText}>Profile</Text>
+              </Pressable>
+            </View>
 
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Create Script</Text>
@@ -433,9 +435,7 @@ export default function ScriptsScreen() {
                   style={[styles.btn, styles.btnPrimary, loading && styles.disabled]}
                   disabled={loading}
                 >
-                  <Text style={styles.btnText}>
-                    {loading ? "Working..." : "Create script"}
-                  </Text>
+                  <Text style={styles.btnText}>{loading ? "Working..." : "Create script"}</Text>
                 </Pressable>
 
                 <Pressable
@@ -511,7 +511,24 @@ export default function ScriptsScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B1020" },
   content: { padding: 16, paddingBottom: 32 },
-  h1: { color: "white", fontSize: 28, fontWeight: "800", marginBottom: 4 },
+
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  h1: { color: "white", fontSize: 28, fontWeight: "800" },
+
+  headerBtn: {
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: "#3E4C78",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  headerBtnText: { color: "#C8D3FF", fontWeight: "900" },
 
   section: {
     backgroundColor: "#151C33",

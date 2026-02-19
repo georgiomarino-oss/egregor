@@ -3,6 +3,7 @@
 export type RootTabParamList = {
   Events: undefined;
   Scripts: undefined;
+  Profile: undefined;
 };
 
 export type RootStackParamList = {
