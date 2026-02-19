@@ -1,3 +1,4 @@
+// mobile/src/screens/EventRoomScreen.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -137,6 +138,12 @@ function formatAgo(secondsAgo: number) {
   return `${d}d`;
 }
 
+function safeTimeMs(iso: string | null | undefined): number {
+  if (!iso) return 0;
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
 /**
  * Local preferences:
  * - Global: prefs:autoJoinLive (default true)
@@ -226,16 +233,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const [tick, setTick] = useState(0);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const isHost = useMemo(() => {
-    const hostId = (event as any)?.host_user_id as string | null;
-    if (!userId || !hostId) return false;
-    return userId === hostId;
-  }, [userId, event]);
-
   const hasScript = !!script && !!script.sections?.length;
 
   // Attendee preview
   const [previewSectionIdx, setPreviewSectionIdx] = useState<number | null>(null);
+
+  const hostId = useMemo(() => String((event as any)?.host_user_id ?? ""), [event]);
+
+  const isHost = useMemo(() => {
+    if (!userId || !hostId) return false;
+    return userId === hostId;
+  }, [userId, hostId]);
 
   useEffect(() => {
     if (isHost) {
@@ -322,7 +330,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     const uniq = Array.from(new Set(ids.filter(Boolean)));
     if (uniq.length === 0) return;
 
-    // Use REF cache to avoid dependency loops.
     const missing = uniq.filter((id) => !profilesByIdRef.current[id]);
     if (missing.length === 0) return;
 
@@ -359,7 +366,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     const rows = (data ?? []) as PresenceRow[];
     setPresenceRows(rows);
 
-    // Fetch profiles for all present users (async, non-blocking)
     void loadProfiles(rows.map((r) => r.user_id));
   }, [eventId, hasValidEventId, loadProfiles]);
 
@@ -430,8 +436,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       const eventRow = evData as EventRow;
       setEvent(eventRow);
 
-      // Ensure host profile is available even if host isn't present
-      void loadProfiles([String((eventRow as any).host_user_id ?? "")]);
+      const hostUserId = String((eventRow as any).host_user_id ?? "");
+      void loadProfiles([hostUserId]);
 
       await Promise.all([
         loadPresence(),
@@ -563,6 +569,41 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [eventId, hasValidEventId, loadPresence]);
 
+  // Helper: upsert presence, preserving joined_at if it already exists
+  const upsertPresencePreserveJoinedAt = useCallback(
+    async (uid: string) => {
+      const now = new Date().toISOString();
+
+      // if we already have a row in state, preserve joined_at (and created_at is server default anyway)
+      const existing = presenceRows.find((r) => r.user_id === uid);
+
+      const payload: Database["public"]["Tables"]["event_presence"]["Insert"] = {
+        event_id: eventId,
+        user_id: uid,
+        last_seen_at: now,
+        // only set joined_at on first join (if missing)
+        joined_at: existing?.joined_at ?? (existing ? null : now),
+        // keep created_at only if you want strict; leaving unset is fine
+        created_at: existing?.created_at ?? now,
+      };
+
+      // If we had existing row, don't overwrite joined_at by sending null:
+      if (existing && existing.joined_at) {
+        (payload as any).joined_at = existing.joined_at;
+      } else if (existing && !existing.joined_at) {
+        // set on first ever "real join" if not present
+        (payload as any).joined_at = now;
+      }
+
+      const { error } = await supabase.from("event_presence").upsert(payload, {
+        onConflict: "event_id,user_id",
+      });
+
+      if (error) throw error;
+    },
+    [eventId, presenceRows]
+  );
+
   // Auto-join if:
   // - global setting enabled
   // - per-event sticky join enabled
@@ -584,18 +625,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
         if (!user || cancelled) return;
 
-        const now = new Date().toISOString();
-        const { error: upErr } = await supabase.from("event_presence").upsert(
-          { event_id: eventId, user_id: user.id, last_seen_at: now, created_at: now },
-          { onConflict: "event_id,user_id" }
-        );
+        await upsertPresencePreserveJoinedAt(user.id);
 
         if (cancelled) return;
-
-        if (upErr) {
-          setPresenceErr(upErr.message);
-          return;
-        }
 
         setIsJoined(true);
         setPresenceMsg("✅ You joined live.");
@@ -617,9 +649,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     shouldAutoJoinForEvent,
     isJoined,
     loadPresence,
+    upsertPresencePreserveJoinedAt,
   ]);
 
-  // Heartbeat while joined
+  // Heartbeat while joined (do NOT touch joined_at)
   useEffect(() => {
     if (!isJoined) return;
     if (!hasValidEventId) return;
@@ -635,7 +668,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       const now = new Date().toISOString();
 
       const { error } = await supabase.from("event_presence").upsert(
-        { event_id: eventId, user_id: user.id, last_seen_at: now, created_at: now },
+        {
+          event_id: eventId,
+          user_id: user.id,
+          last_seen_at: now,
+          // DO NOT send joined_at here (preserve existing)
+        },
         { onConflict: "event_id,user_id" }
       );
 
@@ -654,36 +692,32 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   // Compute active users: last_seen_at within 25 seconds
   const activeWindowMs = 25_000;
 
-  const presenceSorted = useMemo(() => {
+  const presenceSortedByLastSeen = useMemo(() => {
     const rows = [...presenceRows];
-    rows.sort((a, b) => {
-      const ta = new Date(a.last_seen_at).getTime();
-      const tb = new Date(b.last_seen_at).getTime();
-      return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
-    });
+    rows.sort((a, b) => safeTimeMs(b.last_seen_at) - safeTimeMs(a.last_seen_at));
     return rows;
   }, [presenceRows]);
 
   const activePresence = useMemo(() => {
     const now = Date.now();
-    return presenceSorted.filter((r) => {
-      const t = new Date(r.last_seen_at).getTime();
-      return Number.isFinite(t) && now - t <= activeWindowMs;
+    return presenceSortedByLastSeen.filter((r) => {
+      const t = safeTimeMs(r.last_seen_at);
+      return t > 0 && now - t <= activeWindowMs;
     });
-  }, [presenceSorted]);
+  }, [presenceSortedByLastSeen]);
+
+  const recentPresence = useMemo(() => {
+    const now = Date.now();
+    return presenceSortedByLastSeen.filter((r) => {
+      const t = safeTimeMs(r.last_seen_at);
+      return t > 0 && now - t > activeWindowMs;
+    });
+  }, [presenceSortedByLastSeen]);
 
   const activeCount = activePresence.length;
   const totalAttendees = presenceRows.length;
 
-  const recentPresence = useMemo(() => {
-    const now = Date.now();
-    // Exclude active now to avoid duplication
-    return presenceSorted.filter((r) => {
-      const t = new Date(r.last_seen_at).getTime();
-      if (!Number.isFinite(t)) return false;
-      return now - t > activeWindowMs;
-    });
-  }, [presenceSorted]);
+  const hostName = hostId ? displayNameForUserId(hostId) : "(unknown)";
 
   const handleJoinLive = useCallback(async () => {
     if (!hasValidEventId) {
@@ -705,17 +739,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         return;
       }
 
-      const now = new Date().toISOString();
-
-      const { error: upErr } = await supabase.from("event_presence").upsert(
-        { event_id: eventId, user_id: user.id, last_seen_at: now, created_at: now },
-        { onConflict: "event_id,user_id" }
-      );
-
-      if (upErr) {
-        setPresenceErr(upErr.message);
-        return;
-      }
+      await upsertPresencePreserveJoinedAt(user.id);
 
       setIsJoined(true);
       setPresenceMsg("✅ You joined live.");
@@ -725,7 +749,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     } catch (e: any) {
       setPresenceErr(e?.message ?? "Failed to join live.");
     }
-  }, [eventId, hasValidEventId, loadPresence]);
+  }, [eventId, hasValidEventId, loadPresence, upsertPresencePreserveJoinedAt]);
 
   const handleLeaveLive = useCallback(async () => {
     if (!hasValidEventId) return;
@@ -964,8 +988,32 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const atFirst = viewingSectionIdx === 0;
   const pill = statusPillStyle(runState.mode);
 
-  const hostId = String((event as any).host_user_id ?? "");
-  const hostName = hostId ? displayNameForUserId(hostId) : "(unknown)";
+  const renderPersonLine = (p: PresenceRow, kind: "active" | "recent") => {
+    const seenSec = Math.max(0, Math.floor((Date.now() - safeTimeMs(p.last_seen_at)) / 1000));
+    const joinedBase = p.joined_at ?? p.created_at;
+    const joinedSec = joinedBase
+      ? Math.max(0, Math.floor((Date.now() - safeTimeMs(joinedBase)) / 1000))
+      : null;
+
+    const isHostRow = hostId && p.user_id === hostId;
+    const isMe = userId && p.user_id === userId;
+
+    const badge = isHostRow ? "HOST" : isMe ? "YOU" : null;
+
+    // "New" if joined in last 60s
+    const isNew = joinedSec !== null && joinedSec <= 60;
+
+    return (
+      <Text key={`${kind}-${p.user_id}`} style={styles.meta}>
+        • {displayNameForUserId(p.user_id)}{" "}
+        <Text style={{ color: "#5B8CFF" }}>({shortId(p.user_id)})</Text>
+        {badge ? <Text style={{ color: "#DCE4FF" }}>  [{badge}]</Text> : null}
+        {isNew ? <Text style={{ color: "#6EE7B7" }}>  NEW</Text> : null}
+        {"  "}• seen {formatAgo(seenSec)} ago
+        {joinedSec !== null ? <Text> • first joined {formatAgo(joinedSec)} ago</Text> : null}
+      </Text>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -1020,27 +1068,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             />
           </View>
 
-          {/* Active now */}
           {activePresence.length > 0 ? (
             <View style={{ marginTop: 10 }}>
-              <Text style={[styles.meta, { marginBottom: 6, color: "#C8D3FF" }]}>
-                Active now
-              </Text>
-
-              {activePresence.slice(0, 10).map((p) => {
-                const secondsAgo = Math.max(
-                  0,
-                  Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000)
-                );
-                return (
-                  <Text key={`active-${p.user_id}`} style={styles.meta}>
-                    • {displayNameForUserId(p.user_id)}{" "}
-                    <Text style={{ color: "#5B8CFF" }}>({shortId(p.user_id)})</Text> • seen{" "}
-                    {formatAgo(secondsAgo)} ago
-                  </Text>
-                );
-              })}
-
+              <Text style={[styles.meta, { marginBottom: 6, color: "#C8D3FF" }]}>Active now</Text>
+              {activePresence.slice(0, 10).map((p) => renderPersonLine(p, "active"))}
               {activePresence.length > 10 ? (
                 <Text style={styles.meta}>…and {activePresence.length - 10} more active</Text>
               ) : null}
@@ -1049,28 +1080,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             <Text style={[styles.meta, { marginTop: 10 }]}>No one active right now.</Text>
           )}
 
-          {/* Recently seen */}
           {recentPresence.length > 0 ? (
             <View style={{ marginTop: 12 }}>
               <Text style={[styles.meta, { marginBottom: 6, color: "#C8D3FF" }]}>
                 Recently seen
               </Text>
-
-              {recentPresence.slice(0, 10).map((p) => {
-                const secondsAgo = Math.max(
-                  0,
-                  Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000)
-                );
-
-                return (
-                  <Text key={`recent-${p.user_id}`} style={styles.meta}>
-                    • {displayNameForUserId(p.user_id)}{" "}
-                    <Text style={{ color: "#5B8CFF" }}>({shortId(p.user_id)})</Text> • seen{" "}
-                    {formatAgo(secondsAgo)} ago
-                  </Text>
-                );
-              })}
-
+              {recentPresence.slice(0, 10).map((p) => renderPersonLine(p, "recent"))}
               {recentPresence.length > 10 ? (
                 <Text style={styles.meta}>…and {recentPresence.length - 10} more</Text>
               ) : null}
