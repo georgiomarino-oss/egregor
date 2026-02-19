@@ -1,3 +1,4 @@
+// mobile/src/screens/EventsScreen.tsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -56,23 +57,16 @@ export default function EventsScreen() {
 
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EventRow[]>([]);
+
   const [myUserId, setMyUserId] = useState<string>("");
 
-  /**
-   * scriptsById:
-   * - used ONLY for displaying titles in the Events list + "Current:" label in modal
-   * - populated from scripts referenced by visible events (script_id IN (...))
-   */
+  // Scripts used for label display in Events list (script_id -> {id,title})
   const [scriptsById, setScriptsById] = useState<Record<string, Pick<ScriptRow, "id" | "title">>>(
     {}
   );
 
-  /**
-   * myScripts:
-   * - used ONLY for the Attach/Change modal picker
-   * - populated from scripts owned by the logged-in user
-   */
-  const [myScripts, setMyScripts] = useState<Pick<ScriptRow, "id" | "title" | "intention" | "created_at">[]>([]);
+  // Scripts list for attach-picker (my scripts)
+  const [myScripts, setMyScripts] = useState<ScriptRow[]>([]);
 
   // Create form
   const [title, setTitle] = useState("Global Peace Circle");
@@ -92,7 +86,7 @@ export default function EventsScreen() {
   const [presenceStatus, setPresenceStatus] = useState("");
   const [presenceError, setPresenceError] = useState("");
 
-  // Attach modal state (Events tab)
+  // Attach modal state
   const [attachOpen, setAttachOpen] = useState(false);
   const [attachEventId, setAttachEventId] = useState<string>("");
   const [scriptQuery, setScriptQuery] = useState("");
@@ -112,7 +106,7 @@ export default function EventsScreen() {
     if (!q) return myScripts;
 
     return myScripts.filter((s) => {
-      const t = String(s.title ?? "").toLowerCase();
+      const t = String((s as any).title ?? "").toLowerCase();
       const i = String((s as any).intention ?? "").toLowerCase();
       return t.includes(q) || i.includes(q);
     });
@@ -127,41 +121,7 @@ export default function EventsScreen() {
     setMyUserId(user.id);
   }, []);
 
-  /**
-   * Load scripts referenced by the currently visible events
-   * so we can show script titles on the Events tab even if the viewer
-   * doesn't own the script (RLS now allows attached scripts).
-   */
-  const loadScriptTitlesForEvents = useCallback(async (rows: EventRow[]) => {
-    const ids = Array.from(
-      new Set(rows.map((e) => e.script_id).filter((id): id is string => !!id && isLikelyUuid(id)))
-    );
-
-    if (ids.length === 0) {
-      setScriptsById({});
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("scripts")
-      .select("id,title")
-      .in("id", ids);
-
-    if (error) {
-      // non-fatal: we will fallback to id in UI
-      return;
-    }
-
-    const map: Record<string, Pick<ScriptRow, "id" | "title">> = {};
-    for (const s of (data ?? []) as any[]) {
-      map[s.id] = { id: s.id, title: s.title };
-    }
-    setScriptsById(map);
-  }, []);
-
-  /**
-   * Load scripts owned by the current user (for the Attach/Change picker list).
-   */
+  // Load ONLY my scripts (for picker). This respects your RLS (own scripts).
   const loadMyScriptsForPicker = useCallback(async () => {
     const {
       data: { user },
@@ -176,9 +136,36 @@ export default function EventsScreen() {
       .eq("author_user_id" as any, user.id)
       .order("created_at", { ascending: false });
 
-    if (error) return;
+    if (error) {
+      // non-fatal
+      return;
+    }
 
-    setMyScripts((data ?? []) as any);
+    setMyScripts((data ?? []) as ScriptRow[]);
+  }, []);
+
+  // Load titles for scripts referenced by events list (may be authored by others).
+  const loadScriptTitlesByIds = useCallback(async (ids: string[]) => {
+    const unique = Array.from(new Set(ids.filter(Boolean)));
+    if (unique.length === 0) return;
+
+    const { data, error } = await supabase
+      .from("scripts")
+      .select("id,title")
+      .in("id", unique);
+
+    if (error) {
+      // If RLS blocks some scripts, we just won't have titles for them.
+      // The UI will gracefully fall back to showing the ID.
+      return;
+    }
+
+    const rows = (data ?? []) as Array<Pick<ScriptRow, "id" | "title">>;
+    setScriptsById((prev) => {
+      const next = { ...prev };
+      for (const r of rows) next[r.id] = r;
+      return next;
+    });
   }, []);
 
   const loadEvents = useCallback(async () => {
@@ -200,7 +187,7 @@ export default function EventsScreen() {
 
     if (error) {
       Alert.alert("Load events failed", error.message);
-      return [] as EventRow[];
+      return;
     }
 
     const rows = (data ?? []) as EventRow[];
@@ -219,55 +206,37 @@ export default function EventsScreen() {
       setAttachEventId("");
     }
 
-    return rows;
-  }, [attachEventId, attachOpen, selectedEventId]);
+    // Load script titles for any attached scripts visible in this events list
+    const scriptIds = rows.map((e) => e.script_id).filter(Boolean) as string[];
+    await loadScriptTitlesByIds(scriptIds);
+  }, [attachEventId, attachOpen, loadScriptTitlesByIds, selectedEventId]);
 
   const refreshAll = useCallback(async () => {
     setLoading(true);
     try {
-      await loadMyUserId();
-      const rows = await loadEvents();
-      await Promise.all([loadScriptTitlesForEvents(rows), loadMyScriptsForPicker()]);
+      await Promise.all([loadMyUserId(), loadEvents()]);
     } finally {
       setLoading(false);
     }
-  }, [loadEvents, loadMyScriptsForPicker, loadMyUserId, loadScriptTitlesForEvents]);
+  }, [loadEvents, loadMyUserId]);
 
   useEffect(() => {
     refreshAll();
   }, [refreshAll]);
 
-  // Realtime updates from events table (re-fetch events, then re-fetch referenced script titles)
+  // Realtime updates from events table
   useEffect(() => {
     const channel = supabase
       .channel("events:list")
       .on("postgres_changes", { event: "*", schema: "public", table: "events" }, async () => {
-        const rows = await loadEvents();
-        await loadScriptTitlesForEvents(rows);
+        await loadEvents();
       })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [loadEvents, loadScriptTitlesForEvents]);
-
-  // Optional: if scripts are edited/renamed, refresh titles map
-  useEffect(() => {
-    const channel = supabase
-      .channel("scripts:titles")
-      .on("postgres_changes", { event: "*", schema: "public", table: "scripts" }, async () => {
-        // Only need titles for event-referenced scripts
-        await loadScriptTitlesForEvents(events);
-        // Also keep picker list fresh for the current user
-        await loadMyScriptsForPicker();
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [events, loadMyScriptsForPicker, loadScriptTitlesForEvents]);
+  }, [loadEvents]);
 
   const upsertPresence = useCallback(async (eventId: string) => {
     const {
@@ -275,7 +244,9 @@ export default function EventsScreen() {
       error: userErr,
     } = await supabase.auth.getUser();
 
-    if (userErr || !user) throw new Error("Not signed in.");
+    if (userErr || !user) {
+      throw new Error("Not signed in.");
+    }
 
     const now = new Date().toISOString();
 
@@ -292,7 +263,7 @@ export default function EventsScreen() {
     if (error) throw error;
   }, []);
 
-  // Heartbeat while joined (presence only)
+  // Heartbeat while joined (presence only; events list is realtime)
   useEffect(() => {
     if (!isJoined || !selectedEventId) return;
 
@@ -309,30 +280,45 @@ export default function EventsScreen() {
 
   const handleCreateEvent = useCallback(async () => {
     try {
-      if (!title.trim()) return Alert.alert("Validation", "Title is required.");
+      if (!title.trim()) {
+        Alert.alert("Validation", "Title is required.");
+        return;
+      }
 
       const startIso = localInputToIso(startLocal);
       const endIso = localInputToIso(endLocal);
 
-      if (!startIso || !endIso)
-        return Alert.alert("Validation", "Start and end must be valid date-times.");
+      if (!startIso || !endIso) {
+        Alert.alert("Validation", "Start and end must be valid date-times.");
+        return;
+      }
 
-      if (new Date(endIso) <= new Date(startIso))
-        return Alert.alert("Validation", "End time must be after start time.");
+      if (new Date(endIso) <= new Date(startIso)) {
+        Alert.alert("Validation", "End time must be after start time.");
+        return;
+      }
 
       const mins = diffMinutes(startIso, endIso);
-      if (!mins || mins <= 0)
-        return Alert.alert("Validation", "Duration must be positive.");
+      if (!mins || mins <= 0) {
+        Alert.alert("Validation", "Duration must be positive.");
+        return;
+      }
 
       const {
         data: { user },
         error: userErr,
       } = await supabase.auth.getUser();
 
-      if (userErr || !user) return Alert.alert("Not signed in", "Please sign in first.");
+      if (userErr || !user) {
+        Alert.alert("Not signed in", "Please sign in first.");
+        return;
+      }
 
       const intentionText = intention.trim();
-      if (!intentionText) return Alert.alert("Validation", "Intention is required.");
+      if (!intentionText) {
+        Alert.alert("Validation", "Intention is required.");
+        return;
+      }
 
       setLoading(true);
 
@@ -361,7 +347,10 @@ export default function EventsScreen() {
 
       const { error } = await supabase.from("events").insert(payload);
 
-      if (error) return Alert.alert("Create event failed", error.message);
+      if (error) {
+        Alert.alert("Create event failed", error.message);
+        return;
+      }
 
       Alert.alert("Success", "Event created.");
       await refreshAll();
@@ -377,7 +366,10 @@ export default function EventsScreen() {
       setPresenceError("");
       setPresenceStatus("");
 
-      if (!selectedEventId) return Alert.alert("Select event", "Please select an event first.");
+      if (!selectedEventId) {
+        Alert.alert("Select event", "Please select an event first.");
+        return;
+      }
 
       await upsertPresence(selectedEventId);
 
@@ -422,14 +414,16 @@ export default function EventsScreen() {
   }, [selectedEventId]);
 
   const openRoom = useCallback(
-    (eventId: string) => navigation.navigate("EventRoom", { eventId }),
+    (eventId: string) => {
+      navigation.navigate("EventRoom", { eventId });
+    },
     [navigation]
   );
 
   const getScriptLabel = (scriptId: string | null) => {
     if (!scriptId) return "(none)";
     const t = scriptsById[scriptId]?.title;
-    return t ? t : scriptId; // fallback
+    return t ? t : scriptId;
   };
 
   // ---- Attach UX (Events tab) ----
@@ -442,7 +436,7 @@ export default function EventsScreen() {
       setScriptQuery("");
       setAttachOpen(true);
 
-      // Ensure picker list is up to date
+      // Load picker scripts (my scripts)
       await loadMyScriptsForPicker();
     },
     [loadMyScriptsForPicker]
@@ -477,14 +471,13 @@ export default function EventsScreen() {
           return;
         }
 
-        // Realtime will update; this keeps UI immediate
-        const rows = await loadEvents();
-        await loadScriptTitlesForEvents(rows);
+        // Realtime will update, but reload keeps UI immediate
+        await loadEvents();
       } finally {
         setLoading(false);
       }
     },
-    [loadEvents, loadScriptTitlesForEvents]
+    [loadEvents]
   );
 
   const attachOrReplace = useCallback(
@@ -497,21 +490,17 @@ export default function EventsScreen() {
       }
 
       if (attachEvent.script_id && attachEvent.script_id !== scriptId) {
-        Alert.alert(
-          "Replace script?",
-          "This event already has a script attached. Replace it?",
-          [
-            { text: "Cancel", style: "cancel" },
-            {
-              text: "Replace",
-              style: "destructive",
-              onPress: async () => {
-                await updateEventScript(attachEvent, scriptId);
-                setAttachOpen(false);
-              },
+        Alert.alert("Replace script?", "This event already has a script attached. Replace it?", [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Replace",
+            style: "destructive",
+            onPress: async () => {
+              await updateEventScript(attachEvent, scriptId);
+              setAttachOpen(false);
             },
-          ]
-        );
+          },
+        ]);
         return;
       }
 
@@ -522,7 +511,8 @@ export default function EventsScreen() {
   );
 
   const detach = useCallback(async () => {
-    if (!attachEvent || !attachEvent.script_id) return;
+    if (!attachEvent) return;
+    if (!attachEvent.script_id) return;
 
     Alert.alert("Detach script?", "Remove the script from this event?", [
       { text: "Cancel", style: "cancel" },
@@ -537,18 +527,17 @@ export default function EventsScreen() {
     ]);
   }, [attachEvent, updateEventScript]);
 
-  const renderScriptRow = ({ item }: { item: any }) => {
+  const renderScriptRow = ({ item }: { item: ScriptRow }) => {
     const isSelected = !!attachEvent?.script_id && attachEvent.script_id === item.id;
 
     return (
       <View style={styles.pickerCard}>
         <Text style={styles.pickerTitle} numberOfLines={1}>
-          {item.title ?? "Untitled"}
+          {(item as any).title ?? "Untitled"}
         </Text>
-
-        {item.intention ? (
+        {(item as any).intention ? (
           <Text style={styles.pickerMeta} numberOfLines={2}>
-            {item.intention}
+            {(item as any).intention}
           </Text>
         ) : null}
 
@@ -818,7 +807,7 @@ export default function EventsScreen() {
                   <Text style={styles.empty}>No scripts found. Create one in Scripts first.</Text>
                 ) : (
                   <FlatList
-                    data={filteredScripts as any}
+                    data={filteredScripts}
                     keyExtractor={(s) => s.id}
                     renderItem={renderScriptRow}
                     contentContainerStyle={{ paddingTop: 10, paddingBottom: 6, gap: 10 }}
