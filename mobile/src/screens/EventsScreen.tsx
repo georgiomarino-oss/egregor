@@ -1,4 +1,3 @@
-// mobile/src/screens/EventsScreen.tsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -13,7 +12,6 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
-import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 
 import { supabase } from "../supabase/client";
 import type { Database } from "../types/db";
@@ -53,19 +51,18 @@ function isLikelyUuid(v: string) {
 }
 
 export default function EventsScreen() {
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  // IMPORTANT:
+  // EventsScreen is inside Tabs. We must navigate to EventRoom using the PARENT Stack navigator,
+  // otherwise params can be missing and EventRoom shows "missing or invalid event id".
+  const navigation = useNavigation<any>();
 
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EventRow[]>([]);
 
   const [myUserId, setMyUserId] = useState<string>("");
 
-  // Scripts used for label display in Events list (script_id -> {id,title})
-  const [scriptsById, setScriptsById] = useState<Record<string, Pick<ScriptRow, "id" | "title">>>(
-    {}
-  );
-
-  // Scripts list for attach-picker (my scripts)
+  // Scripts for display (id -> title) + picker list
+  const [scriptsById, setScriptsById] = useState<Record<string, ScriptRow>>({});
   const [myScripts, setMyScripts] = useState<ScriptRow[]>([]);
 
   // Create form
@@ -121,8 +118,7 @@ export default function EventsScreen() {
     setMyUserId(user.id);
   }, []);
 
-  // Load ONLY my scripts (for picker). This respects your RLS (own scripts).
-  const loadMyScriptsForPicker = useCallback(async () => {
+  const loadScriptsForDisplay = useCallback(async () => {
     const {
       data: { user },
       error: userErr,
@@ -130,42 +126,23 @@ export default function EventsScreen() {
 
     if (userErr || !user) return;
 
+    // NOTE: we only need scripts that THIS USER can see (RLS).
     const { data, error } = await supabase
       .from("scripts")
       .select("id,title,intention,created_at")
-      .eq("author_user_id" as any, user.id)
       .order("created_at", { ascending: false });
 
     if (error) {
-      // non-fatal
+      // non-fatal; we can still display ids
       return;
     }
 
-    setMyScripts((data ?? []) as ScriptRow[]);
-  }, []);
+    const rows = (data ?? []) as ScriptRow[];
+    const map: Record<string, ScriptRow> = {};
+    for (const s of rows) map[s.id] = s;
 
-  // Load titles for scripts referenced by events list (may be authored by others).
-  const loadScriptTitlesByIds = useCallback(async (ids: string[]) => {
-    const unique = Array.from(new Set(ids.filter(Boolean)));
-    if (unique.length === 0) return;
-
-    const { data, error } = await supabase
-      .from("scripts")
-      .select("id,title")
-      .in("id", unique);
-
-    if (error) {
-      // If RLS blocks some scripts, we just won't have titles for them.
-      // The UI will gracefully fall back to showing the ID.
-      return;
-    }
-
-    const rows = (data ?? []) as Array<Pick<ScriptRow, "id" | "title">>;
-    setScriptsById((prev) => {
-      const next = { ...prev };
-      for (const r of rows) next[r.id] = r;
-      return next;
-    });
+    setScriptsById(map);
+    setMyScripts(rows);
   }, []);
 
   const loadEvents = useCallback(async () => {
@@ -205,20 +182,16 @@ export default function EventsScreen() {
       setAttachOpen(false);
       setAttachEventId("");
     }
-
-    // Load script titles for any attached scripts visible in this events list
-    const scriptIds = rows.map((e) => e.script_id).filter(Boolean) as string[];
-    await loadScriptTitlesByIds(scriptIds);
-  }, [attachEventId, attachOpen, loadScriptTitlesByIds, selectedEventId]);
+  }, [attachEventId, attachOpen, selectedEventId]);
 
   const refreshAll = useCallback(async () => {
     setLoading(true);
     try {
-      await Promise.all([loadMyUserId(), loadEvents()]);
+      await Promise.all([loadMyUserId(), loadEvents(), loadScriptsForDisplay()]);
     } finally {
       setLoading(false);
     }
-  }, [loadEvents, loadMyUserId]);
+  }, [loadEvents, loadMyUserId, loadScriptsForDisplay]);
 
   useEffect(() => {
     refreshAll();
@@ -263,7 +236,7 @@ export default function EventsScreen() {
     if (error) throw error;
   }, []);
 
-  // Heartbeat while joined (presence only; events list is realtime)
+  // Heartbeat while joined (presence only)
   useEffect(() => {
     if (!isJoined || !selectedEventId) return;
 
@@ -415,7 +388,16 @@ export default function EventsScreen() {
 
   const openRoom = useCallback(
     (eventId: string) => {
-      navigation.navigate("EventRoom", { eventId });
+      if (!eventId || !isLikelyUuid(eventId)) {
+        Alert.alert("Invalid event", "This event id is missing or invalid.");
+        return;
+      }
+
+      // Navigate using the parent Stack navigator so EventRoom receives params reliably.
+      const parent = navigation.getParent?.();
+      const navToUse = parent ?? navigation;
+
+      (navToUse as any).navigate("EventRoom" as keyof RootStackParamList, { eventId });
     },
     [navigation]
   );
@@ -436,10 +418,9 @@ export default function EventsScreen() {
       setScriptQuery("");
       setAttachOpen(true);
 
-      // Load picker scripts (my scripts)
-      await loadMyScriptsForPicker();
+      await loadScriptsForDisplay();
     },
-    [loadMyScriptsForPicker]
+    [loadScriptsForDisplay]
   );
 
   const updateEventScript = useCallback(
@@ -471,7 +452,6 @@ export default function EventsScreen() {
           return;
         }
 
-        // Realtime will update, but reload keeps UI immediate
         await loadEvents();
       } finally {
         setLoading(false);
@@ -681,9 +661,7 @@ export default function EventsScreen() {
 
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Live Presence</Text>
-              <Text style={styles.meta}>
-                Selected: {selectedEvent ? selectedEvent.title : "(none)"}
-              </Text>
+              <Text style={styles.meta}>Selected: {selectedEvent ? selectedEvent.title : "(none)"}</Text>
 
               <View style={styles.row}>
                 <Pressable
@@ -787,7 +765,7 @@ export default function EventsScreen() {
                   </Pressable>
 
                   <Pressable
-                    onPress={loadMyScriptsForPicker}
+                    onPress={loadScriptsForDisplay}
                     style={[styles.btn, styles.btnGhost, loading && styles.disabled]}
                     disabled={loading}
                   >

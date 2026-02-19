@@ -1,4 +1,3 @@
-// mobile/src/screens/EventRoomScreen.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -20,19 +19,6 @@ type Props = NativeStackScreenProps<RootStackParamList, "EventRoom">;
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type ScriptDbRow = Database["public"]["Tables"]["scripts"]["Row"];
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
-
-// Profiles table (works even if db.ts hasn’t been regenerated yet)
-type ProfileRow =
-  | (Database extends { public: { Tables: { profiles: { Row: infer R } } } }
-      ? Database["public"]["Tables"]["profiles"]["Row"]
-      : {
-          id: string;
-          display_name: string | null;
-          avatar_url: string | null;
-          created_at: string;
-          updated_at: string;
-        })
-  | any;
 
 type ScriptSection = {
   name: string;
@@ -104,10 +90,6 @@ function shortId(id: string) {
   return `${id.slice(0, 6)}…${id.slice(-4)}`;
 }
 
-function uniqStrings(xs: string[]) {
-  return Array.from(new Set(xs.filter(Boolean)));
-}
-
 export default function EventRoomScreen({ route, navigation }: Props) {
   const eventId = route.params?.eventId ?? "";
   const hasValidEventId = !!eventId && isLikelyUuid(eventId);
@@ -122,7 +104,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   // Presence
   const [presenceRows, setPresenceRows] = useState<PresenceRow[]>([]);
-  const [profilesById, setProfilesById] = useState<Record<string, ProfileRow>>({});
   const [isJoined, setIsJoined] = useState(false);
   const [presenceMsg, setPresenceMsg] = useState("");
   const [presenceErr, setPresenceErr] = useState("");
@@ -158,6 +139,22 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }, 1000);
   }, [sectionTotalSeconds, stopTimer]);
 
+  const loadPresence = useCallback(async () => {
+    if (!hasValidEventId) {
+      setPresenceRows([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("event_presence")
+      .select("event_id,user_id,joined_at,last_seen_at,created_at")
+      .eq("event_id", eventId);
+
+    if (error) return;
+
+    setPresenceRows((data ?? []) as PresenceRow[]);
+  }, [eventId, hasValidEventId]);
+
   const loadScriptById = useCallback(async (scriptId: string | null) => {
     if (!scriptId) {
       setScriptDbRow(null);
@@ -169,7 +166,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       .from("scripts")
       .select("id,title,content_json")
       .eq("id", scriptId)
-      .single();
+      .maybeSingle();
 
     if (scErr || !scData) {
       setScriptDbRow(null);
@@ -182,57 +179,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     setScript(parseScriptContent(row.content_json));
     setCurrentSectionIdx(0);
   }, []);
-
-  const loadProfilesForUserIds = useCallback(async (userIds: string[]) => {
-    const ids = uniqStrings(userIds);
-    if (ids.length === 0) return;
-
-    // Avoid refetching ids we already have
-    const missing = ids.filter((id) => !profilesById[id]);
-    if (missing.length === 0) return;
-
-    const { data, error } = await supabase
-      .from("profiles" as any)
-      .select("id,display_name,avatar_url,created_at,updated_at")
-      .in("id", missing);
-
-    if (error) {
-      // non-fatal: we can still show short ids
-      return;
-    }
-
-    const rows = (data ?? []) as ProfileRow[];
-    setProfilesById((prev) => {
-      const next = { ...prev };
-      for (const r of rows) {
-        if (r?.id) next[r.id] = r;
-      }
-      return next;
-    });
-  }, [profilesById]);
-
-  const loadPresence = useCallback(async () => {
-    if (!hasValidEventId) {
-      setPresenceRows([]);
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("event_presence")
-      .select("event_id,user_id,joined_at,last_seen_at,created_at")
-      .eq("event_id", eventId);
-
-    if (error) {
-      // keep screen usable; presence is secondary
-      return;
-    }
-
-    const rows = (data ?? []) as PresenceRow[];
-    setPresenceRows(rows);
-
-    // load profiles for those users
-    await loadProfilesForUserIds(rows.map((r) => r.user_id));
-  }, [eventId, hasValidEventId, loadProfilesForUserIds]);
 
   const loadEventRoom = useCallback(async () => {
     if (!hasValidEventId) {
@@ -270,14 +216,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     const eventRow = evData as EventRow;
     setEvent(eventRow);
 
-    await Promise.all([
-      loadPresence(),
-      loadScriptById((eventRow as any).script_id ?? null),
-      loadProfilesForUserIds([(eventRow as any).host_user_id].filter(Boolean) as string[]),
-    ]);
+    await Promise.all([loadPresence(), loadScriptById((eventRow as any).script_id ?? null)]);
 
     setLoading(false);
-  }, [eventId, hasValidEventId, loadPresence, loadProfilesForUserIds, loadScriptById]);
+  }, [eventId, hasValidEventId, loadPresence, loadScriptById]);
 
   useEffect(() => {
     loadEventRoom();
@@ -301,7 +243,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           const next = payload.new as Partial<EventRow> | null;
           const prev = payload.old as Partial<EventRow> | null;
 
-          // Update local event state
           setEvent((cur) => {
             if (!cur) return cur;
             return { ...cur, ...(next as any) };
@@ -316,11 +257,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             setCurrentSectionIdx(0);
             await loadScriptById(nextScriptId);
           }
-
-          const nextHost = (next as any)?.host_user_id;
-          if (nextHost) {
-            await loadProfilesForUserIds([String(nextHost)]);
-          }
         }
       )
       .subscribe();
@@ -328,7 +264,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [eventId, hasValidEventId, loadProfilesForUserIds, loadScriptById, stopTimer]);
+  }, [eventId, hasValidEventId, loadScriptById, stopTimer]);
 
   // Timer reset on section change
   useEffect(() => {
@@ -429,15 +365,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   const activeCount = activePresence.length;
 
-  const displayNameForUser = useCallback(
-    (userId: string) => {
-      const p = profilesById[userId];
-      const name = p?.display_name ? String(p.display_name).trim() : "";
-      return name ? name : shortId(userId);
-    },
-    [profilesById]
-  );
-
   const handleJoinLive = useCallback(async () => {
     if (!hasValidEventId) {
       Alert.alert("Missing event", "This screen was opened without a valid event id.");
@@ -528,12 +455,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return () => stopTimer();
   }, [stopTimer]);
 
+  const handleBack = useCallback(() => {
+    if (navigation.canGoBack()) navigation.goBack();
+    else navigation.navigate("RootTabs");
+  }, [navigation]);
+
   if (!hasValidEventId) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <View style={styles.center}>
           <Text style={styles.err}>Missing or invalid event id.</Text>
-          <Pressable style={[styles.btn, styles.btnGhost]} onPress={() => navigation.goBack()}>
+          <Pressable style={[styles.btn, styles.btnGhost]} onPress={handleBack}>
             <Text style={styles.btnGhostText}>Back</Text>
           </Pressable>
         </View>
@@ -557,7 +489,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <View style={styles.center}>
           <Text style={styles.err}>Event not found.</Text>
-          <Pressable style={[styles.btn, styles.btnGhost]} onPress={() => navigation.goBack()}>
+          <Pressable style={[styles.btn, styles.btnGhost]} onPress={handleBack}>
             <Text style={styles.btnGhostText}>Back</Text>
           </Pressable>
         </View>
@@ -565,30 +497,22 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     );
   }
 
-  const hostId = String((event as any).host_user_id ?? "");
-  const hostLabel = hostId ? displayNameForUser(hostId) : "";
-
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.h1}>{event.title}</Text>
+        <Text style={styles.h1}>{(event as any).title}</Text>
 
-        {!!event.description && <Text style={styles.body}>{event.description}</Text>}
+        {!!(event as any).description && <Text style={styles.body}>{(event as any).description}</Text>}
 
-        <Text style={styles.body}>Intention: {event.intention_statement}</Text>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Host</Text>
-          <Text style={styles.meta}>{hostLabel || "(unknown)"}</Text>
-        </View>
+        <Text style={styles.body}>Intention: {(event as any).intention_statement}</Text>
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Attached Script</Text>
           <Text style={styles.meta}>
-            {event.script_id
+            {(event as any).script_id
               ? scriptDbRow?.title
                 ? scriptDbRow.title
-                : event.script_id
+                : (event as any).script_id
               : "(none)"}
           </Text>
         </View>
@@ -601,27 +525,22 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           </Text>
 
           <Text style={styles.meta}>
-            {new Date(event.start_time_utc).toLocaleString()} →{" "}
-            {new Date(event.end_time_utc).toLocaleString()} ({event.timezone ?? "UTC"})
+            {new Date((event as any).start_time_utc).toLocaleString()} →{" "}
+            {new Date((event as any).end_time_utc).toLocaleString()} ({(event as any).timezone ?? "UTC"})
           </Text>
 
           {activePresence.length > 0 ? (
             <View style={{ marginTop: 8 }}>
-              {activePresence.slice(0, 10).map((p) => {
-                const label = displayNameForUser(p.user_id);
-                const isHost = hostId && p.user_id === hostId;
-                const seenSec = Math.max(
-                  0,
-                  Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000)
-                );
-
-                return (
-                  <Text key={p.user_id} style={styles.meta}>
-                    • {label}
-                    {isHost ? " (host)" : ""} — seen {seenSec}s ago
-                  </Text>
-                );
-              })}
+              {activePresence.slice(0, 10).map((p) => (
+                <Text key={p.user_id} style={styles.meta}>
+                  • {shortId(p.user_id)} (seen{" "}
+                  {Math.max(
+                    0,
+                    Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000)
+                  )}
+                  s ago)
+                </Text>
+              ))}
               {activePresence.length > 10 ? (
                 <Text style={styles.meta}>…and {activePresence.length - 10} more</Text>
               ) : null}
@@ -661,7 +580,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
           {!script ? (
             <Text style={styles.meta}>
-              No script attached to this event yet. Attach one from the Scripts screen.
+              No script attached to this event yet. Attach one from the Events screen.
             </Text>
           ) : (
             <>
