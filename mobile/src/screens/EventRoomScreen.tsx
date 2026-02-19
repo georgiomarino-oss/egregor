@@ -5,6 +5,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   View,
 } from "react-native";
@@ -124,25 +125,41 @@ function statusPillStyle(mode: EventRunMode) {
   }
 }
 
+/**
+ * Local preferences:
+ * - Global: prefs:autoJoinLive (default true)
+ * - Per-event: joined:event:<eventId> (sticky join state)
+ */
+const KEY_AUTO_JOIN_GLOBAL = "prefs:autoJoinLive";
+
 function joinPrefKey(eventId: string) {
   return `joined:event:${eventId}`;
 }
 
-async function readJoinPref(eventId: string): Promise<boolean> {
+async function readBool(key: string, defaultValue: boolean) {
   try {
-    const v = await AsyncStorage.getItem(joinPrefKey(eventId));
+    const v = await AsyncStorage.getItem(key);
+    if (v === null) return defaultValue;
     return v === "1";
   } catch {
-    return false;
+    return defaultValue;
   }
 }
 
-async function writeJoinPref(eventId: string, joined: boolean): Promise<void> {
+async function writeBool(key: string, value: boolean) {
   try {
-    await AsyncStorage.setItem(joinPrefKey(eventId), joined ? "1" : "0");
+    await AsyncStorage.setItem(key, value ? "1" : "0");
   } catch {
     // ignore
   }
+}
+
+async function readJoinPref(eventId: string): Promise<boolean> {
+  return readBool(joinPrefKey(eventId), false);
+}
+
+async function writeJoinPref(eventId: string, joined: boolean): Promise<void> {
+  return writeBool(joinPrefKey(eventId), joined);
 }
 
 export default function EventRoomScreen({ route, navigation }: Props) {
@@ -168,7 +185,11 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   // Join preference loaded
   const [joinPrefLoaded, setJoinPrefLoaded] = useState(false);
-  const [shouldAutoJoin, setShouldAutoJoin] = useState(false);
+  const [shouldAutoJoinForEvent, setShouldAutoJoinForEvent] = useState(false);
+
+  // Global auto-join setting
+  const [autoJoinGlobalLoaded, setAutoJoinGlobalLoaded] = useState(false);
+  const [autoJoinGlobalEnabled, setAutoJoinGlobalEnabled] = useState(true);
 
   // Run state (synced)
   const [runState, setRunState] = useState<EventRunStateV1>({
@@ -372,7 +393,21 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     loadEventRoom();
   }, [loadEventRoom]);
 
-  // Load join preference for this event (sticky join)
+  // Load global auto-join setting (default true)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const enabled = await readBool(KEY_AUTO_JOIN_GLOBAL, true);
+      if (cancelled) return;
+      setAutoJoinGlobalEnabled(enabled);
+      setAutoJoinGlobalLoaded(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load per-event sticky join pref
   useEffect(() => {
     let cancelled = false;
     if (!hasValidEventId) return;
@@ -380,7 +415,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     (async () => {
       const pref = await readJoinPref(eventId);
       if (cancelled) return;
-      setShouldAutoJoin(pref);
+      setShouldAutoJoinForEvent(pref);
       setJoinPrefLoaded(true);
     })();
 
@@ -458,13 +493,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [eventId, hasValidEventId, loadPresence]);
 
-  // Auto-join if preference says they previously joined this event
+  // Auto-join if:
+  // - global setting enabled
+  // - per-event sticky join enabled (they joined this event before)
+  // - we are not already joined
   useEffect(() => {
     let cancelled = false;
 
     if (!hasValidEventId) return;
-    if (!joinPrefLoaded) return;
-    if (!shouldAutoJoin) return;
+    if (!autoJoinGlobalLoaded || !joinPrefLoaded) return;
+    if (!autoJoinGlobalEnabled) return;
+    if (!shouldAutoJoinForEvent) return;
     if (isJoined) return;
 
     (async () => {
@@ -484,7 +523,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         if (cancelled) return;
 
         if (upErr) {
-          // Don't spam; just keep them not-joined.
           setPresenceErr(upErr.message);
           return;
         }
@@ -500,7 +538,16 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [eventId, hasValidEventId, joinPrefLoaded, shouldAutoJoin, isJoined, loadPresence]);
+  }, [
+    eventId,
+    hasValidEventId,
+    autoJoinGlobalLoaded,
+    joinPrefLoaded,
+    autoJoinGlobalEnabled,
+    shouldAutoJoinForEvent,
+    isJoined,
+    loadPresence,
+  ]);
 
   // Heartbeat while joined
   useEffect(() => {
@@ -581,7 +628,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setIsJoined(true);
       setPresenceMsg("✅ You joined live.");
       await writeJoinPref(eventId, true);
-      setShouldAutoJoin(true);
+      setShouldAutoJoinForEvent(true);
       await loadPresence();
     } catch (e: any) {
       setPresenceErr(e?.message ?? "Failed to join live.");
@@ -618,12 +665,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setIsJoined(false);
       setPresenceMsg("✅ You left live.");
       await writeJoinPref(eventId, false);
-      setShouldAutoJoin(false);
+      setShouldAutoJoinForEvent(false);
       await loadPresence();
     } catch (e: any) {
       setPresenceErr(e?.message ?? "Failed to leave.");
     }
   }, [eventId, hasValidEventId, loadPresence]);
+
+  const handleToggleAutoJoinGlobal = useCallback(async (next: boolean) => {
+    setAutoJoinGlobalEnabled(next);
+    await writeBool(KEY_AUTO_JOIN_GLOBAL, next);
+  }, []);
 
   const clampIndex = useCallback(
     (idx: number) => {
@@ -682,7 +734,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   }, [clampIndex, hostSetViaServer, runState]);
 
   const hostEnd = useCallback(async () => {
-    await hostSetViaServer("ended", clampIndex(runState.sectionIndex), runState.elapsedBeforePauseSec ?? 0, false);
+    await hostSetViaServer(
+      "ended",
+      clampIndex(runState.sectionIndex),
+      runState.elapsedBeforePauseSec ?? 0,
+      false
+    );
   }, [clampIndex, hostSetViaServer, runState]);
 
   const hostGoTo = useCallback(
@@ -842,6 +899,18 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             {new Date((event as any).end_time_utc).toLocaleString()} ({(event as any).timezone ?? "UTC"})
           </Text>
 
+          <View style={styles.settingsRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.settingsTitle}>Auto-join live</Text>
+              <Text style={styles.meta}>Rejoin rooms automatically when you reopen them.</Text>
+            </View>
+            <Switch
+              value={autoJoinGlobalEnabled}
+              onValueChange={handleToggleAutoJoinGlobal}
+              disabled={!autoJoinGlobalLoaded}
+            />
+          </View>
+
           {activePresence.length > 0 ? (
             <View style={{ marginTop: 8 }}>
               {activePresence.slice(0, 10).map((p) => (
@@ -898,8 +967,21 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                 Tone: {script.tone} | Duration: {script.durationMinutes} min
               </Text>
 
-              <View style={{ marginTop: 10, flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <View style={[styles.pill, { borderColor: pill.borderColor, backgroundColor: pill.backgroundColor }]}>
+              <View
+                style={{
+                  marginTop: 10,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 10,
+                  flexWrap: "wrap",
+                }}
+              >
+                <View
+                  style={[
+                    styles.pill,
+                    { borderColor: pill.borderColor, backgroundColor: pill.backgroundColor },
+                  ]}
+                >
                   <Text style={[styles.pillText, { color: pill.textColor }]}>
                     {runReady ? runStatusLabel : "…"}
                   </Text>
@@ -916,7 +998,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
               {!isJoined ? (
                 <View style={styles.banner}>
                   <Text style={styles.bannerTitle}>
-                    {joinPrefLoaded && shouldAutoJoin ? "Rejoining…" : "You’re not live yet"}
+                    {autoJoinGlobalLoaded &&
+                    joinPrefLoaded &&
+                    autoJoinGlobalEnabled &&
+                    shouldAutoJoinForEvent
+                      ? "Rejoining…"
+                      : "You’re not live yet"}
                   </Text>
                   <Text style={styles.meta}>
                     Join live to appear in the room and be counted as active.
@@ -933,7 +1020,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                 <View style={styles.banner}>
                   <Text style={styles.bannerTitle}>Preview mode</Text>
                   <Text style={styles.meta}>
-                    You’re reading a different section locally. Tap “Follow host” to return to the live section/timer.
+                    You’re reading a different section locally. Tap “Follow host” to return to the
+                    live section/timer.
                   </Text>
                   <View style={[styles.row, { marginTop: 8 }]}>
                     <Pressable style={[styles.btn, styles.btnPrimary]} onPress={handleFollowHost}>
@@ -956,7 +1044,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                 <View style={[styles.sectionCard, { marginTop: 10 }]}>
                   <Text style={styles.cardTitle}>Session ended</Text>
                   <Text style={styles.meta}>
-                    {isHost ? "You can restart the session when ready." : "Wait for the host to restart the session."}
+                    {isHost
+                      ? "You can restart the session when ready."
+                      : "Wait for the host to restart the session."}
                   </Text>
                   {isHost ? (
                     <View style={styles.row}>
@@ -1170,4 +1260,17 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   bannerTitle: { color: "white", fontSize: 14, fontWeight: "800", marginBottom: 4 },
+
+  settingsRow: {
+    marginTop: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: "#27345C",
+    borderRadius: 12,
+    backgroundColor: "#121A31",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  settingsTitle: { color: "#E4EBFF", fontWeight: "800", marginBottom: 2 },
 });
