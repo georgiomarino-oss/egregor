@@ -20,7 +20,7 @@ type EventRow = Database["public"]["Tables"]["events"]["Row"];
 export default function ScriptsScreen() {
   const [loading, setLoading] = useState(false);
 
-  // Create script form (lightweight; matches your existing pattern)
+  // Create script form
   const [title, setTitle] = useState("Peace Circle Script");
   const [intention, setIntention] = useState(
     "May people everywhere experience peace, clarity and compassion."
@@ -36,6 +36,12 @@ export default function ScriptsScreen() {
   const [attachScriptId, setAttachScriptId] = useState<string>("");
   const [eventQuery, setEventQuery] = useState("");
 
+  const scriptsById = useMemo(() => {
+    const map: Record<string, ScriptRow> = {};
+    for (const s of scripts) map[s.id] = s;
+    return map;
+  }, [scripts]);
+
   const selectedScript = useMemo(
     () => scripts.find((s) => s.id === attachScriptId) ?? null,
     [scripts, attachScriptId]
@@ -44,12 +50,14 @@ export default function ScriptsScreen() {
   const filteredEvents = useMemo(() => {
     const q = eventQuery.trim().toLowerCase();
     if (!q) return myEvents;
+
     return myEvents.filter((e) => {
       const t = (e.title ?? "").toLowerCase();
       const d = (e.description ?? "").toLowerCase();
-      return t.includes(q) || d.includes(q);
+      const currentTitle = e.script_id ? (scriptsById[e.script_id]?.title ?? "") : "";
+      return t.includes(q) || d.includes(q) || currentTitle.toLowerCase().includes(q);
     });
-  }, [myEvents, eventQuery]);
+  }, [myEvents, eventQuery, scriptsById]);
 
   const loadScripts = useCallback(async () => {
     const { data, error } = await supabase
@@ -102,10 +110,10 @@ export default function ScriptsScreen() {
     const mins = Number(durationMinutes);
 
     if (!title.trim()) return Alert.alert("Validation", "Title is required.");
-    if (!intention.trim())
-      return Alert.alert("Validation", "Intention is required.");
-    if (!Number.isFinite(mins) || mins <= 0)
+    if (!intention.trim()) return Alert.alert("Validation", "Intention is required.");
+    if (!Number.isFinite(mins) || mins <= 0) {
       return Alert.alert("Validation", "Duration must be a positive number.");
+    }
 
     const {
       data: { user },
@@ -119,16 +127,15 @@ export default function ScriptsScreen() {
 
     setLoading(true);
     try {
-      // If your scripts table has NOT NULL columns beyond these,
-      // TypeScript will force us to provide them here.
       const payload: ScriptInsert = {
-        // Many schemas name this author_user_id; yours may differ.
-        // If TS errors here, we’ll use the exact field from db.ts.
+        // if your db.ts uses a different owner column, TS will complain here and we’ll adjust
         author_user_id: user.id as any,
+
         title: title.trim(),
         intention: intention.trim(),
         duration_minutes: mins as any,
         tone: tone as any,
+
         content_json: {
           title: title.trim(),
           durationMinutes: mins,
@@ -163,6 +170,8 @@ export default function ScriptsScreen() {
       setAttachScriptId(scriptId);
       setEventQuery("");
       setAttachOpen(true);
+
+      // Ensure events are current when opening modal
       await loadMyHostedEvents();
     },
     [loadMyHostedEvents]
@@ -177,12 +186,13 @@ export default function ScriptsScreen() {
 
       if (userErr || !user) {
         Alert.alert("Not signed in", "Please sign in first.");
-        return;
+        return false;
       }
 
+      // Client-side guard; RLS must enforce.
       if (event.host_user_id !== user.id) {
         Alert.alert("Not allowed", "Only the host can change this event’s script.");
-        return;
+        return false;
       }
 
       setLoading(true);
@@ -194,10 +204,11 @@ export default function ScriptsScreen() {
 
         if (error) {
           Alert.alert("Update failed", error.message);
-          return;
+          return false;
         }
 
         await loadMyHostedEvents();
+        return true;
       } finally {
         setLoading(false);
       }
@@ -210,10 +221,11 @@ export default function ScriptsScreen() {
       if (!attachScriptId) return;
 
       if (event.script_id === attachScriptId) {
-        Alert.alert("Already attached", "This event already uses that script.");
+        Alert.alert("Already attached", "This event already uses the selected script.");
         return;
       }
 
+      // If another script is attached, confirm replace
       if (event.script_id && event.script_id !== attachScriptId) {
         Alert.alert(
           "Replace script?",
@@ -223,15 +235,24 @@ export default function ScriptsScreen() {
             {
               text: "Replace",
               style: "destructive",
-              onPress: () => updateEventScript(event, attachScriptId),
+              onPress: async () => {
+                const ok = await updateEventScript(event, attachScriptId);
+                if (ok) {
+                  setAttachOpen(false);
+                  Alert.alert("Updated", "Script replaced.");
+                }
+              },
             },
           ]
         );
         return;
       }
 
-      await updateEventScript(event, attachScriptId);
-      Alert.alert("Attached", "Script attached to event.");
+      const ok = await updateEventScript(event, attachScriptId);
+      if (ok) {
+        setAttachOpen(false);
+        Alert.alert("Attached", "Script attached to event.");
+      }
     },
     [attachScriptId, updateEventScript]
   );
@@ -242,7 +263,17 @@ export default function ScriptsScreen() {
 
       Alert.alert("Detach script?", "Remove the current script from this event?", [
         { text: "Cancel", style: "cancel" },
-        { text: "Detach", style: "destructive", onPress: () => updateEventScript(event, null) },
+        {
+          text: "Detach",
+          style: "destructive",
+          onPress: async () => {
+            const ok = await updateEventScript(event, null);
+            if (ok) {
+              setAttachOpen(false);
+              Alert.alert("Detached", "Script removed from event.");
+            }
+          },
+        },
       ]);
     },
     [updateEventScript]
@@ -272,7 +303,7 @@ export default function ScriptsScreen() {
           style={[styles.btn, styles.btnPrimary, loading && styles.disabled]}
           disabled={loading}
         >
-          <Text style={styles.btnText}>Attach</Text>
+          <Text style={styles.btnText}>Attach to event</Text>
         </Pressable>
       </View>
 
@@ -283,17 +314,28 @@ export default function ScriptsScreen() {
   const renderEventRow = ({ item }: { item: EventRow }) => {
     const isUsingSelected = !!attachScriptId && item.script_id === attachScriptId;
 
+    const currentTitle =
+      item.script_id ? scriptsById[item.script_id]?.title ?? item.script_id : "(none)";
+
+    const attachLabel = isUsingSelected
+      ? "Attached"
+      : item.script_id
+      ? "Replace"
+      : "Attach";
+
     return (
       <View style={styles.eventCard}>
         <Text style={styles.eventTitle} numberOfLines={1}>
           {item.title}
         </Text>
+
         <Text style={styles.eventMeta} numberOfLines={1}>
           {new Date(item.start_time_utc).toLocaleString()} ({item.timezone ?? "UTC"})
         </Text>
 
         <Text style={styles.eventMeta} numberOfLines={1}>
-          Current: {item.script_id ? item.script_id : "(none)"}
+          Current:{" "}
+          <Text style={{ color: "white", fontWeight: "800" }}>{currentTitle}</Text>
         </Text>
 
         <View style={styles.row}>
@@ -304,10 +346,10 @@ export default function ScriptsScreen() {
               isUsingSelected ? styles.btnGhost : styles.btnPrimary,
               (loading || !attachScriptId) && styles.disabled,
             ]}
-            disabled={loading || !attachScriptId}
+            disabled={loading || !attachScriptId || isUsingSelected}
           >
             <Text style={isUsingSelected ? styles.btnGhostText : styles.btnText}>
-              {isUsingSelected ? "Using Selected" : "Attach"}
+              {attachLabel}
             </Text>
           </Pressable>
 
@@ -409,7 +451,7 @@ export default function ScriptsScreen() {
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Attach Script to Event</Text>
               <Text style={styles.meta}>
-                Tap “Attach” on a script, then choose one of your hosted events.
+                Tap “Attach to event” on a script, then choose one of your hosted events.
               </Text>
             </View>
           </View>
@@ -445,14 +487,12 @@ export default function ScriptsScreen() {
               value={eventQuery}
               onChangeText={setEventQuery}
               style={styles.input}
-              placeholder="Search your events…"
+              placeholder="Search your events… (title, description, current script)"
               placeholderTextColor="#6B7BB2"
             />
 
             {myEvents.length === 0 ? (
-              <Text style={styles.empty}>
-                No hosted events found. Create one in Events first.
-              </Text>
+              <Text style={styles.empty}>No hosted events found. Create one in Events first.</Text>
             ) : (
               <FlatList
                 data={filteredEvents}
