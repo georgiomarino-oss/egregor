@@ -126,6 +126,17 @@ function statusPillStyle(mode: EventRunMode) {
   }
 }
 
+function formatAgo(secondsAgo: number) {
+  const s = Math.max(0, Math.floor(secondsAgo));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  return `${d}d`;
+}
+
 /**
  * Local preferences:
  * - Global: prefs:autoJoinLive (default true)
@@ -419,6 +430,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       const eventRow = evData as EventRow;
       setEvent(eventRow);
 
+      // Ensure host profile is available even if host isn't present
+      void loadProfiles([String((eventRow as any).host_user_id ?? "")]);
+
       await Promise.all([
         loadPresence(),
         loadScriptById((eventRow as any).script_id ?? null),
@@ -434,7 +448,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setLoading(false);
       Alert.alert("Load failed", e?.message ?? "Unknown error");
     }
-  }, [eventId, hasValidEventId, loadPresence, loadScriptById]);
+  }, [eventId, hasValidEventId, loadPresence, loadScriptById, loadProfiles]);
 
   useEffect(() => {
     loadEventRoom();
@@ -504,6 +518,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           if (nextScriptId !== prevScriptId) {
             await loadScriptById(nextScriptId);
           }
+
+          const nextHostId = String((next as any)?.host_user_id ?? "");
+          const prevHostId = String((prev as any)?.host_user_id ?? "");
+          if (nextHostId && nextHostId !== prevHostId) {
+            void loadProfiles([nextHostId]);
+          }
         }
       )
       .subscribe();
@@ -511,7 +531,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [eventId, hasValidEventId, loadScriptById]);
+  }, [eventId, hasValidEventId, loadScriptById, loadProfiles]);
 
   // Run state realtime
   useEffect(() => {
@@ -634,15 +654,36 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   // Compute active users: last_seen_at within 25 seconds
   const activeWindowMs = 25_000;
 
+  const presenceSorted = useMemo(() => {
+    const rows = [...presenceRows];
+    rows.sort((a, b) => {
+      const ta = new Date(a.last_seen_at).getTime();
+      const tb = new Date(b.last_seen_at).getTime();
+      return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
+    });
+    return rows;
+  }, [presenceRows]);
+
   const activePresence = useMemo(() => {
     const now = Date.now();
-    return presenceRows.filter((r) => {
+    return presenceSorted.filter((r) => {
       const t = new Date(r.last_seen_at).getTime();
       return Number.isFinite(t) && now - t <= activeWindowMs;
     });
-  }, [presenceRows]);
+  }, [presenceSorted]);
 
   const activeCount = activePresence.length;
+  const totalAttendees = presenceRows.length;
+
+  const recentPresence = useMemo(() => {
+    const now = Date.now();
+    // Exclude active now to avoid duplication
+    return presenceSorted.filter((r) => {
+      const t = new Date(r.last_seen_at).getTime();
+      if (!Number.isFinite(t)) return false;
+      return now - t > activeWindowMs;
+    });
+  }, [presenceSorted]);
 
   const handleJoinLive = useCallback(async () => {
     if (!hasValidEventId) {
@@ -923,10 +964,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const atFirst = viewingSectionIdx === 0;
   const pill = statusPillStyle(runState.mode);
 
+  const hostId = String((event as any).host_user_id ?? "");
+  const hostName = hostId ? displayNameForUserId(hostId) : "(unknown)";
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.h1}>{(event as any).title}</Text>
+
+        <Text style={styles.meta}>
+          Host: <Text style={{ color: "white", fontWeight: "800" }}>{hostName}</Text>
+        </Text>
 
         {!!(event as any).description && (
           <Text style={styles.body}>{(event as any).description}</Text>
@@ -946,15 +994,18 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Live Presence</Text>
+          <Text style={styles.sectionTitle}>Attendees</Text>
 
           <Text style={styles.meta}>
-            Active now: <Text style={{ fontWeight: "900", color: "white" }}>{activeCount}</Text>
+            Total:{" "}
+            <Text style={{ fontWeight: "900", color: "white" }}>{totalAttendees}</Text> • Active now:{" "}
+            <Text style={{ fontWeight: "900", color: "white" }}>{activeCount}</Text>
           </Text>
 
           <Text style={styles.meta}>
             {new Date((event as any).start_time_utc).toLocaleString()} →{" "}
-            {new Date((event as any).end_time_utc).toLocaleString()} ({(event as any).timezone ?? "UTC"})
+            {new Date((event as any).end_time_utc).toLocaleString()} (
+            {(event as any).timezone ?? "UTC"})
           </Text>
 
           <View style={styles.settingsRow}>
@@ -969,26 +1020,66 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             />
           </View>
 
+          {/* Active now */}
           {activePresence.length > 0 ? (
-            <View style={{ marginTop: 8 }}>
-              {activePresence.slice(0, 10).map((p) => (
-                <Text key={p.user_id} style={styles.meta}>
-                  • {displayNameForUserId(p.user_id)}{" "}
-                  <Text style={{ color: "#5B8CFF" }}>({shortId(p.user_id)})</Text> (seen{" "}
-                  {Math.max(
-                    0,
-                    Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000)
-                  )}
-                  s ago)
-                </Text>
-              ))}
+            <View style={{ marginTop: 10 }}>
+              <Text style={[styles.meta, { marginBottom: 6, color: "#C8D3FF" }]}>
+                Active now
+              </Text>
+
+              {activePresence.slice(0, 10).map((p) => {
+                const secondsAgo = Math.max(
+                  0,
+                  Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000)
+                );
+                return (
+                  <Text key={`active-${p.user_id}`} style={styles.meta}>
+                    • {displayNameForUserId(p.user_id)}{" "}
+                    <Text style={{ color: "#5B8CFF" }}>({shortId(p.user_id)})</Text> • seen{" "}
+                    {formatAgo(secondsAgo)} ago
+                  </Text>
+                );
+              })}
+
               {activePresence.length > 10 ? (
-                <Text style={styles.meta}>…and {activePresence.length - 10} more</Text>
+                <Text style={styles.meta}>…and {activePresence.length - 10} more active</Text>
               ) : null}
             </View>
           ) : (
-            <Text style={[styles.meta, { marginTop: 8 }]}>No one active yet.</Text>
+            <Text style={[styles.meta, { marginTop: 10 }]}>No one active right now.</Text>
           )}
+
+          {/* Recently seen */}
+          {recentPresence.length > 0 ? (
+            <View style={{ marginTop: 12 }}>
+              <Text style={[styles.meta, { marginBottom: 6, color: "#C8D3FF" }]}>
+                Recently seen
+              </Text>
+
+              {recentPresence.slice(0, 10).map((p) => {
+                const secondsAgo = Math.max(
+                  0,
+                  Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000)
+                );
+
+                return (
+                  <Text key={`recent-${p.user_id}`} style={styles.meta}>
+                    • {displayNameForUserId(p.user_id)}{" "}
+                    <Text style={{ color: "#5B8CFF" }}>({shortId(p.user_id)})</Text> • seen{" "}
+                    {formatAgo(secondsAgo)} ago
+                  </Text>
+                );
+              })}
+
+              {recentPresence.length > 10 ? (
+                <Text style={styles.meta}>…and {recentPresence.length - 10} more</Text>
+              ) : null}
+            </View>
+          ) : totalAttendees > 0 ? (
+            <Text style={[styles.meta, { marginTop: 12 }]}>
+              Everyone here is currently active (or attendance is empty).
+            </Text>
+          ) : null}
 
           <View style={styles.row}>
             <Pressable
