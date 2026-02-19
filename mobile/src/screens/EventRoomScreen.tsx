@@ -1,745 +1,698 @@
+// mobile/src/screens/EventRoomScreen.tsx
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ActivityIndicator,
-  Alert,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { Alert, ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { RootStackParamList } from "../types/navigation";
 import { supabase } from "../supabase/client";
-import type { RootStackParamList } from "../types";
-import type { Database } from "../types/db";
+
+import {
+  ensureRunState,
+  normalizeRunState,
+  subscribeRunState,
+  upsertRunState,
+  type EventRunStateV1,
+  type EventRunMode,
+} from "../features/events/runStateRepo";
+
+// If you already have a presence repo, you can swap these helper functions to your existing ones.
+// This file keeps presence behavior exactly as you described: upsert on join + heartbeat, and active list by last_seen_at.
+type PresenceRow = {
+  event_id: string;
+  user_id: string;
+  joined_at: string | null;
+  last_seen_at: string;
+  created_at: string;
+};
+
+type ScriptRow = {
+  id: string;
+  title: string;
+  intention: string | null;
+  content_json: any;
+  author_user_id: string;
+  created_at: string;
+};
+
+type EventRow = {
+  id: string;
+  title?: string | null;
+  script_id: string | null;
+  host_user_id: string | null;
+  created_by: string | null;
+  start_time_utc?: string | null;
+  end_time_utc?: string | null;
+};
+
+type Section = {
+  title: string;
+  body?: string;
+  timer_seconds?: number; // optional
+};
 
 type Props = NativeStackScreenProps<RootStackParamList, "EventRoom">;
 
-type EventRow = Database["public"]["Tables"]["events"]["Row"];
-type ScriptDbRow = Database["public"]["Tables"]["scripts"]["Row"];
-type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
-
-type ScriptSection = {
-  name: string;
-  minutes: number;
-  text: string;
-};
-
-type ScriptContent = {
-  title: string;
-  durationMinutes: number;
-  tone: "calm" | "uplifting" | "focused" | string;
-  sections: ScriptSection[];
-  speakerNotes?: string;
-};
-
-function parseScriptContent(raw: any): ScriptContent | null {
-  if (!raw) return null;
-
-  let obj: any = raw;
-  if (typeof raw === "string") {
-    try {
-      obj = JSON.parse(raw);
-    } catch {
-      return null;
-    }
-  }
-
-  if (!obj || typeof obj !== "object") return null;
-  if (!Array.isArray(obj.sections)) return null;
-
-  const sections: ScriptSection[] = obj.sections
-    .map((s: any) => ({
-      name: String(s?.name ?? "Section"),
-      minutes: Number(s?.minutes ?? 1),
-      text: String(s?.text ?? ""),
-    }))
-    .filter((s: ScriptSection) => Number.isFinite(s.minutes) && s.minutes > 0);
-
-  if (sections.length === 0) return null;
-
-  const durationMinutes =
-    Number(obj.durationMinutes) ||
-    sections.reduce((a, b) => a + (Number.isFinite(b.minutes) ? b.minutes : 0), 0);
-
-  return {
-    title: String(obj.title ?? "Guided Intention Script"),
-    durationMinutes: Number.isFinite(durationMinutes) ? durationMinutes : 0,
-    tone: String(obj.tone ?? "calm"),
-    sections,
-    speakerNotes: obj.speakerNotes ? String(obj.speakerNotes) : undefined,
-  };
+function isUuid(v: unknown): v is string {
+  if (typeof v !== "string") return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
-function formatSeconds(total: number) {
-  const s = Math.max(0, Math.floor(total));
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function secondsBetweenIso(aIso: string, bIso: string): number {
+  const a = new Date(aIso).getTime();
+  const b = new Date(bIso).getTime();
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
+  return Math.max(0, Math.floor((b - a) / 1000));
+}
+
+function formatTime(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
   const mm = Math.floor(s / 60);
   const ss = s % 60;
-  return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+  return `${mm}:${ss.toString().padStart(2, "0")}`;
 }
 
-function isLikelyUuid(v: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    v
-  );
-}
-
-function shortId(id: string) {
-  if (!id) return "";
-  return `${id.slice(0, 6)}…${id.slice(-4)}`;
-}
-
-export default function EventRoomScreen({ route, navigation }: Props) {
-  const eventId = route.params?.eventId ?? "";
-  const hasValidEventId = !!eventId && isLikelyUuid(eventId);
+export default function EventRoomScreen({ navigation, route }: Props) {
+  const eventIdParam = (route.params as any)?.eventId;
 
   const [loading, setLoading] = useState(true);
-  const [event, setEvent] = useState<EventRow | null>(null);
+  const [eventRow, setEventRow] = useState<EventRow | null>(null);
+  const [scriptRow, setScriptRow] = useState<ScriptRow | null>(null);
 
-  const [scriptDbRow, setScriptDbRow] = useState<
-    Pick<ScriptDbRow, "id" | "title" | "content_json"> | null
-  >(null);
-  const [script, setScript] = useState<ScriptContent | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
 
   // Presence
-  const [presenceRows, setPresenceRows] = useState<PresenceRow[]>([]);
-  const [isJoined, setIsJoined] = useState(false);
-  const [presenceMsg, setPresenceMsg] = useState("");
-  const [presenceErr, setPresenceErr] = useState("");
+  const [joinedLive, setJoinedLive] = useState(false);
+  const [activePresence, setActivePresence] = useState<PresenceRow[]>([]);
+  const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Guided flow state
-  const [currentSectionIdx, setCurrentSectionIdx] = useState(0);
-  const [secondsLeft, setSecondsLeft] = useState(0);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Run state
+  const [runState, setRunState] = useState<EventRunStateV1>({ version: 1, mode: "idle", sectionIndex: 0 });
+  const [runStateReady, setRunStateReady] = useState(false);
+
+  // Local ticking (to update countdown display)
+  const [tick, setTick] = useState(0);
+  const localTickRef = useRef<NodeJS.Timeout | null>(null);
+
+  const eventId = useMemo(() => (isUuid(eventIdParam) ? eventIdParam : null), [eventIdParam]);
+
+  const hostId = useMemo(() => {
+    if (!eventRow) return null;
+    return (eventRow.host_user_id || eventRow.created_by) ?? null;
+  }, [eventRow]);
+
+  const isHost = useMemo(() => {
+    if (!userId || !hostId) return false;
+    return userId === hostId;
+  }, [userId, hostId]);
+
+  const sections: Section[] = useMemo(() => {
+    const json = scriptRow?.content_json;
+    const raw = json?.sections;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((s: any) => {
+        const title = typeof s?.title === "string" ? s.title : "Untitled";
+        const body = typeof s?.body === "string" ? s.body : undefined;
+        const timer_seconds =
+          Number.isFinite(s?.timer_seconds) ? Math.max(0, Math.floor(s.timer_seconds)) : undefined;
+        return { title, body, timer_seconds };
+      })
+      .filter((s) => !!s.title);
+  }, [scriptRow]);
 
   const currentSection = useMemo(() => {
-    if (!script?.sections?.length) return null;
-    return script.sections[currentSectionIdx] ?? null;
-  }, [script, currentSectionIdx]);
+    if (!sections.length) return null;
+    const idx = Math.min(Math.max(0, runState.sectionIndex), sections.length - 1);
+    return { section: sections[idx], index: idx };
+  }, [sections, runState.sectionIndex]);
 
-  const sectionTotalSeconds = useMemo(() => {
-    if (!currentSection) return 0;
-    return Math.max(1, Math.floor(currentSection.minutes * 60));
-  }, [currentSection]);
+  const timerInfo = useMemo(() => {
+    const s = currentSection?.section;
+    const duration = s?.timer_seconds ?? 0;
+    const mode: EventRunMode = runState.mode;
 
-  const stopTimer = useCallback(() => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-  }, []);
-
-  const startTimer = useCallback(() => {
-    stopTimer();
-    setSecondsLeft(sectionTotalSeconds);
-
-    timerRef.current = setInterval(() => {
-      setSecondsLeft((prev) => (prev <= 1 ? 0 : prev - 1));
-    }, 1000);
-  }, [sectionTotalSeconds, stopTimer]);
-
-  const loadPresence = useCallback(async () => {
-    if (!hasValidEventId) {
-      setPresenceRows([]);
-      return;
+    if (!s || duration <= 0) {
+      return { hasTimer: false, durationSec: 0, remainingSec: 0, elapsedSec: 0 };
     }
 
-    const { data, error } = await supabase
-      .from("event_presence")
-      .select("event_id,user_id,joined_at,last_seen_at,created_at")
-      .eq("event_id", eventId);
+    // Compute elapsed based on host timestamps
+    let elapsed = 0;
 
-    if (error) return;
-
-    setPresenceRows((data ?? []) as PresenceRow[]);
-  }, [eventId, hasValidEventId]);
-
-  const loadScriptById = useCallback(async (scriptId: string | null) => {
-    if (!scriptId) {
-      setScriptDbRow(null);
-      setScript(null);
-      return;
+    if (mode === "running" && runState.startedAt) {
+      elapsed = secondsBetweenIso(runState.startedAt, nowIso());
+      if (runState.elapsedBeforePauseSec) elapsed += runState.elapsedBeforePauseSec;
+    } else if (mode === "paused") {
+      // When paused, freeze elapsed at elapsedBeforePauseSec (host computed on pause)
+      elapsed = runState.elapsedBeforePauseSec ?? 0;
+    } else {
+      elapsed = runState.elapsedBeforePauseSec ?? 0;
     }
 
-    const { data: scData, error: scErr } = await supabase
-      .from("scripts")
-      .select("id,title,content_json")
-      .eq("id", scriptId)
-      .maybeSingle();
+    const remaining = Math.max(0, duration - elapsed);
 
-    if (scErr || !scData) {
-      setScriptDbRow(null);
-      setScript(null);
-      return;
-    }
+    return {
+      hasTimer: true,
+      durationSec: duration,
+      remainingSec: remaining,
+      elapsedSec: elapsed,
+    };
+  }, [currentSection, runState, tick]);
 
-    const row = scData as Pick<ScriptDbRow, "id" | "title" | "content_json">;
-    setScriptDbRow(row);
-    setScript(parseScriptContent(row.content_json));
-    setCurrentSectionIdx(0);
-  }, []);
-
-  const loadEventRoom = useCallback(async () => {
-    if (!hasValidEventId) {
-      setLoading(false);
-      setEvent(null);
-      setScript(null);
-      setScriptDbRow(null);
-      setPresenceRows([]);
+  const load = useCallback(async () => {
+    if (!eventId) {
+      Alert.alert("Invalid event", "Missing or invalid event id.", [
+        {
+          text: "OK",
+          onPress: () => {
+            if (navigation.canGoBack()) navigation.goBack();
+            else navigation.navigate("RootTabs" as any);
+          },
+        },
+      ]);
       return;
     }
 
     setLoading(true);
-
-    const { data: evData, error: evErr } = await supabase
-      .from("events")
-      .select(
-        `
-        id,title,description,intention_statement,script_id,
-        start_time_utc,end_time_utc,timezone,status,
-        active_count_snapshot,total_join_count,host_user_id
-      `
-      )
-      .eq("id", eventId)
-      .single();
-
-    if (evErr || !evData) {
-      setLoading(false);
-      setEvent(null);
-      setScript(null);
-      setScriptDbRow(null);
-      Alert.alert("Event load failed", evErr?.message ?? "Event not found");
-      return;
-    }
-
-    const eventRow = evData as EventRow;
-    setEvent(eventRow);
-
-    await Promise.all([loadPresence(), loadScriptById((eventRow as any).script_id ?? null)]);
-
-    setLoading(false);
-  }, [eventId, hasValidEventId, loadPresence, loadScriptById]);
-
-  useEffect(() => {
-    loadEventRoom();
-  }, [loadEventRoom]);
-
-  // Realtime subscription: keep EventRoom synced with events row changes (incl script_id attach/detach)
-  useEffect(() => {
-    if (!hasValidEventId) return;
-
-    const channel = supabase
-      .channel(`event:${eventId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "events",
-          filter: `id=eq.${eventId}`,
-        },
-        async (payload) => {
-          const next = payload.new as Partial<EventRow> | null;
-          const prev = payload.old as Partial<EventRow> | null;
-
-          setEvent((cur) => {
-            if (!cur) return cur;
-            return { ...cur, ...(next as any) };
-          });
-
-          const nextScriptId = (next as any)?.script_id ?? null;
-          const prevScriptId = (prev as any)?.script_id ?? null;
-
-          if (nextScriptId !== prevScriptId) {
-            stopTimer();
-            setSecondsLeft(0);
-            setCurrentSectionIdx(0);
-            await loadScriptById(nextScriptId);
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [eventId, hasValidEventId, loadScriptById, stopTimer]);
-
-  // Timer reset on section change
-  useEffect(() => {
-    if (!script || !currentSection) {
-      stopTimer();
-      setSecondsLeft(0);
-      return;
-    }
-    startTimer();
-    return () => stopTimer();
-  }, [script, currentSectionIdx, currentSection, startTimer, stopTimer]);
-
-  // Auto-advance when timer hits 0
-  useEffect(() => {
-    if (!script?.sections?.length) return;
-    if (secondsLeft > 0) return;
-
-    if (currentSectionIdx < script.sections.length - 1) {
-      const t = setTimeout(() => setCurrentSectionIdx((i) => i + 1), 800);
-      return () => clearTimeout(t);
-    }
-  }, [secondsLeft, currentSectionIdx, script]);
-
-  // Realtime subscription for event_presence changes
-  useEffect(() => {
-    if (!hasValidEventId) return;
-
-    const channel = supabase
-      .channel(`presence:${eventId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "event_presence",
-          filter: `event_id=eq.${eventId}`,
-        },
-        () => {
-          loadPresence();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [eventId, hasValidEventId, loadPresence]);
-
-  // Heartbeat while joined (keeps you active)
-  useEffect(() => {
-    if (!isJoined) return;
-    if (!hasValidEventId) return;
-
-    let cancelled = false;
-
-    const beat = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user || cancelled) return;
-
-      const now = new Date().toISOString();
-
-      const { error } = await supabase.from("event_presence").upsert(
-        {
-          event_id: eventId,
-          user_id: user.id,
-          last_seen_at: now,
-          created_at: now,
-        },
-        { onConflict: "event_id,user_id" }
-      );
-
-      if (error && !cancelled) {
-        setPresenceErr(error.message);
-      }
-    };
-
-    beat();
-    const id = setInterval(beat, 10_000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [isJoined, eventId, hasValidEventId]);
-
-  // Compute active users: last_seen_at within 25 seconds
-  const activeWindowMs = 25_000;
-
-  const activePresence = useMemo(() => {
-    const now = Date.now();
-    return presenceRows.filter((r) => {
-      const t = new Date(r.last_seen_at).getTime();
-      return Number.isFinite(t) && now - t <= activeWindowMs;
-    });
-  }, [presenceRows]);
-
-  const activeCount = activePresence.length;
-
-  const handleJoinLive = useCallback(async () => {
-    if (!hasValidEventId) {
-      Alert.alert("Missing event", "This screen was opened without a valid event id.");
-      return;
-    }
-
     try {
-      setPresenceErr("");
-      setPresenceMsg("");
-
       const {
         data: { user },
-        error,
+        error: userErr,
       } = await supabase.auth.getUser();
+      if (userErr) throw userErr;
+      setUserId(user?.id ?? null);
 
-      if (error || !user) {
-        Alert.alert("Not signed in", "Please sign in first.");
-        return;
+      const { data: eventData, error: eventErr } = await supabase
+        .from("events")
+        .select("id, title, script_id, host_user_id, created_by, start_time_utc, end_time_utc")
+        .eq("id", eventId)
+        .single();
+
+      if (eventErr) throw eventErr;
+      setEventRow(eventData as EventRow);
+
+      let script: ScriptRow | null = null;
+      if (eventData?.script_id) {
+        const { data: scriptData, error: scriptErr } = await supabase
+          .from("scripts")
+          .select("id, title, intention, content_json, author_user_id, created_at")
+          .eq("id", eventData.script_id)
+          .single();
+        if (scriptErr) throw scriptErr;
+        script = scriptData as ScriptRow;
       }
+      setScriptRow(script);
 
-      const now = new Date().toISOString();
-
-      const { error: upErr } = await supabase.from("event_presence").upsert(
-        {
-          event_id: eventId,
-          user_id: user.id,
-          last_seen_at: now,
-          created_at: now,
-        },
-        { onConflict: "event_id,user_id" }
-      );
-
-      if (upErr) {
-        setPresenceErr(upErr.message);
-        return;
-      }
-
-      setIsJoined(true);
-      setPresenceMsg("✅ You joined live.");
-      await loadPresence();
+      // Ensure run state exists + subscribe
+      const row = await ensureRunState(eventId);
+      setRunState(normalizeRunState(row.state));
+      setRunStateReady(true);
     } catch (e: any) {
-      setPresenceErr(e?.message ?? "Failed to join live.");
+      console.error(e);
+      Alert.alert("Failed to load room", e?.message ?? "Unknown error");
+    } finally {
+      setLoading(false);
     }
-  }, [eventId, hasValidEventId, loadPresence]);
+  }, [eventId, navigation]);
 
-  const handleLeaveLive = useCallback(async () => {
-    if (!hasValidEventId) return;
+  // Initial load
+  useEffect(() => {
+    load();
+  }, [load]);
 
-    try {
-      setPresenceErr("");
-      setPresenceMsg("");
+  // Subscribe run state changes
+  useEffect(() => {
+    if (!eventId) return;
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+    const sub = subscribeRunState(eventId, (row) => {
+      setRunState(normalizeRunState(row.state));
+      setRunStateReady(true);
+    });
 
-      if (!user) {
-        setPresenceErr("Not signed in.");
-        return;
-      }
+    return () => sub.unsubscribe();
+  }, [eventId]);
+
+  // Local ticking for countdown display
+  useEffect(() => {
+    if (localTickRef.current) clearInterval(localTickRef.current);
+    localTickRef.current = setInterval(() => setTick((t) => t + 1), 500);
+    return () => {
+      if (localTickRef.current) clearInterval(localTickRef.current);
+      localTickRef.current = null;
+    };
+  }, []);
+
+  // Presence helpers
+  const upsertPresence = useCallback(
+    async (forceJoinedAt: boolean) => {
+      if (!eventId || !userId) return;
+
+      const payload: Partial<PresenceRow> & { event_id: string; user_id: string; last_seen_at: string } = {
+        event_id: eventId,
+        user_id: userId,
+        last_seen_at: nowIso(),
+      };
+      if (forceJoinedAt) payload.joined_at = nowIso();
 
       const { error } = await supabase
         .from("event_presence")
-        .delete()
-        .eq("event_id", eventId)
-        .eq("user_id", user.id);
+        .upsert(payload, { onConflict: "event_id,user_id" });
 
-      if (error) {
-        setPresenceErr(error.message);
+      if (error) throw error;
+    },
+    [eventId, userId]
+  );
+
+  const refreshPresence = useCallback(async () => {
+    if (!eventId) return;
+
+    // Active = last_seen_at within 25s
+    const cutoff = new Date(Date.now() - 25_000).toISOString();
+
+    const { data, error } = await supabase
+      .from("event_presence")
+      .select("event_id, user_id, joined_at, last_seen_at, created_at")
+      .eq("event_id", eventId)
+      .gte("last_seen_at", cutoff)
+      .order("last_seen_at", { ascending: false });
+
+    if (error) throw error;
+    setActivePresence((data ?? []) as PresenceRow[]);
+  }, [eventId]);
+
+  // Subscribe presence changes for this event
+  useEffect(() => {
+    if (!eventId) return;
+
+    const channel = supabase
+      .channel(`event_presence:${eventId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "event_presence", filter: `event_id=eq.${eventId}` },
+        () => {
+          // Cheap + reliable: refetch active list
+          refreshPresence().catch((e) => console.error("refreshPresence error", e));
+        }
+      )
+      .subscribe();
+
+    // initial list
+    refreshPresence().catch(() => undefined);
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [eventId, refreshPresence]);
+
+  const joinLive = useCallback(async () => {
+    try {
+      if (!userId) {
+        Alert.alert("Not signed in", "Please sign in again.");
         return;
       }
+      setJoinedLive(true);
+      await upsertPresence(true);
+      await refreshPresence();
 
-      setIsJoined(false);
-      setPresenceMsg("✅ You left live.");
-      await loadPresence();
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      heartbeatRef.current = setInterval(() => {
+        upsertPresence(false).catch((e) => console.error("heartbeat error", e));
+      }, 10_000);
     } catch (e: any) {
-      setPresenceErr(e?.message ?? "Failed to leave.");
+      console.error(e);
+      setJoinedLive(false);
+      Alert.alert("Failed to join live", e?.message ?? "Unknown error");
     }
-  }, [eventId, hasValidEventId, loadPresence]);
+  }, [userId, upsertPresence, refreshPresence]);
 
-  const handlePrev = useCallback(() => setCurrentSectionIdx((i) => Math.max(0, i - 1)), []);
-  const handleNext = useCallback(() => {
-    if (!script?.sections?.length) return;
-    setCurrentSectionIdx((i) => Math.min(script.sections.length - 1, i + 1));
-  }, [script]);
+  const leaveLive = useCallback(() => {
+    setJoinedLive(false);
+    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+    heartbeatRef.current = null;
+  }, []);
 
   useEffect(() => {
-    return () => stopTimer();
-  }, [stopTimer]);
+    return () => {
+      // cleanup on unmount
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+    };
+  }, []);
 
-  const handleBack = useCallback(() => {
+  // Host controls
+  const hostSetState = useCallback(
+    async (next: EventRunStateV1) => {
+      if (!eventId) return;
+      try {
+        await upsertRunState(eventId, next);
+        // optimistic (subscription will also update)
+        setRunState(next);
+      } catch (e: any) {
+        console.error(e);
+        Alert.alert("Failed to update session", e?.message ?? "Unknown error");
+      }
+    },
+    [eventId]
+  );
+
+  const clampSectionIndex = useCallback(
+    (idx: number) => {
+      if (!sections.length) return 0;
+      return Math.min(Math.max(0, idx), sections.length - 1);
+    },
+    [sections.length]
+  );
+
+  const hostStart = useCallback(async () => {
+    const idx = clampSectionIndex(runState.sectionIndex ?? 0);
+    const next: EventRunStateV1 = {
+      version: 1,
+      mode: "running",
+      sectionIndex: idx,
+      startedAt: nowIso(),
+      elapsedBeforePauseSec: 0,
+    };
+    await hostSetState(next);
+  }, [clampSectionIndex, hostSetState, runState.sectionIndex]);
+
+  const hostPause = useCallback(async () => {
+    if (runState.mode !== "running" || !runState.startedAt) return;
+    const elapsedThisRun = secondsBetweenIso(runState.startedAt, nowIso());
+    const accumulated = (runState.elapsedBeforePauseSec ?? 0) + elapsedThisRun;
+
+    const next: EventRunStateV1 = {
+      version: 1,
+      mode: "paused",
+      sectionIndex: clampSectionIndex(runState.sectionIndex),
+      pausedAt: nowIso(),
+      elapsedBeforePauseSec: accumulated,
+      startedAt: runState.startedAt,
+    };
+    await hostSetState(next);
+  }, [clampSectionIndex, hostSetState, runState]);
+
+  const hostResume = useCallback(async () => {
+    if (runState.mode !== "paused") return;
+    const next: EventRunStateV1 = {
+      version: 1,
+      mode: "running",
+      sectionIndex: clampSectionIndex(runState.sectionIndex),
+      startedAt: nowIso(),
+      elapsedBeforePauseSec: runState.elapsedBeforePauseSec ?? 0,
+    };
+    await hostSetState(next);
+  }, [clampSectionIndex, hostSetState, runState]);
+
+  const hostEnd = useCallback(async () => {
+    const next: EventRunStateV1 = {
+      version: 1,
+      mode: "ended",
+      sectionIndex: clampSectionIndex(runState.sectionIndex),
+      elapsedBeforePauseSec: runState.elapsedBeforePauseSec ?? 0,
+    };
+    await hostSetState(next);
+  }, [clampSectionIndex, hostSetState, runState]);
+
+  const hostGoTo = useCallback(
+    async (idx: number) => {
+      const nextIndex = clampSectionIndex(idx);
+      // When changing section:
+      // - if running: restart timer at 0 from now
+      // - if paused/idle/ended: keep mode, reset elapsed to 0 (so it's clean when started)
+      const base: EventRunStateV1 = {
+        version: 1,
+        mode: runState.mode,
+        sectionIndex: nextIndex,
+      };
+
+      if (runState.mode === "running") {
+        await hostSetState({
+          ...base,
+          mode: "running",
+          startedAt: nowIso(),
+          elapsedBeforePauseSec: 0,
+        });
+      } else if (runState.mode === "paused") {
+        await hostSetState({
+          ...base,
+          mode: "paused",
+          pausedAt: nowIso(),
+          elapsedBeforePauseSec: 0,
+        });
+      } else {
+        await hostSetState({
+          ...base,
+          elapsedBeforePauseSec: 0,
+        });
+      }
+    },
+    [clampSectionIndex, hostSetState, runState.mode]
+  );
+
+  // Host auto-advance when timer hits 0 (only host does this)
+  const autoAdvanceGuardRef = useRef(false);
+  useEffect(() => {
+    if (!isHost) return;
+    if (!timerInfo.hasTimer) return;
+    if (runState.mode !== "running") return;
+    if (!sections.length) return;
+
+    if (timerInfo.remainingSec > 0) {
+      autoAdvanceGuardRef.current = false;
+      return;
+    }
+
+    if (autoAdvanceGuardRef.current) return;
+    autoAdvanceGuardRef.current = true;
+
+    // Next section or end
+    const nextIndex = runState.sectionIndex + 1;
+    if (nextIndex <= sections.length - 1) {
+      hostGoTo(nextIndex).catch(() => {
+        autoAdvanceGuardRef.current = false;
+      });
+    } else {
+      hostEnd().catch(() => {
+        autoAdvanceGuardRef.current = false;
+      });
+    }
+  }, [isHost, timerInfo.hasTimer, timerInfo.remainingSec, runState.mode, runState.sectionIndex, sections.length, hostGoTo, hostEnd]);
+
+  const onBack = useCallback(() => {
     if (navigation.canGoBack()) navigation.goBack();
-    else navigation.navigate("RootTabs");
+    else navigation.navigate("RootTabs" as any);
   }, [navigation]);
 
-  if (!hasValidEventId) {
-    return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
-        <View style={styles.center}>
-          <Text style={styles.err}>Missing or invalid event id.</Text>
-          <Pressable style={[styles.btn, styles.btnGhost]} onPress={handleBack}>
-            <Text style={styles.btnGhostText}>Back</Text>
-          </Pressable>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  if (!eventId) return null;
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
-        <View style={styles.center}>
-          <ActivityIndicator />
-          <Text style={styles.meta}>Loading event room…</Text>
-        </View>
-      </SafeAreaView>
+      <View style={styles.center}>
+        <ActivityIndicator />
+        <Text style={styles.muted}>Loading room…</Text>
+      </View>
     );
   }
 
-  if (!event) {
-    return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
-        <View style={styles.center}>
-          <Text style={styles.err}>Event not found.</Text>
-          <Pressable style={[styles.btn, styles.btnGhost]} onPress={handleBack}>
-            <Text style={styles.btnGhostText}>Back</Text>
-          </Pressable>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  const title = eventRow?.title ?? "Event";
+  const scriptTitle = scriptRow?.title ?? (eventRow?.script_id ? "Script" : "No script attached");
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.h1}>{(event as any).title}</Text>
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Pressable onPress={onBack} style={styles.backBtn}>
+          <Text style={styles.backText}>Back</Text>
+        </Pressable>
 
-        {!!(event as any).description && <Text style={styles.body}>{(event as any).description}</Text>}
-
-        <Text style={styles.body}>Intention: {(event as any).intention_statement}</Text>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Attached Script</Text>
-          <Text style={styles.meta}>
-            {(event as any).script_id
-              ? scriptDbRow?.title
-                ? scriptDbRow.title
-                : (event as any).script_id
-              : "(none)"}
+        <View style={{ flex: 1 }}>
+          <Text style={styles.h1}>{title}</Text>
+          <Text style={styles.sub}>
+            Script: <Text style={styles.mono}>{scriptTitle}</Text>
+          </Text>
+          <Text style={styles.sub}>
+            Session: <Text style={styles.mono}>{runStateReady ? runState.mode : "…"}</Text>
+            {isHost ? <Text style={styles.badge}> HOST </Text> : null}
           </Text>
         </View>
+      </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Live Presence</Text>
-
-          <Text style={styles.meta}>
-            Active now: <Text style={{ fontWeight: "900", color: "white" }}>{activeCount}</Text>
-          </Text>
-
-          <Text style={styles.meta}>
-            {new Date((event as any).start_time_utc).toLocaleString()} →{" "}
-            {new Date((event as any).end_time_utc).toLocaleString()} ({(event as any).timezone ?? "UTC"})
-          </Text>
-
-          {activePresence.length > 0 ? (
-            <View style={{ marginTop: 8 }}>
-              {activePresence.slice(0, 10).map((p) => (
-                <Text key={p.user_id} style={styles.meta}>
-                  • {shortId(p.user_id)} (seen{" "}
-                  {Math.max(
-                    0,
-                    Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000)
-                  )}
-                  s ago)
-                </Text>
-              ))}
-              {activePresence.length > 10 ? (
-                <Text style={styles.meta}>…and {activePresence.length - 10} more</Text>
-              ) : null}
-            </View>
+      {/* Presence */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Live presence</Text>
+        <View style={styles.row}>
+          {!joinedLive ? (
+            <Pressable onPress={joinLive} style={styles.primaryBtn}>
+              <Text style={styles.primaryBtnText}>Join live</Text>
+            </Pressable>
           ) : (
-            <Text style={[styles.meta, { marginTop: 8 }]}>No one active yet.</Text>
+            <Pressable onPress={leaveLive} style={styles.secondaryBtn}>
+              <Text style={styles.secondaryBtnText}>Leave</Text>
+            </Pressable>
           )}
 
-          <View style={styles.row}>
-            <Pressable
-              style={[styles.btn, styles.btnPrimary, isJoined && styles.disabled]}
-              onPress={handleJoinLive}
-              disabled={isJoined}
-            >
-              <Text style={styles.btnText}>Join live</Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.btn, styles.btnGhost, !isJoined && styles.disabled]}
-              onPress={handleLeaveLive}
-              disabled={!isJoined}
-            >
-              <Text style={styles.btnGhostText}>Leave live</Text>
-            </Pressable>
-
-            <Pressable style={[styles.btn, styles.btnGhost]} onPress={loadEventRoom}>
-              <Text style={styles.btnGhostText}>Refresh</Text>
-            </Pressable>
-          </View>
-
-          {!!presenceMsg && <Text style={styles.ok}>{presenceMsg}</Text>}
-          {!!presenceErr && <Text style={styles.err}>{presenceErr}</Text>}
+          <Text style={styles.muted}>{activePresence.length} active</Text>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Guided Flow</Text>
-
-          {!script ? (
-            <Text style={styles.meta}>
-              No script attached to this event yet. Attach one from the Events screen.
-            </Text>
-          ) : (
-            <>
-              <Text style={styles.cardTitle}>{script.title}</Text>
-              <Text style={styles.meta}>
-                Tone: {script.tone} | Duration: {script.durationMinutes} min
+        <FlatList
+          data={activePresence}
+          keyExtractor={(p) => `${p.event_id}:${p.user_id}`}
+          renderItem={({ item }) => (
+            <View style={styles.presenceRow}>
+              <Text style={styles.mono} numberOfLines={1}>
+                {item.user_id}
               </Text>
-
-              <View style={styles.timerBox}>
-                <Text style={styles.timerLabel}>
-                  Section {currentSectionIdx + 1} of {script.sections.length}
-                </Text>
-                <Text style={styles.timerValue}>{formatSeconds(secondsLeft)}</Text>
-                <Text style={styles.timerSub}>{currentSection?.name ?? "Section"}</Text>
-              </View>
-
-              <View style={styles.sectionCard}>
-                <Text style={styles.cardTitle}>{currentSection?.name}</Text>
-                <Text style={styles.meta}>{currentSection?.minutes ?? 0} min</Text>
-                <Text style={styles.body}>{currentSection?.text ?? ""}</Text>
-              </View>
-
-              <View style={styles.row}>
-                <Pressable
-                  style={[styles.btn, styles.btnGhost, currentSectionIdx === 0 && styles.disabled]}
-                  onPress={handlePrev}
-                  disabled={currentSectionIdx === 0}
-                >
-                  <Text style={styles.btnGhostText}>Previous</Text>
-                </Pressable>
-
-                <Pressable
-                  style={[
-                    styles.btn,
-                    styles.btnPrimary,
-                    currentSectionIdx >= script.sections.length - 1 && styles.disabled,
-                  ]}
-                  onPress={handleNext}
-                  disabled={currentSectionIdx >= script.sections.length - 1}
-                >
-                  <Text style={styles.btnText}>Next</Text>
-                </Pressable>
-              </View>
-
-              <View style={{ marginTop: 10 }}>
-                {script.sections.map((s, i) => (
-                  <Pressable
-                    key={`${s.name}-${i}`}
-                    onPress={() => setCurrentSectionIdx(i)}
-                    style={[
-                      styles.listItem,
-                      i === currentSectionIdx ? styles.listItemActive : undefined,
-                    ]}
-                  >
-                    <Text style={styles.listTitle}>
-                      {i + 1}. {s.name}
-                    </Text>
-                    <Text style={styles.meta}>{s.minutes} min</Text>
-                  </Pressable>
-                ))}
-              </View>
-
-              {!!script.speakerNotes && (
-                <View style={[styles.sectionCard, { marginTop: 10 }]}>
-                  <Text style={styles.cardTitle}>Speaker Notes</Text>
-                  <Text style={styles.body}>{script.speakerNotes}</Text>
-                </View>
-              )}
-            </>
+              <Text style={styles.mutedSmall}>last seen {formatTime(secondsBetweenIso(item.last_seen_at, nowIso()))} ago</Text>
+            </View>
           )}
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+          ListEmptyComponent={<Text style={styles.muted}>No one active (yet)</Text>}
+        />
+      </View>
+
+      {/* Guided flow */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Guided flow</Text>
+
+        {!scriptRow ? (
+          <Text style={styles.muted}>Attach a script to run a guided flow.</Text>
+        ) : sections.length === 0 ? (
+          <Text style={styles.muted}>This script has no sections.</Text>
+        ) : !currentSection ? (
+          <Text style={styles.muted}>Loading section…</Text>
+        ) : (
+          <>
+            <Text style={styles.sectionTitle}>
+              {currentSection.index + 1}/{sections.length}: {currentSection.section.title}
+            </Text>
+
+            {currentSection.section.body ? (
+              <Text style={styles.sectionBody}>{currentSection.section.body}</Text>
+            ) : null}
+
+            {timerInfo.hasTimer ? (
+              <View style={styles.timerBox}>
+                <Text style={styles.timerText}>{formatTime(timerInfo.remainingSec)}</Text>
+                <Text style={styles.mutedSmall}>
+                  duration {formatTime(timerInfo.durationSec)} • elapsed {formatTime(timerInfo.elapsedSec)}
+                </Text>
+              </View>
+            ) : (
+              <Text style={styles.mutedSmall}>No timer for this section.</Text>
+            )}
+
+            {/* Host controls */}
+            {isHost ? (
+              <View style={styles.hostControls}>
+                <Text style={styles.hostTitle}>Host controls</Text>
+
+                <View style={styles.rowWrap}>
+                  {runState.mode === "idle" || runState.mode === "ended" ? (
+                    <Pressable onPress={hostStart} style={styles.primaryBtn}>
+                      <Text style={styles.primaryBtnText}>Start</Text>
+                    </Pressable>
+                  ) : null}
+
+                  {runState.mode === "running" ? (
+                    <Pressable onPress={hostPause} style={styles.secondaryBtn}>
+                      <Text style={styles.secondaryBtnText}>Pause</Text>
+                    </Pressable>
+                  ) : null}
+
+                  {runState.mode === "paused" ? (
+                    <Pressable onPress={hostResume} style={styles.primaryBtn}>
+                      <Text style={styles.primaryBtnText}>Resume</Text>
+                    </Pressable>
+                  ) : null}
+
+                  <Pressable
+                    onPress={() => hostGoTo(currentSection.index - 1)}
+                    style={[styles.secondaryBtn, currentSection.index === 0 ? styles.disabled : null]}
+                    disabled={currentSection.index === 0}
+                  >
+                    <Text style={styles.secondaryBtnText}>Prev</Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => hostGoTo(currentSection.index + 1)}
+                    style={[
+                      styles.secondaryBtn,
+                      currentSection.index >= sections.length - 1 ? styles.disabled : null,
+                    ]}
+                    disabled={currentSection.index >= sections.length - 1}
+                  >
+                    <Text style={styles.secondaryBtnText}>Next</Text>
+                  </Pressable>
+
+                  {runState.mode !== "ended" ? (
+                    <Pressable onPress={hostEnd} style={styles.dangerBtn}>
+                      <Text style={styles.dangerBtnText}>End</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+
+                <Text style={styles.mutedSmall}>
+                  Tip: timers stay synced because everyone calculates time from the host’s <Text style={styles.mono}>startedAt</Text>.
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.attendeeNote}>
+                <Text style={styles.mutedSmall}>
+                  You’re viewing the host’s session. Only the host can change steps/timers.
+                </Text>
+              </View>
+            )}
+          </>
+        )}
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0B1020" },
-  content: { padding: 16, paddingBottom: 28 },
+  container: { flex: 1, padding: 12, gap: 12 },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
 
-  center: { flex: 1, justifyContent: "center", alignItems: "center", gap: 10 },
+  header: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  backBtn: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 10, borderWidth: 1, borderColor: "#ddd" },
+  backText: { fontSize: 14 },
 
-  h1: { color: "white", fontSize: 28, fontWeight: "800", marginBottom: 10 },
-  body: { color: "#D7E0FF", lineHeight: 20 },
-  meta: { color: "#93A3D9", fontSize: 12 },
+  h1: { fontSize: 20, fontWeight: "700" },
+  sub: { marginTop: 2, color: "#444" },
+  badge: { fontWeight: "700" },
+  mono: { fontFamily: "Courier", fontSize: 12 },
 
-  section: {
-    backgroundColor: "#151C33",
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "#2A365E",
-    padding: 12,
-    marginTop: 12,
-  },
-  sectionTitle: { color: "#DCE4FF", fontSize: 16, fontWeight: "700", marginBottom: 8 },
+  card: { borderWidth: 1, borderColor: "#eee", borderRadius: 14, padding: 12, gap: 10 },
+  cardTitle: { fontSize: 16, fontWeight: "700" },
 
-  row: { flexDirection: "row", gap: 10, marginTop: 10, flexWrap: "wrap" },
+  row: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  rowWrap: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 },
 
-  btn: {
-    borderRadius: 10,
-    paddingVertical: 11,
-    paddingHorizontal: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    minWidth: 110,
-  },
-  btnPrimary: { backgroundColor: "#5B8CFF" },
-  btnGhost: {
-    backgroundColor: "transparent",
-    borderWidth: 1,
-    borderColor: "#3E4C78",
-  },
-  btnText: { color: "white", fontWeight: "700" },
-  btnGhostText: { color: "#C8D3FF", fontWeight: "700" },
-  disabled: { opacity: 0.45 },
+  muted: { color: "#666" },
+  mutedSmall: { color: "#666", fontSize: 12 },
 
-  ok: { color: "#6EE7B7", marginTop: 8 },
-  err: { color: "#FB7185", marginTop: 8 },
+  primaryBtn: { backgroundColor: "#111", paddingVertical: 10, paddingHorizontal: 14, borderRadius: 12 },
+  primaryBtnText: { color: "#fff", fontWeight: "700" },
 
-  timerBox: {
-    marginTop: 10,
-    backgroundColor: "#0E1428",
-    borderWidth: 1,
-    borderColor: "#2A365E",
-    borderRadius: 12,
-    padding: 12,
-    alignItems: "center",
-  },
-  timerLabel: { color: "#9FB0E7", fontSize: 12 },
-  timerValue: {
-    color: "white",
-    fontSize: 42,
-    fontWeight: "800",
-    marginVertical: 2,
-    fontVariant: ["tabular-nums"],
-  },
-  timerSub: { color: "#D7E0FF", fontSize: 14, fontWeight: "600" },
+  secondaryBtn: { borderWidth: 1, borderColor: "#ddd", paddingVertical: 10, paddingHorizontal: 14, borderRadius: 12 },
+  secondaryBtnText: { color: "#111", fontWeight: "700" },
 
-  sectionCard: {
-    marginTop: 10,
-    backgroundColor: "#121A31",
-    borderWidth: 1,
-    borderColor: "#27345C",
-    borderRadius: 12,
-    padding: 12,
-  },
-  cardTitle: { color: "white", fontSize: 16, fontWeight: "700", marginBottom: 4 },
+  dangerBtn: { backgroundColor: "#a00", paddingVertical: 10, paddingHorizontal: 14, borderRadius: 12 },
+  dangerBtnText: { color: "#fff", fontWeight: "700" },
 
-  listItem: {
-    backgroundColor: "#101833",
-    borderWidth: 1,
-    borderColor: "#26345F",
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 8,
-  },
-  listItemActive: {
-    borderColor: "#6EA1FF",
-    backgroundColor: "#1A2C5F",
-  },
-  listTitle: { color: "#E4EBFF", fontWeight: "700", marginBottom: 2 },
+  disabled: { opacity: 0.4 },
+
+  presenceRow: { paddingVertical: 8, borderTopWidth: 1, borderTopColor: "#f1f1f1", gap: 2 },
+
+  sectionTitle: { fontSize: 16, fontWeight: "700" },
+  sectionBody: { fontSize: 14, lineHeight: 20 },
+
+  timerBox: { borderWidth: 1, borderColor: "#eee", borderRadius: 12, padding: 10, alignItems: "center", gap: 4 },
+  timerText: { fontSize: 28, fontWeight: "800" },
+
+  hostControls: { marginTop: 8, borderTopWidth: 1, borderTopColor: "#f1f1f1", paddingTop: 10, gap: 10 },
+  hostTitle: { fontSize: 14, fontWeight: "800" },
+
+  attendeeNote: { marginTop: 8, borderTopWidth: 1, borderTopColor: "#f1f1f1", paddingTop: 10 },
 });
