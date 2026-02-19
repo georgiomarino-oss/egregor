@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   FlatList,
+  Modal,
   Pressable,
   StyleSheet,
   Text,
@@ -10,73 +11,60 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../supabase/client";
-import type { EventItem, ScriptListItem } from "../types";
+import type { Database } from "../types/db";
 
-type ScriptRow = {
-  id: string;
-  author_user_id: string;
-  title: string;
-  intention: string;
-  duration_minutes: number;
-  tone: string;
-  content_json: any;
-  created_at: string;
-};
+type ScriptRow = Database["public"]["Tables"]["scripts"]["Row"];
+type ScriptInsert = Database["public"]["Tables"]["scripts"]["Insert"];
+type EventRow = Database["public"]["Tables"]["events"]["Row"];
 
 export default function ScriptsScreen() {
   const [loading, setLoading] = useState(false);
 
-  // create script form
+  // Create script form (lightweight; matches your existing pattern)
   const [title, setTitle] = useState("Peace Circle Script");
   const [intention, setIntention] = useState(
     "May people everywhere experience peace, clarity and compassion."
   );
   const [durationMinutes, setDurationMinutes] = useState("20");
-  const [tone, setTone] = useState<"calm" | "uplifting" | "focused">("calm");
+  const [tone, setTone] = useState("calm");
 
-  // data
   const [scripts, setScripts] = useState<ScriptRow[]>([]);
-  const [events, setEvents] = useState<EventItem[]>([]);
+  const [myEvents, setMyEvents] = useState<EventRow[]>([]);
 
-  // selection
-  const [selectedScriptId, setSelectedScriptId] = useState<string>("");
-  const [selectedEventId, setSelectedEventId] = useState<string>("");
+  // Attach modal state
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [attachScriptId, setAttachScriptId] = useState<string>("");
+  const [eventQuery, setEventQuery] = useState("");
 
   const selectedScript = useMemo(
-    () => scripts.find((s) => s.id === selectedScriptId) ?? null,
-    [scripts, selectedScriptId]
+    () => scripts.find((s) => s.id === attachScriptId) ?? null,
+    [scripts, attachScriptId]
   );
 
-  const selectedEvent = useMemo(
-    () => events.find((e) => e.id === selectedEventId) ?? null,
-    [events, selectedEventId]
-  );
+  const filteredEvents = useMemo(() => {
+    const q = eventQuery.trim().toLowerCase();
+    if (!q) return myEvents;
+    return myEvents.filter((e) => {
+      const t = (e.title ?? "").toLowerCase();
+      const d = (e.description ?? "").toLowerCase();
+      return t.includes(q) || d.includes(q);
+    });
+  }, [myEvents, eventQuery]);
 
   const loadScripts = useCallback(async () => {
-    setLoading(true);
-
     const { data, error } = await supabase
       .from("scripts")
-      .select("id,author_user_id,title,intention,duration_minutes,tone,content_json,created_at")
+      .select("*")
       .order("created_at", { ascending: false });
-
-    setLoading(false);
 
     if (error) {
       Alert.alert("Load scripts failed", error.message);
       return;
     }
+    setScripts((data ?? []) as ScriptRow[]);
+  }, []);
 
-    const rows = (data ?? []) as ScriptRow[];
-    setScripts(rows);
-
-    if (!selectedScriptId && rows.length > 0) setSelectedScriptId(rows[0].id);
-    if (selectedScriptId && !rows.some((r) => r.id === selectedScriptId)) {
-      setSelectedScriptId(rows[0]?.id ?? "");
-    }
-  }, [selectedScriptId]);
-
-  const loadMyEvents = useCallback(async () => {
+  const loadMyHostedEvents = useCallback(async () => {
     const {
       data: { user },
       error: userErr,
@@ -84,12 +72,9 @@ export default function ScriptsScreen() {
 
     if (userErr || !user) return;
 
-    // Only events YOU host — avoids "you can only attach to your own events"
     const { data, error } = await supabase
       .from("events")
-      .select(
-        "id,host_user_id,theme_id,title,description,intention_statement,visibility,guidance_mode,script_id,start_time_utc,end_time_utc,timezone,status,active_count_snapshot,total_join_count,created_at"
-      )
+      .select("*")
       .eq("host_user_id", user.id)
       .order("start_time_utc", { ascending: false });
 
@@ -97,72 +82,67 @@ export default function ScriptsScreen() {
       Alert.alert("Load events failed", error.message);
       return;
     }
+    setMyEvents((data ?? []) as EventRow[]);
+  }, []);
 
-    const rows = (data ?? []) as EventItem[];
-    setEvents(rows);
-
-    if (!selectedEventId && rows.length > 0) setSelectedEventId(rows[0].id);
-    if (selectedEventId && !rows.some((r) => r.id === selectedEventId)) {
-      setSelectedEventId(rows[0]?.id ?? "");
+  const refreshAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      await Promise.all([loadScripts(), loadMyHostedEvents()]);
+    } finally {
+      setLoading(false);
     }
-  }, [selectedEventId]);
+  }, [loadMyHostedEvents, loadScripts]);
 
   useEffect(() => {
-    loadScripts();
-    loadMyEvents();
-  }, [loadScripts, loadMyEvents]);
+    refreshAll();
+  }, [refreshAll]);
 
   const handleCreateScript = useCallback(async () => {
+    const mins = Number(durationMinutes);
+
+    if (!title.trim()) return Alert.alert("Validation", "Title is required.");
+    if (!intention.trim())
+      return Alert.alert("Validation", "Intention is required.");
+    if (!Number.isFinite(mins) || mins <= 0)
+      return Alert.alert("Validation", "Duration must be a positive number.");
+
+    const {
+      data: { user },
+      error: userErr,
+    } = await supabase.auth.getUser();
+
+    if (userErr || !user) {
+      Alert.alert("Not signed in", "Please sign in first.");
+      return;
+    }
+
+    setLoading(true);
     try {
-      const mins = Number(durationMinutes);
-      if (!title.trim()) {
-        Alert.alert("Validation", "Title is required.");
-        return;
-      }
-      if (!intention.trim()) {
-        Alert.alert("Validation", "Intention is required.");
-        return;
-      }
-      if (!Number.isFinite(mins) || mins <= 0) {
-        Alert.alert("Validation", "Duration must be a positive number.");
-        return;
-      }
-
-      const {
-        data: { user },
-        error: userErr,
-      } = await supabase.auth.getUser();
-
-      if (userErr || !user) {
-        Alert.alert("Not signed in", "Please sign in first.");
-        return;
-      }
-
-      setLoading(true);
-
-      // Minimal script content; your generate function can overwrite/update later if needed
-      const content_json = {
-        title: title.trim(),
-        durationMinutes: mins,
-        tone,
-        sections: [
-          { name: "Arrival", minutes: 2, text: "Take a breath and arrive." },
-          { name: "Intention", minutes: 6, text: intention.trim() },
-          { name: "Silence", minutes: 10, text: "Hold the intention in silence." },
-          { name: "Closing", minutes: 2, text: "Gently return and close." },
-        ],
-      };
-
-      const { error } = await supabase.from("scripts").insert({
-        author_user_id: user.id,
+      // If your scripts table has NOT NULL columns beyond these,
+      // TypeScript will force us to provide them here.
+      const payload: ScriptInsert = {
+        // Many schemas name this author_user_id; yours may differ.
+        // If TS errors here, we’ll use the exact field from db.ts.
+        author_user_id: user.id as any,
         title: title.trim(),
         intention: intention.trim(),
-        duration_minutes: mins,
-        tone,
-        content_json,
-      });
+        duration_minutes: mins as any,
+        tone: tone as any,
+        content_json: {
+          title: title.trim(),
+          durationMinutes: mins,
+          tone,
+          sections: [
+            { name: "Arrival", minutes: 2, text: "Take a breath and arrive." },
+            { name: "Intention", minutes: 6, text: intention.trim() },
+            { name: "Silence", minutes: 10, text: "Hold the intention in silence." },
+            { name: "Closing", minutes: 2, text: "Gently return and close." },
+          ],
+        } as any,
+      };
 
-      setLoading(false);
+      const { error } = await supabase.from("scripts").insert(payload);
 
       if (error) {
         Alert.alert("Create script failed", error.message);
@@ -170,24 +150,26 @@ export default function ScriptsScreen() {
       }
 
       Alert.alert("Success", "Script created.");
-      await loadScripts();
+      await refreshAll();
     } catch (e: any) {
-      setLoading(false);
       Alert.alert("Create script failed", e?.message ?? "Unknown error");
+    } finally {
+      setLoading(false);
     }
-  }, [title, intention, durationMinutes, tone, loadScripts]);
+  }, [durationMinutes, intention, refreshAll, title, tone]);
 
-  const handleAttach = useCallback(async () => {
-    try {
-      if (!selectedScriptId) {
-        Alert.alert("Pick a script", "Select a script first.");
-        return;
-      }
-      if (!selectedEventId) {
-        Alert.alert("Pick an event", "Select one of your events first.");
-        return;
-      }
+  const openAttachForScript = useCallback(
+    async (scriptId: string) => {
+      setAttachScriptId(scriptId);
+      setEventQuery("");
+      setAttachOpen(true);
+      await loadMyHostedEvents();
+    },
+    [loadMyHostedEvents]
+  );
 
+  const updateEventScript = useCallback(
+    async (event: EventRow, nextScriptId: string | null) => {
       const {
         data: { user },
         error: userErr,
@@ -198,126 +180,225 @@ export default function ScriptsScreen() {
         return;
       }
 
-      // Optional safety check client-side
-      const ev = events.find((e) => e.id === selectedEventId);
-      if (!ev) {
-        Alert.alert("Event not found", "Refresh events and try again.");
-        return;
-      }
-      if (ev.host_user_id !== user.id) {
-        Alert.alert("Not allowed", "You can only attach scripts to your own events.");
+      if (event.host_user_id !== user.id) {
+        Alert.alert("Not allowed", "Only the host can change this event’s script.");
         return;
       }
 
       setLoading(true);
+      try {
+        const { error } = await supabase
+          .from("events")
+          .update({ script_id: nextScriptId })
+          .eq("id", event.id);
 
-      const { error } = await supabase
-        .from("events")
-        .update({ script_id: selectedScriptId })
-        .eq("id", selectedEventId);
+        if (error) {
+          Alert.alert("Update failed", error.message);
+          return;
+        }
 
-      setLoading(false);
+        await loadMyHostedEvents();
+      } finally {
+        setLoading(false);
+      }
+    },
+    [loadMyHostedEvents]
+  );
 
-      if (error) {
-        Alert.alert("Attach failed", error.message);
+  const attachToEvent = useCallback(
+    async (event: EventRow) => {
+      if (!attachScriptId) return;
+
+      if (event.script_id === attachScriptId) {
+        Alert.alert("Already attached", "This event already uses that script.");
         return;
       }
 
+      if (event.script_id && event.script_id !== attachScriptId) {
+        Alert.alert(
+          "Replace script?",
+          "This event already has a script attached. Replace it?",
+          [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Replace",
+              style: "destructive",
+              onPress: () => updateEventScript(event, attachScriptId),
+            },
+          ]
+        );
+        return;
+      }
+
+      await updateEventScript(event, attachScriptId);
       Alert.alert("Attached", "Script attached to event.");
-      await loadMyEvents();
-    } catch (e: any) {
-      setLoading(false);
-      Alert.alert("Attach failed", e?.message ?? "Unknown error");
-    }
-  }, [selectedScriptId, selectedEventId, events, loadMyEvents]);
+    },
+    [attachScriptId, updateEventScript]
+  );
 
-  const renderScript = ({ item }: { item: ScriptRow }) => {
-    const selected = item.id === selectedScriptId;
-    return (
-      <Pressable
-        onPress={() => setSelectedScriptId(item.id)}
-        style={[styles.card, selected && styles.cardSelected]}
-      >
-        <Text style={styles.cardTitle}>{item.title}</Text>
-        <Text style={styles.meta}>Tone: {item.tone}</Text>
-        <Text style={styles.meta}>Duration: {item.duration_minutes} min</Text>
-        <Text style={styles.meta}>Intention: {item.intention}</Text>
-        <Text style={styles.meta}>ID: {item.id}</Text>
-      </Pressable>
-    );
-  };
+  const detachFromEvent = useCallback(
+    async (event: EventRow) => {
+      if (!event.script_id) return;
 
-  const renderEventPick = ({ item }: { item: EventItem }) => {
-    const selected = item.id === selectedEventId;
+      Alert.alert("Detach script?", "Remove the current script from this event?", [
+        { text: "Cancel", style: "cancel" },
+        { text: "Detach", style: "destructive", onPress: () => updateEventScript(event, null) },
+      ]);
+    },
+    [updateEventScript]
+  );
+
+  const renderScript = ({ item }: { item: ScriptRow }) => (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>{(item as any).title ?? "Untitled"}</Text>
+
+      {"tone" in (item as any) ? (
+        <Text style={styles.meta}>Tone: {(item as any).tone}</Text>
+      ) : null}
+
+      {"duration_minutes" in (item as any) ? (
+        <Text style={styles.meta}>Duration: {(item as any).duration_minutes} min</Text>
+      ) : null}
+
+      {"intention" in (item as any) ? (
+        <Text style={styles.meta} numberOfLines={2}>
+          Intention: {(item as any).intention}
+        </Text>
+      ) : null}
+
+      <View style={styles.row}>
+        <Pressable
+          onPress={() => openAttachForScript(item.id)}
+          style={[styles.btn, styles.btnPrimary, loading && styles.disabled]}
+          disabled={loading}
+        >
+          <Text style={styles.btnText}>Attach</Text>
+        </Pressable>
+      </View>
+
+      <Text style={styles.metaSmall}>ID: {item.id}</Text>
+    </View>
+  );
+
+  const renderEventRow = ({ item }: { item: EventRow }) => {
+    const isUsingSelected = !!attachScriptId && item.script_id === attachScriptId;
+
     return (
-      <Pressable
-        onPress={() => setSelectedEventId(item.id)}
-        style={[styles.cardSmall, selected && styles.cardSelected]}
-      >
-        <Text style={styles.cardTitle}>{item.title}</Text>
-        <Text style={styles.meta}>
+      <View style={styles.eventCard}>
+        <Text style={styles.eventTitle} numberOfLines={1}>
+          {item.title}
+        </Text>
+        <Text style={styles.eventMeta} numberOfLines={1}>
           {new Date(item.start_time_utc).toLocaleString()} ({item.timezone ?? "UTC"})
         </Text>
-        <Text style={styles.meta}>Current script: {item.script_id ?? "(none)"}</Text>
-      </Pressable>
+
+        <Text style={styles.eventMeta} numberOfLines={1}>
+          Current: {item.script_id ? item.script_id : "(none)"}
+        </Text>
+
+        <View style={styles.row}>
+          <Pressable
+            onPress={() => attachToEvent(item)}
+            style={[
+              styles.btn,
+              isUsingSelected ? styles.btnGhost : styles.btnPrimary,
+              (loading || !attachScriptId) && styles.disabled,
+            ]}
+            disabled={loading || !attachScriptId}
+          >
+            <Text style={isUsingSelected ? styles.btnGhostText : styles.btnText}>
+              {isUsingSelected ? "Using Selected" : "Attach"}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => detachFromEvent(item)}
+            style={[
+              styles.btn,
+              styles.btnDanger,
+              (loading || !item.script_id) && styles.disabled,
+            ]}
+            disabled={loading || !item.script_id}
+          >
+            <Text style={styles.btnText}>Detach</Text>
+          </Pressable>
+        </View>
+      </View>
     );
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
+    <SafeAreaView style={styles.safe}>
       <FlatList
         data={scripts}
         keyExtractor={(item) => item.id}
         renderItem={renderScript}
         contentContainerStyle={styles.content}
         ListHeaderComponent={
-          <View>
+          <View style={{ gap: 12 }}>
             <Text style={styles.h1}>Scripts</Text>
 
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Create Script</Text>
 
               <Text style={styles.label}>Title</Text>
-              <TextInput style={styles.input} value={title} onChangeText={setTitle} />
+              <TextInput
+                value={title}
+                onChangeText={setTitle}
+                style={styles.input}
+                placeholder="Script title"
+                placeholderTextColor="#6B7BB2"
+              />
 
               <Text style={styles.label}>Intention</Text>
               <TextInput
-                style={[styles.input, styles.multi]}
                 value={intention}
                 onChangeText={setIntention}
+                style={[styles.input, styles.multi]}
                 multiline
-              />
-
-              <Text style={styles.label}>Duration (minutes)</Text>
-              <TextInput
-                style={styles.input}
-                value={durationMinutes}
-                onChangeText={setDurationMinutes}
-                keyboardType="number-pad"
-              />
-
-              <Text style={styles.label}>Tone (calm / uplifting / focused)</Text>
-              <TextInput
-                style={styles.input}
-                value={tone}
-                onChangeText={(v) => setTone((v as any) || "calm")}
+                placeholder="What is this script for?"
+                placeholderTextColor="#6B7BB2"
               />
 
               <View style={styles.row}>
+                <View style={{ flex: 1, minWidth: 140 }}>
+                  <Text style={styles.label}>Duration (minutes)</Text>
+                  <TextInput
+                    value={durationMinutes}
+                    onChangeText={setDurationMinutes}
+                    keyboardType="numeric"
+                    style={styles.input}
+                    placeholder="20"
+                    placeholderTextColor="#6B7BB2"
+                  />
+                </View>
+
+                <View style={{ flex: 1, minWidth: 140 }}>
+                  <Text style={styles.label}>Tone</Text>
+                  <TextInput
+                    value={tone}
+                    onChangeText={setTone}
+                    style={styles.input}
+                    placeholder="calm"
+                    placeholderTextColor="#6B7BB2"
+                  />
+                </View>
+              </View>
+
+              <View style={styles.row}>
                 <Pressable
-                  style={[styles.btn, styles.btnPrimary, loading && styles.disabled]}
                   onPress={handleCreateScript}
+                  style={[styles.btn, styles.btnPrimary, loading && styles.disabled]}
                   disabled={loading}
                 >
-                  <Text style={styles.btnText}>{loading ? "Working..." : "Create script"}</Text>
+                  <Text style={styles.btnText}>
+                    {loading ? "Working..." : "Create script"}
+                  </Text>
                 </Pressable>
 
                 <Pressable
+                  onPress={refreshAll}
                   style={[styles.btn, styles.btnGhost, loading && styles.disabled]}
-                  onPress={() => {
-                    loadScripts();
-                    loadMyEvents();
-                  }}
                   disabled={loading}
                 >
                   <Text style={styles.btnGhostText}>Refresh</Text>
@@ -326,53 +407,63 @@ export default function ScriptsScreen() {
             </View>
 
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Attach Script to Your Event</Text>
-
+              <Text style={styles.sectionTitle}>Attach Script to Event</Text>
               <Text style={styles.meta}>
-                Selected script: {selectedScript ? selectedScript.title : "(none)"}
+                Tap “Attach” on a script, then choose one of your hosted events.
               </Text>
-              <Text style={styles.meta}>
-                Selected event: {selectedEvent ? selectedEvent.title : "(none)"}
-              </Text>
-
-              <Text style={[styles.label, { marginTop: 12 }]}>Pick one of your events</Text>
-              {events.length === 0 ? (
-                <Text style={styles.empty}>
-                  No hosted events found. Create an event in Events tab first.
-                </Text>
-              ) : (
-                <FlatList
-                  data={events}
-                  keyExtractor={(e) => e.id}
-                  renderItem={renderEventPick}
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={{ gap: 10, paddingVertical: 6 }}
-                />
-              )}
-
-              <View style={styles.row}>
-                <Pressable
-                  style={[
-                    styles.btn,
-                    styles.btnPrimary,
-                    (!selectedScriptId || !selectedEventId || loading) && styles.disabled,
-                  ]}
-                  onPress={handleAttach}
-                  disabled={!selectedScriptId || !selectedEventId || loading}
-                >
-                  <Text style={styles.btnText}>Attach to event</Text>
-                </Pressable>
-              </View>
             </View>
-
-            <Text style={styles.sectionTitle}>All Scripts</Text>
           </View>
         }
         ListEmptyComponent={
           <Text style={styles.empty}>{loading ? "Loading..." : "No scripts yet."}</Text>
         }
       />
+
+      <Modal
+        visible={attachOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAttachOpen(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Attach Script</Text>
+              <Pressable onPress={() => setAttachOpen(false)} style={styles.modalClose}>
+                <Text style={styles.btnText}>Close</Text>
+              </Pressable>
+            </View>
+
+            <Text style={styles.modalMeta}>
+              Selected script:{" "}
+              <Text style={{ fontWeight: "800", color: "white" }}>
+                {selectedScript ? (selectedScript as any).title : "(none)"}
+              </Text>
+            </Text>
+
+            <TextInput
+              value={eventQuery}
+              onChangeText={setEventQuery}
+              style={styles.input}
+              placeholder="Search your events…"
+              placeholderTextColor="#6B7BB2"
+            />
+
+            {myEvents.length === 0 ? (
+              <Text style={styles.empty}>
+                No hosted events found. Create one in Events first.
+              </Text>
+            ) : (
+              <FlatList
+                data={filteredEvents}
+                keyExtractor={(e) => e.id}
+                renderItem={renderEventRow}
+                contentContainerStyle={{ paddingTop: 10, paddingBottom: 6, gap: 10 }}
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -380,7 +471,7 @@ export default function ScriptsScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B1020" },
   content: { padding: 16, paddingBottom: 32 },
-  h1: { color: "white", fontSize: 28, fontWeight: "800", marginBottom: 12 },
+  h1: { color: "white", fontSize: 28, fontWeight: "800", marginBottom: 4 },
 
   section: {
     backgroundColor: "#151C33",
@@ -388,9 +479,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#2A365E",
     padding: 12,
-    marginBottom: 12,
   },
-  sectionTitle: { color: "#DCE4FF", fontSize: 16, fontWeight: "700", marginBottom: 8 },
+  sectionTitle: {
+    color: "#DCE4FF",
+    fontSize: 16,
+    fontWeight: "700",
+    marginBottom: 8,
+  },
 
   label: { color: "#B9C3E6", fontSize: 12, marginBottom: 6, marginTop: 8 },
   input: {
@@ -412,7 +507,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     alignItems: "center",
     justifyContent: "center",
-    minWidth: 120,
+    minWidth: 110,
   },
   btnPrimary: { backgroundColor: "#5B8CFF" },
   btnGhost: {
@@ -420,8 +515,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#3E4C78",
   },
-  btnText: { color: "white", fontWeight: "700" },
-  btnGhostText: { color: "#C8D3FF", fontWeight: "700" },
+  btnDanger: { backgroundColor: "#FB7185" },
+  btnText: { color: "white", fontWeight: "800" },
+  btnGhostText: { color: "#C8D3FF", fontWeight: "800" },
   disabled: { opacity: 0.45 },
 
   card: {
@@ -432,17 +528,49 @@ const styles = StyleSheet.create({
     padding: 12,
     marginBottom: 10,
   },
-  cardSmall: {
+  cardTitle: { color: "white", fontSize: 16, fontWeight: "700", marginBottom: 6 },
+  meta: { color: "#93A3D9", fontSize: 12, lineHeight: 16 },
+  metaSmall: { color: "#6F83C6", fontSize: 11, marginTop: 10 },
+
+  empty: { color: "#9EB0E3", marginTop: 10 },
+
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    padding: 16,
+    justifyContent: "flex-end",
+  },
+  modalCard: {
+    maxHeight: "85%",
+    backgroundColor: "#0B1020",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#2A365E",
+    padding: 12,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginBottom: 10,
+  },
+  modalTitle: { color: "white", fontSize: 18, fontWeight: "900" },
+  modalClose: {
+    backgroundColor: "#3E4C78",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  modalMeta: { color: "#B9C3E6", marginBottom: 10 },
+
+  eventCard: {
     backgroundColor: "#121A31",
     borderRadius: 12,
     borderWidth: 1,
     borderColor: "#27345C",
     padding: 12,
-    width: 280,
   },
-  cardSelected: { borderColor: "#6EA1FF", backgroundColor: "#1A2C5F" },
-  cardTitle: { color: "white", fontSize: 16, fontWeight: "700", marginBottom: 6 },
-  meta: { color: "#93A3D9", fontSize: 12 },
-
-  empty: { color: "#9EB0E3", marginTop: 8 },
+  eventTitle: { color: "white", fontSize: 14, fontWeight: "800" },
+  eventMeta: { color: "#93A3D9", fontSize: 12, marginTop: 4 },
 });
