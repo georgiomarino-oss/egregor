@@ -1,3 +1,4 @@
+// mobile/src/screens/EventRoomScreen.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -19,6 +20,19 @@ type Props = NativeStackScreenProps<RootStackParamList, "EventRoom">;
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type ScriptDbRow = Database["public"]["Tables"]["scripts"]["Row"];
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
+
+// Profiles table (works even if db.ts hasn’t been regenerated yet)
+type ProfileRow =
+  | (Database extends { public: { Tables: { profiles: { Row: infer R } } } }
+      ? Database["public"]["Tables"]["profiles"]["Row"]
+      : {
+          id: string;
+          display_name: string | null;
+          avatar_url: string | null;
+          created_at: string;
+          updated_at: string;
+        })
+  | any;
 
 type ScriptSection = {
   name: string;
@@ -90,6 +104,10 @@ function shortId(id: string) {
   return `${id.slice(0, 6)}…${id.slice(-4)}`;
 }
 
+function uniqStrings(xs: string[]) {
+  return Array.from(new Set(xs.filter(Boolean)));
+}
+
 export default function EventRoomScreen({ route, navigation }: Props) {
   const eventId = route.params?.eventId ?? "";
   const hasValidEventId = !!eventId && isLikelyUuid(eventId);
@@ -101,10 +119,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     Pick<ScriptDbRow, "id" | "title" | "content_json"> | null
   >(null);
   const [script, setScript] = useState<ScriptContent | null>(null);
-  const [scriptLoadError, setScriptLoadError] = useState<string>("");
 
   // Presence
   const [presenceRows, setPresenceRows] = useState<PresenceRow[]>([]);
+  const [profilesById, setProfilesById] = useState<Record<string, ProfileRow>>({});
   const [isJoined, setIsJoined] = useState(false);
   const [presenceMsg, setPresenceMsg] = useState("");
   const [presenceErr, setPresenceErr] = useState("");
@@ -140,6 +158,59 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }, 1000);
   }, [sectionTotalSeconds, stopTimer]);
 
+  const loadScriptById = useCallback(async (scriptId: string | null) => {
+    if (!scriptId) {
+      setScriptDbRow(null);
+      setScript(null);
+      return;
+    }
+
+    const { data: scData, error: scErr } = await supabase
+      .from("scripts")
+      .select("id,title,content_json")
+      .eq("id", scriptId)
+      .single();
+
+    if (scErr || !scData) {
+      setScriptDbRow(null);
+      setScript(null);
+      return;
+    }
+
+    const row = scData as Pick<ScriptDbRow, "id" | "title" | "content_json">;
+    setScriptDbRow(row);
+    setScript(parseScriptContent(row.content_json));
+    setCurrentSectionIdx(0);
+  }, []);
+
+  const loadProfilesForUserIds = useCallback(async (userIds: string[]) => {
+    const ids = uniqStrings(userIds);
+    if (ids.length === 0) return;
+
+    // Avoid refetching ids we already have
+    const missing = ids.filter((id) => !profilesById[id]);
+    if (missing.length === 0) return;
+
+    const { data, error } = await supabase
+      .from("profiles" as any)
+      .select("id,display_name,avatar_url,created_at,updated_at")
+      .in("id", missing);
+
+    if (error) {
+      // non-fatal: we can still show short ids
+      return;
+    }
+
+    const rows = (data ?? []) as ProfileRow[];
+    setProfilesById((prev) => {
+      const next = { ...prev };
+      for (const r of rows) {
+        if (r?.id) next[r.id] = r;
+      }
+      return next;
+    });
+  }, [profilesById]);
+
   const loadPresence = useCallback(async () => {
     if (!hasValidEventId) {
       setPresenceRows([]);
@@ -151,62 +222,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       .select("event_id,user_id,joined_at,last_seen_at,created_at")
       .eq("event_id", eventId);
 
-    if (error) return;
+    if (error) {
+      // keep screen usable; presence is secondary
+      return;
+    }
 
-    setPresenceRows((data ?? []) as PresenceRow[]);
-  }, [eventId, hasValidEventId]);
+    const rows = (data ?? []) as PresenceRow[];
+    setPresenceRows(rows);
 
-  // ✅ Key fix: use maybeSingle() for scripts to avoid "cannot coerce..." when 0 rows (RLS)
-  const loadScriptById = useCallback(
-    async (scriptId: string | null, opts?: { retries?: number }) => {
-      const retries = opts?.retries ?? 0;
-
-      if (!scriptId) {
-        setScriptDbRow(null);
-        setScript(null);
-        setScriptLoadError("");
-        return;
-      }
-
-      const { data: scData, error: scErr } = await supabase
-        .from("scripts")
-        .select("id,title,content_json")
-        .eq("id", scriptId)
-        .maybeSingle(); // <-- important
-
-      if (scErr) {
-        setScriptDbRow(null);
-        setScript(null);
-        setScriptLoadError(scErr.message);
-
-        if (retries > 0) {
-          setTimeout(() => loadScriptById(scriptId, { retries: retries - 1 }), 1200);
-        }
-        return;
-      }
-
-      if (!scData) {
-        // Most likely RLS hiding the row for this user/session
-        setScriptDbRow(null);
-        setScript(null);
-        setScriptLoadError("Script row not visible (likely blocked by scripts RLS for this user).");
-
-        if (retries > 0) {
-          setTimeout(() => loadScriptById(scriptId, { retries: retries - 1 }), 1200);
-        }
-        return;
-      }
-
-      const row = scData as Pick<ScriptDbRow, "id" | "title" | "content_json">;
-      setScriptDbRow(row);
-      setScriptLoadError("");
-
-      const parsed = parseScriptContent(row.content_json);
-      setScript(parsed);
-      setCurrentSectionIdx(0);
-    },
-    []
-  );
+    // load profiles for those users
+    await loadProfilesForUserIds(rows.map((r) => r.user_id));
+  }, [eventId, hasValidEventId, loadProfilesForUserIds]);
 
   const loadEventRoom = useCallback(async () => {
     if (!hasValidEventId) {
@@ -215,7 +241,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setScript(null);
       setScriptDbRow(null);
       setPresenceRows([]);
-      setScriptLoadError("");
       return;
     }
 
@@ -238,7 +263,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setEvent(null);
       setScript(null);
       setScriptDbRow(null);
-      setScriptLoadError("");
       Alert.alert("Event load failed", evErr?.message ?? "Event not found");
       return;
     }
@@ -248,11 +272,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
     await Promise.all([
       loadPresence(),
-      loadScriptById(eventRow.script_id ?? null, { retries: 1 }),
+      loadScriptById((eventRow as any).script_id ?? null),
+      loadProfilesForUserIds([(eventRow as any).host_user_id].filter(Boolean) as string[]),
     ]);
 
     setLoading(false);
-  }, [eventId, hasValidEventId, loadPresence, loadScriptById]);
+  }, [eventId, hasValidEventId, loadPresence, loadProfilesForUserIds, loadScriptById]);
 
   useEffect(() => {
     loadEventRoom();
@@ -276,6 +301,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           const next = payload.new as Partial<EventRow> | null;
           const prev = payload.old as Partial<EventRow> | null;
 
+          // Update local event state
           setEvent((cur) => {
             if (!cur) return cur;
             return { ...cur, ...(next as any) };
@@ -288,7 +314,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             stopTimer();
             setSecondsLeft(0);
             setCurrentSectionIdx(0);
-            await loadScriptById(nextScriptId, { retries: 2 });
+            await loadScriptById(nextScriptId);
+          }
+
+          const nextHost = (next as any)?.host_user_id;
+          if (nextHost) {
+            await loadProfilesForUserIds([String(nextHost)]);
           }
         }
       )
@@ -297,7 +328,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [eventId, hasValidEventId, loadScriptById, stopTimer]);
+  }, [eventId, hasValidEventId, loadProfilesForUserIds, loadScriptById, stopTimer]);
 
   // Timer reset on section change
   useEffect(() => {
@@ -398,6 +429,15 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   const activeCount = activePresence.length;
 
+  const displayNameForUser = useCallback(
+    (userId: string) => {
+      const p = profilesById[userId];
+      const name = p?.display_name ? String(p.display_name).trim() : "";
+      return name ? name : shortId(userId);
+    },
+    [profilesById]
+  );
+
   const handleJoinLive = useCallback(async () => {
     if (!hasValidEventId) {
       Alert.alert("Missing event", "This screen was opened without a valid event id.");
@@ -478,10 +518,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }
   }, [eventId, hasValidEventId, loadPresence]);
 
-  const handlePrev = useCallback(
-    () => setCurrentSectionIdx((i) => Math.max(0, i - 1)),
-    []
-  );
+  const handlePrev = useCallback(() => setCurrentSectionIdx((i) => Math.max(0, i - 1)), []);
   const handleNext = useCallback(() => {
     if (!script?.sections?.length) return;
     setCurrentSectionIdx((i) => Math.min(script.sections.length - 1, i + 1));
@@ -528,12 +565,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     );
   }
 
-  const attachedScriptLabel =
-    event.script_id && scriptDbRow?.title
-      ? scriptDbRow.title
-      : event.script_id
-      ? event.script_id
-      : "(none)";
+  const hostId = String((event as any).host_user_id ?? "");
+  const hostLabel = hostId ? displayNameForUser(hostId) : "";
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -545,21 +578,19 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         <Text style={styles.body}>Intention: {event.intention_statement}</Text>
 
         <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Host</Text>
+          <Text style={styles.meta}>{hostLabel || "(unknown)"}</Text>
+        </View>
+
+        <View style={styles.section}>
           <Text style={styles.sectionTitle}>Attached Script</Text>
-          <Text style={styles.meta}>{attachedScriptLabel}</Text>
-
-          {!!event.script_id && !scriptDbRow?.title ? (
-            <Text style={[styles.meta, { marginTop: 6 }]}>
-              Showing script id ({shortId(event.script_id)}).{" "}
-              {scriptLoadError ? `Script load error: ${scriptLoadError}` : "Loading title…"}
-            </Text>
-          ) : null}
-
-          <View style={styles.row}>
-            <Pressable style={[styles.btn, styles.btnGhost]} onPress={loadEventRoom}>
-              <Text style={styles.btnGhostText}>Refresh</Text>
-            </Pressable>
-          </View>
+          <Text style={styles.meta}>
+            {event.script_id
+              ? scriptDbRow?.title
+                ? scriptDbRow.title
+                : event.script_id
+              : "(none)"}
+          </Text>
         </View>
 
         <View style={styles.section}>
@@ -576,16 +607,21 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
           {activePresence.length > 0 ? (
             <View style={{ marginTop: 8 }}>
-              {activePresence.slice(0, 10).map((p) => (
-                <Text key={p.user_id} style={styles.meta}>
-                  • {shortId(p.user_id)} (seen{" "}
-                  {Math.max(
-                    0,
-                    Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000)
-                  )}
-                  s ago)
-                </Text>
-              ))}
+              {activePresence.slice(0, 10).map((p) => {
+                const label = displayNameForUser(p.user_id);
+                const isHost = hostId && p.user_id === hostId;
+                const seenSec = Math.max(
+                  0,
+                  Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000)
+                );
+
+                return (
+                  <Text key={p.user_id} style={styles.meta}>
+                    • {label}
+                    {isHost ? " (host)" : ""} — seen {seenSec}s ago
+                  </Text>
+                );
+              })}
               {activePresence.length > 10 ? (
                 <Text style={styles.meta}>…and {activePresence.length - 10} more</Text>
               ) : null}
@@ -610,6 +646,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             >
               <Text style={styles.btnGhostText}>Leave live</Text>
             </Pressable>
+
+            <Pressable style={[styles.btn, styles.btnGhost]} onPress={loadEventRoom}>
+              <Text style={styles.btnGhostText}>Refresh</Text>
+            </Pressable>
           </View>
 
           {!!presenceMsg && <Text style={styles.ok}>{presenceMsg}</Text>}
@@ -621,7 +661,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
           {!script ? (
             <Text style={styles.meta}>
-              No script content loaded yet. If a script is attached, this may be a permissions issue.
+              No script attached to this event yet. Attach one from the Scripts screen.
             </Text>
           ) : (
             <>
