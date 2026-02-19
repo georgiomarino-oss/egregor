@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../supabase/client";
 import type { RootStackParamList } from "../types";
 import type { Database } from "../types/db";
@@ -123,6 +124,27 @@ function statusPillStyle(mode: EventRunMode) {
   }
 }
 
+function joinPrefKey(eventId: string) {
+  return `joined:event:${eventId}`;
+}
+
+async function readJoinPref(eventId: string): Promise<boolean> {
+  try {
+    const v = await AsyncStorage.getItem(joinPrefKey(eventId));
+    return v === "1";
+  } catch {
+    return false;
+  }
+}
+
+async function writeJoinPref(eventId: string, joined: boolean): Promise<void> {
+  try {
+    await AsyncStorage.setItem(joinPrefKey(eventId), joined ? "1" : "0");
+  } catch {
+    // ignore
+  }
+}
+
 export default function EventRoomScreen({ route, navigation }: Props) {
   const eventId = route.params?.eventId ?? "";
   const hasValidEventId = !!eventId && isLikelyUuid(eventId);
@@ -144,6 +166,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const [presenceMsg, setPresenceMsg] = useState("");
   const [presenceErr, setPresenceErr] = useState("");
 
+  // Join preference loaded
+  const [joinPrefLoaded, setJoinPrefLoaded] = useState(false);
+  const [shouldAutoJoin, setShouldAutoJoin] = useState(false);
+
   // Run state (synced)
   const [runState, setRunState] = useState<EventRunStateV1>({
     version: 1,
@@ -164,17 +190,14 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   const hasScript = !!script && !!script.sections?.length;
 
-  // Attendee preview: if set, they are viewing a section different from host
+  // Attendee preview
   const [previewSectionIdx, setPreviewSectionIdx] = useState<number | null>(null);
 
-  // Reset preview whenever script changes (attach/detach) or host changes section
   useEffect(() => {
     if (isHost) {
       setPreviewSectionIdx(null);
       return;
     }
-    // if the host moves and you were previewing, keep preview; user can "follow host"
-    // but if script disappears, clear
     if (!hasScript) setPreviewSectionIdx(null);
   }, [isHost, hasScript, runState.sectionIndex]);
 
@@ -208,8 +231,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return Math.max(1, Math.floor(currentSection.minutes * 60));
   }, [currentSection]);
 
-  // Only show synced timer when you're following the host's live section AND host is on that section.
-  // If attendee is previewing another section, show a static "Preview" timer based on full duration.
   const secondsLeft = useMemo(() => {
     if (!script || !currentSection) return 0;
 
@@ -351,6 +372,23 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     loadEventRoom();
   }, [loadEventRoom]);
 
+  // Load join preference for this event (sticky join)
+  useEffect(() => {
+    let cancelled = false;
+    if (!hasValidEventId) return;
+
+    (async () => {
+      const pref = await readJoinPref(eventId);
+      if (cancelled) return;
+      setShouldAutoJoin(pref);
+      setJoinPrefLoaded(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [eventId, hasValidEventId]);
+
   useEffect(() => {
     if (tickRef.current) clearInterval(tickRef.current);
     tickRef.current = setInterval(() => setTick((t) => t + 1), 500);
@@ -420,6 +458,51 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [eventId, hasValidEventId, loadPresence]);
 
+  // Auto-join if preference says they previously joined this event
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!hasValidEventId) return;
+    if (!joinPrefLoaded) return;
+    if (!shouldAutoJoin) return;
+    if (isJoined) return;
+
+    (async () => {
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (!user || cancelled) return;
+
+        const now = new Date().toISOString();
+        const { error: upErr } = await supabase.from("event_presence").upsert(
+          { event_id: eventId, user_id: user.id, last_seen_at: now, created_at: now },
+          { onConflict: "event_id,user_id" }
+        );
+
+        if (cancelled) return;
+
+        if (upErr) {
+          // Don't spam; just keep them not-joined.
+          setPresenceErr(upErr.message);
+          return;
+        }
+
+        setIsJoined(true);
+        setPresenceMsg("✅ You joined live.");
+        await loadPresence();
+      } catch (e: any) {
+        if (!cancelled) setPresenceErr(e?.message ?? "Auto-join failed.");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [eventId, hasValidEventId, joinPrefLoaded, shouldAutoJoin, isJoined, loadPresence]);
+
+  // Heartbeat while joined
   useEffect(() => {
     if (!isJoined) return;
     if (!hasValidEventId) return;
@@ -497,6 +580,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
       setIsJoined(true);
       setPresenceMsg("✅ You joined live.");
+      await writeJoinPref(eventId, true);
+      setShouldAutoJoin(true);
       await loadPresence();
     } catch (e: any) {
       setPresenceErr(e?.message ?? "Failed to join live.");
@@ -532,6 +617,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
       setIsJoined(false);
       setPresenceMsg("✅ You left live.");
+      await writeJoinPref(eventId, false);
+      setShouldAutoJoin(false);
       await loadPresence();
     } catch (e: any) {
       setPresenceErr(e?.message ?? "Failed to leave.");
@@ -828,7 +915,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
               {!isJoined ? (
                 <View style={styles.banner}>
-                  <Text style={styles.bannerTitle}>You’re not live yet</Text>
+                  <Text style={styles.bannerTitle}>
+                    {joinPrefLoaded && shouldAutoJoin ? "Rejoining…" : "You’re not live yet"}
+                  </Text>
                   <Text style={styles.meta}>
                     Join live to appear in the room and be counted as active.
                   </Text>
@@ -889,9 +978,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                 <Text style={styles.body}>{currentSection?.text ?? ""}</Text>
               </View>
 
-              {/* Controls row:
-                  - Host: controls the shared run state
-                  - Attendee: prev/next are local preview controls (and do not affect host) */}
               <View style={styles.row}>
                 {isHost ? (
                   <>
