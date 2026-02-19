@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
   Pressable,
@@ -9,8 +10,12 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+
 import { supabase } from "../supabase/client";
 import type { Database } from "../types/db";
+import type { RootStackParamList } from "../types";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type ScriptRow = Database["public"]["Tables"]["scripts"]["Row"];
@@ -40,6 +45,8 @@ function diffMinutes(startIso: string, endIso: string) {
 }
 
 export default function EventsScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EventRow[]>([]);
 
@@ -70,8 +77,6 @@ export default function EventsScreen() {
   );
 
   const loadScriptsForDisplay = useCallback(async () => {
-    // We load only your scripts for display; if you want to display script titles
-    // for scripts by other authors too, remove the author filter (and ensure RLS allows it).
     const {
       data: { user },
       error: userErr,
@@ -79,16 +84,15 @@ export default function EventsScreen() {
 
     if (userErr || !user) return;
 
-    // Only need id/title for display; but selecting "*" is fine too.
     const { data, error } = await supabase
       .from("scripts")
       .select("id,title,created_at")
-      // If your RLS allows reading only own scripts, this keeps it aligned.
-      .eq("author_user_id" as any, user.id) // 'as any' only in case column name differs in generated types
+      // align with your current RLS (own scripts)
+      .eq("author_user_id" as any, user.id)
       .order("created_at", { ascending: false });
 
     if (error) {
-      // Don't hard-fail the screen if scripts can't load; we can still show IDs.
+      // non-fatal; we can still display ids
       return;
     }
 
@@ -99,8 +103,6 @@ export default function EventsScreen() {
   }, []);
 
   const loadEvents = useCallback(async () => {
-    setLoading(true);
-
     const { data, error } = await supabase
       .from("events")
       .select(
@@ -117,8 +119,6 @@ export default function EventsScreen() {
       )
       .order("start_time_utc", { ascending: true });
 
-    setLoading(false);
-
     if (error) {
       Alert.alert("Load events failed", error.message);
       return;
@@ -134,11 +134,18 @@ export default function EventsScreen() {
     }
   }, [selectedEventId]);
 
-  useEffect(() => {
-    // Load both on mount
-    loadScriptsForDisplay();
-    loadEvents();
+  const refreshAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      await Promise.all([loadEvents(), loadScriptsForDisplay()]);
+    } finally {
+      setLoading(false);
+    }
   }, [loadEvents, loadScriptsForDisplay]);
+
+  useEffect(() => {
+    refreshAll();
+  }, [refreshAll]);
 
   const upsertPresence = useCallback(async (eventId: string) => {
     const {
@@ -179,11 +186,6 @@ export default function EventsScreen() {
 
     return () => clearInterval(id);
   }, [isJoined, selectedEventId, loadEvents, upsertPresence]);
-
-  const handleSignOut = useCallback(async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) Alert.alert("Sign out failed", error.message);
-  }, []);
 
   const handleCreateEvent = useCallback(async () => {
     try {
@@ -254,20 +256,17 @@ export default function EventsScreen() {
 
       const { error } = await supabase.from("events").insert(payload);
 
-      setLoading(false);
-
       if (error) {
         Alert.alert("Create event failed", error.message);
         return;
       }
 
       Alert.alert("Success", "Event created.");
-
-      // Refresh both: event list + script titles (in case you attach soon after)
-      await Promise.all([loadEvents(), loadScriptsForDisplay()]);
+      await refreshAll();
     } catch (e: any) {
-      setLoading(false);
       Alert.alert("Create event failed", e?.message ?? "Unknown error");
+    } finally {
+      setLoading(false);
     }
   }, [
     title,
@@ -276,8 +275,7 @@ export default function EventsScreen() {
     startLocal,
     endLocal,
     timezone,
-    loadEvents,
-    loadScriptsForDisplay,
+    refreshAll,
   ]);
 
   const handleJoin = useCallback(async () => {
@@ -335,10 +333,17 @@ export default function EventsScreen() {
     }
   }, [selectedEventId, loadEvents]);
 
+  const openRoom = useCallback(
+    (eventId: string) => {
+      navigation.navigate("EventRoom", { eventId });
+    },
+    [navigation]
+  );
+
   const getScriptLabel = (scriptId: string | null) => {
     if (!scriptId) return "(none)";
     const title = scriptsById[scriptId]?.title;
-    return title ? title : scriptId; // fall back to uuid if we can't resolve
+    return title ? title : scriptId;
   };
 
   const renderEvent = ({ item }: { item: EventRow }) => (
@@ -349,7 +354,16 @@ export default function EventsScreen() {
         item.id === selectedEventId ? styles.cardSelected : undefined,
       ]}
     >
-      <Text style={styles.cardTitle}>{item.title}</Text>
+      <View style={styles.cardTopRow}>
+        <Text style={styles.cardTitle}>{item.title}</Text>
+
+        <Pressable
+          onPress={() => openRoom(item.id)}
+          style={[styles.smallBtn, styles.smallBtnPrimary]}
+        >
+          <Text style={styles.smallBtnText}>Open</Text>
+        </Pressable>
+      </View>
 
       {!!item.description && <Text style={styles.cardText}>{item.description}</Text>}
 
@@ -381,13 +395,6 @@ export default function EventsScreen() {
         contentContainerStyle={styles.content}
         ListHeaderComponent={
           <View>
-            <View style={styles.headerRow}>
-              <Text style={styles.h1}>Events</Text>
-              <Pressable style={styles.signOutBtn} onPress={handleSignOut}>
-                <Text style={styles.signOutText}>Sign out</Text>
-              </Pressable>
-            </View>
-
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Create Event</Text>
 
@@ -425,23 +432,20 @@ export default function EventsScreen() {
                   onPress={handleCreateEvent}
                   disabled={loading}
                 >
-                  <Text style={styles.btnText}>{loading ? "Working..." : "Create event"}</Text>
+                  <Text style={styles.btnText}>
+                    {loading ? "Working..." : "Create event"}
+                  </Text>
                 </Pressable>
 
                 <Pressable
                   style={[styles.btn, styles.btnGhost, loading && styles.disabled]}
-                  onPress={async () => {
-                    setLoading(true);
-                    try {
-                      await Promise.all([loadEvents(), loadScriptsForDisplay()]);
-                    } finally {
-                      setLoading(false);
-                    }
-                  }}
+                  onPress={refreshAll}
                   disabled={loading}
                 >
                   <Text style={styles.btnGhostText}>Refresh</Text>
                 </Pressable>
+
+                {loading ? <ActivityIndicator /> : null}
               </View>
             </View>
 
@@ -475,6 +479,24 @@ export default function EventsScreen() {
                 >
                   <Text style={styles.btnGhostText}>Leave live</Text>
                 </Pressable>
+
+                <Pressable
+                  style={[
+                    styles.btn,
+                    styles.btnGhost,
+                    !selectedEventId && styles.disabled,
+                  ]}
+                  onPress={() => {
+                    if (!selectedEventId) {
+                      Alert.alert("Select event", "Please select an event first.");
+                      return;
+                    }
+                    openRoom(selectedEventId);
+                  }}
+                  disabled={!selectedEventId}
+                >
+                  <Text style={styles.btnGhostText}>Open room</Text>
+                </Pressable>
               </View>
 
               {!!presenceStatus && <Text style={styles.ok}>{presenceStatus}</Text>}
@@ -495,23 +517,6 @@ export default function EventsScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B1020" },
   content: { padding: 16, paddingBottom: 32 },
-
-  headerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 12,
-  },
-  h1: { color: "white", fontSize: 28, fontWeight: "800" },
-
-  signOutBtn: {
-    borderWidth: 1,
-    borderColor: "#3E4C78",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-  signOutText: { color: "#C8D3FF", fontWeight: "700" },
 
   section: {
     backgroundColor: "#151C33",
@@ -535,7 +540,7 @@ const styles = StyleSheet.create({
   },
   multi: { minHeight: 72, textAlignVertical: "top" },
 
-  row: { flexDirection: "row", gap: 10, marginTop: 10, flexWrap: "wrap" },
+  row: { flexDirection: "row", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center" },
 
   btn: {
     borderRadius: 10,
@@ -564,9 +569,25 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   cardSelected: { borderColor: "#6EA1FF", backgroundColor: "#1A2C5F" },
-  cardTitle: { color: "white", fontSize: 16, fontWeight: "700", marginBottom: 6 },
+  cardTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  cardTitle: { color: "white", fontSize: 16, fontWeight: "700", marginBottom: 6, flex: 1 },
   cardText: { color: "#C6D0F5", marginBottom: 6 },
   meta: { color: "#93A3D9", fontSize: 12 },
+
+  smallBtn: {
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  smallBtnPrimary: { backgroundColor: "#5B8CFF" },
+  smallBtnText: { color: "white", fontWeight: "800" },
 
   ok: { color: "#6EE7B7", marginTop: 8 },
   err: { color: "#FB7185", marginTop: 8 },
