@@ -30,6 +30,7 @@ type Props = NativeStackScreenProps<RootStackParamList, "EventRoom">;
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type ScriptDbRow = Database["public"]["Tables"]["scripts"]["Row"];
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
+type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 
 type ScriptSection = {
   name: string;
@@ -183,6 +184,11 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const [presenceMsg, setPresenceMsg] = useState("");
   const [presenceErr, setPresenceErr] = useState("");
 
+  // Profiles cache for presence display
+  const [profilesById, setProfilesById] = useState<Record<string, Pick<ProfileRow, "id" | "display_name" | "avatar_url">>>(
+    {}
+  );
+
   // Join preference loaded
   const [joinPrefLoaded, setJoinPrefLoaded] = useState(false);
   const [shouldAutoJoinForEvent, setShouldAutoJoinForEvent] = useState(false);
@@ -289,6 +295,41 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return String(runState.mode);
   }, [runReady, runState.mode]);
 
+  const displayNameForUserId = useCallback(
+    (id: string) => {
+      const p = profilesById[id];
+      const name = (p?.display_name ?? "").trim();
+      return name.length > 0 ? name : shortId(id);
+    },
+    [profilesById]
+  );
+
+  const loadProfiles = useCallback(async (ids: string[]) => {
+    const uniq = Array.from(new Set(ids.filter(Boolean)));
+    if (uniq.length === 0) return;
+
+    // Only fetch IDs we don't already have cached.
+    const missing = uniq.filter((id) => !profilesById[id]);
+    if (missing.length === 0) return;
+
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id,display_name,avatar_url")
+      .in("id", missing);
+
+    if (error) {
+      // If RLS blocks this, you'll see it here (we can add a policy if needed).
+      return;
+    }
+
+    const rows = (data ?? []) as Pick<ProfileRow, "id" | "display_name" | "avatar_url">[];
+    setProfilesById((prev) => {
+      const next = { ...prev };
+      for (const r of rows) next[r.id] = r;
+      return next;
+    });
+  }, [profilesById]);
+
   const loadPresence = useCallback(async () => {
     if (!hasValidEventId) {
       setPresenceRows([]);
@@ -302,8 +343,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
     if (error) return;
 
-    setPresenceRows((data ?? []) as PresenceRow[]);
-  }, [eventId, hasValidEventId]);
+    const rows = (data ?? []) as PresenceRow[];
+    setPresenceRows(rows);
+
+    // opportunistically fetch profiles for everyone in this event presence set
+    void loadProfiles(rows.map((r) => r.user_id));
+  }, [eventId, hasValidEventId, loadProfiles]);
 
   const loadScriptById = useCallback(async (scriptId: string | null) => {
     if (!scriptId) {
@@ -581,6 +626,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [isJoined, eventId, hasValidEventId]);
 
+  // Compute active users: last_seen_at within 25 seconds
   const activeWindowMs = 25_000;
 
   const activePresence = useMemo(() => {
@@ -592,6 +638,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   }, [presenceRows]);
 
   const activeCount = activePresence.length;
+
+  // Fetch profiles for currently active users too (covers edge where presenceRows populated via realtime first)
+  useEffect(() => {
+    const ids = activePresence.map((r) => r.user_id);
+    void loadProfiles(ids);
+  }, [activePresence, loadProfiles]);
 
   const handleJoinLive = useCallback(async () => {
     if (!hasValidEventId) {
@@ -915,7 +967,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             <View style={{ marginTop: 8 }}>
               {activePresence.slice(0, 10).map((p) => (
                 <Text key={p.user_id} style={styles.meta}>
-                  • {shortId(p.user_id)} (seen{" "}
+                  • {displayNameForUserId(p.user_id)}{" "}
+                  <Text style={{ color: "#5B8CFF" }}>({shortId(p.user_id)})</Text> (seen{" "}
                   {Math.max(0, Math.floor((Date.now() - new Date(p.last_seen_at).getTime()) / 1000))}s ago)
                 </Text>
               ))}
