@@ -110,6 +110,20 @@ function secondsBetweenIso(aIso: string, bIso: string): number {
   return Math.max(0, Math.floor((b - a) / 1000));
 }
 
+function statusPillStyle(mode: EventRunMode) {
+  // keep palette consistent with existing theme
+  switch (mode) {
+    case "running":
+      return { borderColor: "#2E5BFF", backgroundColor: "#0F1C44", textColor: "#DCE4FF" };
+    case "paused":
+      return { borderColor: "#8B5CF6", backgroundColor: "#1A1240", textColor: "#E4D7FF" };
+    case "ended":
+      return { borderColor: "#FB7185", backgroundColor: "#2A1220", textColor: "#FFE0E6" };
+    default:
+      return { borderColor: "#3E4C78", backgroundColor: "#0E1428", textColor: "#C8D3FF" };
+  }
+}
+
 export default function EventRoomScreen({ route, navigation }: Props) {
   const eventId = route.params?.eventId ?? "";
   const hasValidEventId = !!eventId && isLikelyUuid(eventId);
@@ -480,6 +494,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }
   }, [eventId, hasValidEventId, loadPresence]);
 
+  const hasScript = !!script && !!script.sections?.length;
+
   const clampIndex = useCallback(
     (idx: number) => {
       const len = script?.sections?.length ?? 0;
@@ -512,6 +528,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     await hostSetViaServer("running", idx, 0, true);
   }, [clampIndex, hostSetViaServer, runState.sectionIndex]);
 
+  const hostRestart = useCallback(async () => {
+    // Restart from the current section, timer reset
+    const idx = clampIndex(runState.sectionIndex ?? 0);
+    await hostSetViaServer("running", idx, 0, true);
+  }, [clampIndex, hostSetViaServer, runState.sectionIndex]);
+
   const hostPause = useCallback(async () => {
     if (runState.mode !== "running" || !runState.startedAt) return;
 
@@ -523,7 +545,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   const hostResume = useCallback(async () => {
     if (runState.mode !== "paused") return;
-    await hostSetViaServer("running", clampIndex(runState.sectionIndex), runState.elapsedBeforePauseSec ?? 0, false);
+    await hostSetViaServer(
+      "running",
+      clampIndex(runState.sectionIndex),
+      runState.elapsedBeforePauseSec ?? 0,
+      false
+    );
   }, [clampIndex, hostSetViaServer, runState]);
 
   const hostEnd = useCallback(async () => {
@@ -632,8 +659,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     );
   }
 
-  const hasScript = !!script && !!script.sections?.length;
   const atLast = hasScript ? currentSectionIdx >= script!.sections.length - 1 : true;
+  const pill = statusPillStyle(runState.mode);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -723,13 +750,36 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                 Tone: {script.tone} | Duration: {script.durationMinutes} min
               </Text>
 
-              <Text style={[styles.meta, { marginTop: 6 }]}>
-                Session:{" "}
-                <Text style={{ color: "white", fontWeight: "800" }}>
-                  {runStatusLabel}
-                </Text>{" "}
-                {isHost ? <Text style={{ color: "#C8D3FF", fontWeight: "800" }}>(host)</Text> : null}
-              </Text>
+              <View style={{ marginTop: 10, flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <View style={[styles.pill, { borderColor: pill.borderColor, backgroundColor: pill.backgroundColor }]}>
+                  <Text style={[styles.pillText, { color: pill.textColor }]}>
+                    {runReady ? runStatusLabel : "…"}
+                  </Text>
+                </View>
+                {isHost ? (
+                  <Text style={styles.meta}>
+                    You are the host.
+                  </Text>
+                ) : (
+                  <Text style={styles.meta}>
+                    You are following the host.
+                  </Text>
+                )}
+              </View>
+
+              {!isJoined ? (
+                <View style={styles.banner}>
+                  <Text style={styles.bannerTitle}>You’re not live yet</Text>
+                  <Text style={styles.meta}>
+                    Join live to appear in the room and be counted as active.
+                  </Text>
+                  <View style={[styles.row, { marginTop: 8 }]}>
+                    <Pressable style={[styles.btn, styles.btnPrimary]} onPress={handleJoinLive}>
+                      <Text style={styles.btnText}>Join live</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
 
               <View style={styles.timerBox}>
                 <Text style={styles.timerLabel}>
@@ -738,6 +788,22 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                 <Text style={styles.timerValue}>{formatSeconds(secondsLeft)}</Text>
                 <Text style={styles.timerSub}>{currentSection?.name ?? "Section"}</Text>
               </View>
+
+              {runState.mode === "ended" ? (
+                <View style={[styles.sectionCard, { marginTop: 10 }]}>
+                  <Text style={styles.cardTitle}>Session ended</Text>
+                  <Text style={styles.meta}>
+                    {isHost ? "You can restart the session when ready." : "Wait for the host to restart the session."}
+                  </Text>
+                  {isHost ? (
+                    <View style={styles.row}>
+                      <Pressable style={[styles.btn, styles.btnPrimary, !hasScript && styles.disabled]} onPress={hostRestart} disabled={!hasScript}>
+                        <Text style={styles.btnText}>Restart</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
 
               <View style={styles.sectionCard}>
                 <Text style={styles.cardTitle}>{currentSection?.name}</Text>
@@ -748,7 +814,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
               {isHost ? (
                 <View style={styles.row}>
                   {(runState.mode === "idle" || runState.mode === "ended") && (
-                    <Pressable style={[styles.btn, styles.btnPrimary]} onPress={hostStart} disabled={!hasScript}>
+                    <Pressable style={[styles.btn, styles.btnPrimary, !hasScript && styles.disabled]} onPress={hostStart} disabled={!hasScript}>
                       <Text style={styles.btnText}>Start</Text>
                     </Pressable>
                   )}
@@ -790,7 +856,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
               ) : (
                 <View style={[styles.sectionCard, { marginTop: 10 }]}>
                   <Text style={styles.meta}>
-                    You’re following the host. Only the host can change sections/timers.
+                    Only the host can change sections/timers.
                   </Text>
                 </View>
               )}
@@ -913,4 +979,22 @@ const styles = StyleSheet.create({
     backgroundColor: "#1A2C5F",
   },
   listTitle: { color: "#E4EBFF", fontWeight: "700", marginBottom: 2 },
+
+  pill: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  pillText: { fontWeight: "800", fontSize: 12 },
+
+  banner: {
+    marginTop: 10,
+    backgroundColor: "#0E1428",
+    borderWidth: 1,
+    borderColor: "#2A365E",
+    borderRadius: 12,
+    padding: 12,
+  },
+  bannerTitle: { color: "white", fontSize: 14, fontWeight: "800", marginBottom: 4 },
 });
