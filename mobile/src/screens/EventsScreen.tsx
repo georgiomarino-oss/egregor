@@ -1,3 +1,4 @@
+// mobile/src/screens/EventsScreen.tsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -19,6 +20,8 @@ import type { RootStackParamList } from "../types";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type ScriptRow = Database["public"]["Tables"]["scripts"]["Row"];
+type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
+type ProfileMini = Pick<ProfileRow, "id" | "display_name" | "avatar_url">;
 
 function plusMinutesToLocalInput(minutes: number) {
   const d = new Date(Date.now() + minutes * 60_000);
@@ -50,6 +53,13 @@ function isLikelyUuid(v: string) {
   );
 }
 
+function shortId(id: string) {
+  if (!id) return "";
+  return `${id.slice(0, 6)}…${id.slice(-4)}`;
+}
+
+type EventsFilter = "all" | "hosted";
+
 export default function EventsScreen() {
   // IMPORTANT:
   // EventsScreen is inside Tabs. We must navigate to EventRoom using the PARENT Stack navigator,
@@ -64,6 +74,9 @@ export default function EventsScreen() {
   // Scripts for display (id -> title) + picker list
   const [scriptsById, setScriptsById] = useState<Record<string, ScriptRow>>({});
   const [myScripts, setMyScripts] = useState<ScriptRow[]>([]);
+
+  // Profiles cache for host display names
+  const [profilesById, setProfilesById] = useState<Record<string, ProfileMini>>({});
 
   // Create form
   const [title, setTitle] = useState("Global Peace Circle");
@@ -82,6 +95,9 @@ export default function EventsScreen() {
   const [isJoined, setIsJoined] = useState(false);
   const [presenceStatus, setPresenceStatus] = useState("");
   const [presenceError, setPresenceError] = useState("");
+
+  // Events list filter (All vs Hosted)
+  const [eventsFilter, setEventsFilter] = useState<EventsFilter>("all");
 
   // Attach modal state
   const [attachOpen, setAttachOpen] = useState(false);
@@ -145,6 +161,44 @@ export default function EventsScreen() {
     setMyScripts(rows);
   }, []);
 
+  const loadProfiles = useCallback(
+    async (ids: string[]) => {
+      const uniq = Array.from(new Set(ids.filter(Boolean)));
+      if (uniq.length === 0) return;
+
+      const missing = uniq.filter((id) => !profilesById[id]);
+      if (missing.length === 0) return;
+
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id,display_name,avatar_url")
+        .in("id", missing);
+
+      if (error) return;
+
+      const rows = (data ?? []) as ProfileMini[];
+      if (rows.length === 0) return;
+
+      setProfilesById((prev) => {
+        const next = { ...prev };
+        for (const r of rows) next[r.id] = r;
+        return next;
+      });
+    },
+    [profilesById]
+  );
+
+  const displayNameForUserId = useCallback(
+    (id: string) => {
+      if (!id) return "";
+      if (id === myUserId) return "You";
+      const p = profilesById[id];
+      const name = (p?.display_name ?? "").trim();
+      return name.length > 0 ? name : shortId(id);
+    },
+    [myUserId, profilesById]
+  );
+
   const loadEvents = useCallback(async () => {
     const { data, error } = await supabase
       .from("events")
@@ -170,6 +224,9 @@ export default function EventsScreen() {
     const rows = (data ?? []) as EventRow[];
     setEvents(rows);
 
+    // Fetch host profiles for display
+    void loadProfiles(rows.map((r) => (r as any).host_user_id as string));
+
     // keep selection stable
     if (!selectedEventId && rows.length > 0) {
       setSelectedEventId(rows[0].id);
@@ -182,7 +239,7 @@ export default function EventsScreen() {
       setAttachOpen(false);
       setAttachEventId("");
     }
-  }, [attachEventId, attachOpen, selectedEventId]);
+  }, [attachEventId, attachOpen, selectedEventId, loadProfiles]);
 
   const refreshAll = useCallback(async () => {
     setLoading(true);
@@ -210,6 +267,26 @@ export default function EventsScreen() {
       supabase.removeChannel(channel);
     };
   }, [loadEvents]);
+
+  // --- Filtered list (All vs Hosted by me) ---
+  const visibleEvents = useMemo(() => {
+    if (eventsFilter === "hosted") {
+      if (!myUserId) return [];
+      return events.filter((e) => (e as any).host_user_id === myUserId);
+    }
+    return events;
+  }, [events, eventsFilter, myUserId]);
+
+  // When filter changes, ensure selectedEventId is valid in the visible list
+  useEffect(() => {
+    if (visibleEvents.length === 0) {
+      setSelectedEventId("");
+      return;
+    }
+    if (!selectedEventId || !visibleEvents.some((e) => e.id === selectedEventId)) {
+      setSelectedEventId(visibleEvents[0].id);
+    }
+  }, [visibleEvents, selectedEventId]);
 
   const upsertPresence = useCallback(async (eventId: string) => {
     const {
@@ -326,6 +403,11 @@ export default function EventsScreen() {
       }
 
       Alert.alert("Success", "Event created.");
+
+      // Handy UX: if user is looking at "Hosted", keep them there;
+      // also guarantees the new event appears immediately.
+      setEventsFilter("hosted");
+
       await refreshAll();
     } catch (e: any) {
       Alert.alert("Create event failed", e?.message ?? "Unknown error");
@@ -542,14 +624,12 @@ export default function EventsScreen() {
 
   const renderEvent = ({ item }: { item: EventRow }) => {
     const isHost = !!myUserId && item.host_user_id === myUserId;
+    const hostLabel = displayNameForUserId((item as any).host_user_id as string);
 
     return (
       <Pressable
         onPress={() => setSelectedEventId(item.id)}
-        style={[
-          styles.card,
-          item.id === selectedEventId ? styles.cardSelected : undefined,
-        ]}
+        style={[styles.card, item.id === selectedEventId ? styles.cardSelected : undefined]}
       >
         <View style={styles.cardTopRow}>
           <Text style={styles.cardTitle}>{item.title}</Text>
@@ -576,6 +656,10 @@ export default function EventsScreen() {
           </View>
         </View>
 
+        <Text style={styles.meta}>
+          Host: <Text style={{ color: "white", fontWeight: "800" }}>{hostLabel}</Text>
+        </Text>
+
         {!!item.description && <Text style={styles.cardText}>{item.description}</Text>}
 
         <Text style={styles.cardText}>Intention: {item.intention_statement}</Text>
@@ -598,10 +682,38 @@ export default function EventsScreen() {
     );
   };
 
+  const FilterChips = (
+    <View style={styles.filterRow}>
+      <Pressable
+        onPress={() => setEventsFilter("all")}
+        style={[styles.chip, eventsFilter === "all" ? styles.chipOn : styles.chipOff]}
+      >
+        <Text style={eventsFilter === "all" ? styles.chipTextOn : styles.chipTextOff}>All</Text>
+      </Pressable>
+
+      <Pressable
+        onPress={() => setEventsFilter("hosted")}
+        style={[styles.chip, eventsFilter === "hosted" ? styles.chipOn : styles.chipOff]}
+        disabled={!myUserId}
+      >
+        <Text style={eventsFilter === "hosted" ? styles.chipTextOn : styles.chipTextOff}>
+          Hosted by me
+        </Text>
+      </Pressable>
+
+      <View style={{ flex: 1 }} />
+
+      <Text style={styles.meta}>
+        Showing <Text style={{ color: "white", fontWeight: "800" }}>{visibleEvents.length}</Text> of{" "}
+        <Text style={{ color: "white", fontWeight: "800" }}>{events.length}</Text>
+      </Text>
+    </View>
+  );
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <FlatList
-        data={events}
+        data={visibleEvents}
         keyExtractor={(item) => item.id}
         renderItem={renderEvent}
         contentContainerStyle={styles.content}
@@ -708,10 +820,11 @@ export default function EventsScreen() {
             </View>
 
             <Text style={styles.sectionTitle}>All Events</Text>
+            {FilterChips}
           </View>
         }
         ListEmptyComponent={
-          <Text style={styles.empty}>{loading ? "Loading..." : "No events yet."}</Text>
+          <Text style={styles.empty}>{loading ? "Loading..." : "No events match this filter."}</Text>
         }
       />
 
@@ -739,9 +852,7 @@ export default function EventsScreen() {
               <>
                 <Text style={styles.modalMeta}>
                   Event:{" "}
-                  <Text style={{ fontWeight: "900", color: "white" }}>
-                    {attachEvent.title}
-                  </Text>
+                  <Text style={{ fontWeight: "900", color: "white" }}>{attachEvent.title}</Text>
                 </Text>
 
                 <Text style={styles.modalMeta}>
@@ -854,6 +965,30 @@ const styles = StyleSheet.create({
   btnText: { color: "white", fontWeight: "700" },
   btnGhostText: { color: "#C8D3FF", fontWeight: "700" },
   disabled: { opacity: 0.45 },
+
+  filterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 12,
+    flexWrap: "wrap",
+  },
+  chip: {
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+  },
+  chipOn: {
+    backgroundColor: "#1A2C5F",
+    borderColor: "#6EA1FF",
+  },
+  chipOff: {
+    backgroundColor: "transparent",
+    borderColor: "#3E4C78",
+  },
+  chipTextOn: { color: "white", fontWeight: "800" },
+  chipTextOff: { color: "#C8D3FF", fontWeight: "800" },
 
   card: {
     backgroundColor: "#121A31",
