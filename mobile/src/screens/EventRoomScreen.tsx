@@ -108,6 +108,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const [presenceMsg, setPresenceMsg] = useState("");
   const [presenceErr, setPresenceErr] = useState("");
 
+  // Error spam guard for heartbeat
+  const lastHeartbeatErrRef = useRef<string>("");
+  const lastHeartbeatErrAtRef = useRef<number>(0);
+
   // Guided flow state
   const [currentSectionIdx, setCurrentSectionIdx] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(0);
@@ -142,8 +146,13 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const loadPresence = useCallback(async () => {
     if (!hasValidEventId) {
       setPresenceRows([]);
-      return;
+      return { rows: [] as PresenceRow[], myUserId: null as string | null };
     }
+
+    // We can detect join state by checking for my (event_id,user_id) row.
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
     const { data, error } = await supabase
       .from("event_presence")
@@ -152,10 +161,18 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
     if (error) {
       // keep screen usable; presence is secondary
-      return;
+      return { rows: [] as PresenceRow[], myUserId: user?.id ?? null };
     }
 
-    setPresenceRows((data ?? []) as PresenceRow[]);
+    const rows = (data ?? []) as PresenceRow[];
+    setPresenceRows(rows);
+
+    if (user?.id) {
+      const amIJoined = rows.some((r) => r.user_id === user.id);
+      setIsJoined(amIJoined);
+    }
+
+    return { rows, myUserId: user?.id ?? null };
   }, [eventId, hasValidEventId]);
 
   const loadScriptById = useCallback(async (scriptId: string | null) => {
@@ -190,6 +207,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setScript(null);
       setScriptDbRow(null);
       setPresenceRows([]);
+      setIsJoined(false);
       return;
     }
 
@@ -212,6 +230,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setEvent(null);
       setScript(null);
       setScriptDbRow(null);
+      setPresenceRows([]);
+      setIsJoined(false);
       Alert.alert("Event load failed", evErr?.message ?? "Event not found");
       return;
     }
@@ -219,6 +239,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     const eventRow = evData as EventRow;
     setEvent(eventRow);
 
+    // Load presence and script in parallel (presence will also set isJoined)
     await Promise.all([loadPresence(), loadScriptById(eventRow.script_id ?? null)]);
 
     setLoading(false);
@@ -246,7 +267,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           const next = payload.new as Partial<EventRow> | null;
           const prev = payload.old as Partial<EventRow> | null;
 
-          // Update the local event state quickly
+          // Update local event state quickly
           setEvent((cur) => {
             if (!cur) return cur;
             return { ...cur, ...(next as any) };
@@ -318,12 +339,33 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [eventId, hasValidEventId, loadPresence]);
 
-  // Heartbeat while joined (keeps you active)
+  // Heartbeat while joined (keeps you active) — quiet error handling
   useEffect(() => {
     if (!isJoined) return;
     if (!hasValidEventId) return;
 
     let cancelled = false;
+
+    const maybeSetHeartbeatError = (msg: string) => {
+      const now = Date.now();
+      const lastMsg = lastHeartbeatErrRef.current;
+      const lastAt = lastHeartbeatErrAtRef.current;
+
+      // Only update if different OR enough time passed
+      if (msg !== lastMsg || now - lastAt > 10_000) {
+        lastHeartbeatErrRef.current = msg;
+        lastHeartbeatErrAtRef.current = now;
+        setPresenceErr(msg);
+      }
+    };
+
+    const clearHeartbeatErrorIfAny = () => {
+      if (lastHeartbeatErrRef.current) {
+        lastHeartbeatErrRef.current = "";
+        lastHeartbeatErrAtRef.current = Date.now();
+        setPresenceErr("");
+      }
+    };
 
     const beat = async () => {
       const {
@@ -331,20 +373,26 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       } = await supabase.auth.getUser();
       if (!user || cancelled) return;
 
-      const now = new Date().toISOString();
+      const nowIso = new Date().toISOString();
 
       const { error } = await supabase.from("event_presence").upsert(
         {
           event_id: eventId,
           user_id: user.id,
-          last_seen_at: now,
-          created_at: now,
+          last_seen_at: nowIso,
+          created_at: nowIso,
         },
         { onConflict: "event_id,user_id" }
       );
 
-      if (error && !cancelled) {
-        setPresenceErr(error.message);
+      if (cancelled) return;
+
+      if (error) {
+        // best-effort; don't spam
+        maybeSetHeartbeatError(error.message);
+      } else {
+        // success: clear stale error quietly
+        clearHeartbeatErrorIfAny();
       }
     };
 
