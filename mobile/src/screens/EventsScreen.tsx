@@ -66,6 +66,15 @@ function safeTimeMs(iso: string | null | undefined): number {
   return Number.isFinite(t) ? t : 0;
 }
 
+function defaultTimezone() {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return tz && tz.trim() ? tz : "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
 function upsertEventRow(rows: EventRow[], next: EventRow): EventRow[] {
   const idx = rows.findIndex((r) => r.id === next.id);
   if (idx < 0) return [...rows, next];
@@ -142,7 +151,7 @@ export default function EventsScreen() {
   );
   const [startLocal, setStartLocal] = useState(plusMinutesToLocalInput(10));
   const [endLocal, setEndLocal] = useState(plusMinutesToLocalInput(40));
-  const [timezone, setTimezone] = useState("Europe/London");
+  const [timezone, setTimezone] = useState(defaultTimezone());
 
   // Presence (quick join from list header)
   const [selectedEventId, setSelectedEventId] = useState<string>("");
@@ -556,7 +565,7 @@ export default function EventsScreen() {
         end_time_utc: endIso,
         duration_minutes: mins,
 
-        timezone: timezone.trim() || "Europe/London",
+        timezone: timezone.trim() || defaultTimezone(),
 
         visibility: "PUBLIC",
         guidance_mode: "AI",
