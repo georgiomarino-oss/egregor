@@ -74,6 +74,7 @@ Minimum pass criteria:
 ## 8) Script + Event management smoke
 - Create script in Scripts tab.
 - Confirm generated section durations match chosen duration.
+- Edit script title/intention/duration/tone and confirm changes persist.
 - Attach/replace script on hosted event.
 - Attempt delete on attached script (should block with guidance).
 - Delete an un-attached script (should succeed).
