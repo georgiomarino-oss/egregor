@@ -77,6 +77,7 @@ Minimum pass criteria:
 - Attach/replace script on hosted event.
 - Attempt delete on attached script (should block with guidance).
 - Delete an un-attached script (should succeed).
+- Delete a hosted event from Events tab (should require host and confirmation).
 - Open EventRoom from Events and verify `eventId` navigation works.
 
 ## 9) Profile management smoke
