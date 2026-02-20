@@ -288,8 +288,8 @@ function mapChatSendError(message: string) {
 const CHAT_BOTTOM_THRESHOLD_PX = 120;
 
 export default function EventRoomScreen({ route, navigation }: Props) {
-  const { theme } = useAppState();
-  const c = useMemo(() => getAppColors(theme), [theme]);
+  const { theme, highContrast } = useAppState();
+  const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
   const eventId = route.params?.eventId ?? "";
   const hasValidEventId = !!eventId && isLikelyUuid(eventId);
 
@@ -2252,6 +2252,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 });
+
 
 
 

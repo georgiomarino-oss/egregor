@@ -5,6 +5,7 @@ import { supabase } from "./supabase/client";
 
 export type AppTheme = "light" | "dark" | "cosmic";
 const KEY_APP_THEME = "prefs:appTheme";
+const KEY_HIGH_CONTRAST = "prefs:highContrast";
 
 export type AppStateContextValue = {
   initializing: boolean;
@@ -12,7 +13,9 @@ export type AppStateContextValue = {
   user: User | null;
   signedIn: boolean;
   theme: AppTheme;
+  highContrast: boolean;
   setTheme: (nextTheme: AppTheme) => Promise<void>;
+  setHighContrast: (enabled: boolean) => Promise<void>;
   refreshSession: () => Promise<void>;
   signOut: () => Promise<void>;
 };
@@ -23,6 +26,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [initializing, setInitializing] = useState(true);
   const [session, setSession] = useState<Session | null>(null);
   const [theme, setThemeState] = useState<AppTheme>("cosmic");
+  const [highContrast, setHighContrastState] = useState(false);
 
   const refreshSession = async () => {
     const { data, error } = await supabase.auth.getSession();
@@ -84,10 +88,35 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(KEY_HIGH_CONTRAST);
+        if (!mounted) return;
+        setHighContrastState(raw === "1");
+      } catch {
+        // ignore and keep default
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const setTheme = async (nextTheme: AppTheme) => {
     setThemeState(nextTheme);
     try {
       await AsyncStorage.setItem(KEY_APP_THEME, nextTheme);
+    } catch {
+      // ignore
+    }
+  };
+
+  const setHighContrast = async (enabled: boolean) => {
+    setHighContrastState(enabled);
+    try {
+      await AsyncStorage.setItem(KEY_HIGH_CONTRAST, enabled ? "1" : "0");
     } catch {
       // ignore
     }
@@ -114,11 +143,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       user: session?.user ?? null,
       signedIn: !!session?.user,
       theme,
+      highContrast,
       setTheme,
+      setHighContrast,
       refreshSession,
       signOut,
     }),
-    [initializing, session, theme]
+    [initializing, session, theme, highContrast]
   );
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;

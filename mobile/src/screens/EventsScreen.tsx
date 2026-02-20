@@ -163,8 +163,8 @@ export default function EventsScreen() {
   // EventsScreen is inside Tabs. We must navigate to EventRoom using the PARENT Stack navigator,
   // otherwise params can be missing and EventRoom shows "missing or invalid event id".
   const navigation = useNavigation<any>();
-  const { theme } = useAppState();
-  const c = useMemo(() => getAppColors(theme), [theme]);
+  const { theme, highContrast } = useAppState();
+  const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
 
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EventRow[]>([]);
@@ -1825,4 +1825,5 @@ const styles = StyleSheet.create({
   pickerTitle: { color: "white", fontSize: 14, fontWeight: "800" },
   pickerMeta: { color: "#93A3D9", fontSize: 12, marginTop: 4 },
 });
+
 

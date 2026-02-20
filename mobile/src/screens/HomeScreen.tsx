@@ -116,8 +116,8 @@ function truncate(text: string, max = 150) {
 }
 
 export default function HomeScreen() {
-  const { theme } = useAppState();
-  const c = useMemo(() => getAppColors(theme), [theme]);
+  const { theme, highContrast } = useAppState();
+  const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
   const navigation = useNavigation<any>();
 
   const [loading, setLoading] = useState(false);
@@ -631,3 +631,4 @@ const styles = StyleSheet.create({
   timerValue: { fontSize: 22, fontWeight: "900" },
   modalLine: { fontSize: 13, lineHeight: 19 },
 });
+

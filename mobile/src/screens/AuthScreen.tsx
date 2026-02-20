@@ -8,8 +8,8 @@ import { getAppColors } from "../theme/appearance";
 type Mode = "signin" | "signup";
 
 export default function AuthScreen() {
-  const { user, signOut, theme } = useAppState();
-  const c = useMemo(() => getAppColors(theme), [theme]);
+  const { user, signOut, theme, highContrast } = useAppState();
+  const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
 
   const [mode, setMode] = useState<Mode>("signin");
   const [loading, setLoading] = useState(false);
@@ -249,3 +249,4 @@ const styles = StyleSheet.create({
 
   hint: { color: "#93A3D9", fontSize: 12, marginTop: 6, lineHeight: 16 },
 });
+

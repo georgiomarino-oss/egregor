@@ -115,8 +115,8 @@ function buildDefaultSections(durationMinutes: number, intentionText: string) {
 
 export default function ScriptsScreen() {
   const navigation = useNavigation<any>();
-  const { theme } = useAppState();
-  const c = useMemo(() => getAppColors(theme), [theme]);
+  const { theme, highContrast } = useAppState();
+  const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
   const [loading, setLoading] = useState(false);
   const [myUserId, setMyUserId] = useState("");
 
@@ -1125,5 +1125,6 @@ const styles = StyleSheet.create({
   eventTitle: { color: "white", fontSize: 14, fontWeight: "800" },
   eventMeta: { color: "#93A3D9", fontSize: 12, marginTop: 4 },
 });
+
 
 

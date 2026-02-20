@@ -72,8 +72,8 @@ function computeStreakDays(dayKeys: string[]): number {
 }
 
 export default function ProfileScreen() {
-  const { theme, setTheme } = useAppState();
-  const c = useMemo(() => getAppColors(theme), [theme]);
+  const { theme, highContrast, setTheme, setHighContrast } = useAppState();
+  const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
   const [loading, setLoading] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
@@ -129,7 +129,7 @@ export default function ProfileScreen() {
         return;
       }
       const parsed = JSON.parse(raw);
-      setPrefs({
+      const nextPrefs: ProfilePrefs = {
         notifyLiveStart: !!parsed?.notifyLiveStart,
         notifyNewsEvents: !!parsed?.notifyNewsEvents,
         notifyFriendInvites: !!parsed?.notifyFriendInvites,
@@ -137,11 +137,14 @@ export default function ProfileScreen() {
         voiceMode: !!parsed?.voiceMode,
         highContrast: !!parsed?.highContrast,
         language: String(parsed?.language ?? DEFAULT_PROFILE_PREFS.language),
-      });
+      };
+      setPrefs(nextPrefs);
+      void setHighContrast(nextPrefs.highContrast);
     } catch {
       setPrefs(DEFAULT_PROFILE_PREFS);
+      void setHighContrast(DEFAULT_PROFILE_PREFS.highContrast);
     }
-  }, []);
+  }, [setHighContrast]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -341,13 +344,14 @@ export default function ProfileScreen() {
       };
       await AsyncStorage.setItem(KEY_PROFILE_PREFS, JSON.stringify(payload));
       setPrefs(payload);
+      await setHighContrast(payload.highContrast);
       Alert.alert("Saved", "Preferences updated.");
     } catch (e: any) {
       Alert.alert("Save failed", e?.message ?? "Could not save preferences.");
     } finally {
       setSavingPrefs(false);
     }
-  }, [prefs]);
+  }, [prefs, setHighContrast]);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
@@ -468,7 +472,13 @@ export default function ProfileScreen() {
           </View>
           <View style={[styles.prefRow, { borderColor: c.border, backgroundColor: c.cardAlt }]}>
             <Text style={[styles.prefLabel, { color: c.text }]}>High contrast mode</Text>
-            <Switch value={prefs.highContrast} onValueChange={(v) => setPrefs((p) => ({ ...p, highContrast: v }))} />
+            <Switch
+              value={prefs.highContrast}
+              onValueChange={(v) => {
+                setPrefs((p) => ({ ...p, highContrast: v }));
+                void setHighContrast(v);
+              }}
+            />
           </View>
 
           <Text style={[styles.fieldLabel, { color: c.textMuted }]}>Preferred language</Text>
@@ -735,3 +745,4 @@ const styles = StyleSheet.create({
 
   tip: { color: "#93A3D9", fontSize: 12, marginTop: 2, lineHeight: 16 },
 });
+

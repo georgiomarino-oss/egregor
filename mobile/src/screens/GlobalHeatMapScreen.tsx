@@ -48,8 +48,8 @@ function regionFromTimezone(tzRaw: string | null | undefined): RegionKey {
 }
 
 export default function GlobalHeatMapScreen() {
-  const { theme } = useAppState();
-  const c = useMemo(() => getAppColors(theme), [theme]);
+  const { theme, highContrast } = useAppState();
+  const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
   const navigation = useNavigation<any>();
 
   const [loading, setLoading] = useState(false);
@@ -307,3 +307,4 @@ const styles = StyleSheet.create({
   eventTitle: { fontSize: 16, fontWeight: "800", marginBottom: 3 },
   empty: { paddingVertical: 24, alignItems: "center", justifyContent: "center" },
 });
+
