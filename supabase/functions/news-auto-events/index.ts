@@ -91,6 +91,29 @@ function buildDescription(article: NewsArticle) {
   return clip(lines.join(" "), 4000);
 }
 
+function decodeHtmlEntities(input: string) {
+  return input
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'");
+}
+
+function stripCdata(input: string) {
+  return input
+    .replace(/^<!\[CDATA\[/i, "")
+    .replace(/\]\]>$/i, "")
+    .trim();
+}
+
+function extractTag(block: string, tag: string) {
+  const m = block.match(
+    new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`, "i")
+  );
+  return m?.[1] ? stripCdata(m[1]) : "";
+}
+
 async function sha256Hex(input: string) {
   const bytes = new TextEncoder().encode(input);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -152,6 +175,85 @@ async function fetchNewsArticles(args: {
   return (data.articles ?? []).filter((a) => !!String(a.title ?? "").trim());
 }
 
+function parseGoogleNewsRss(xml: string): NewsArticle[] {
+  const itemBlocks = xml.match(/<item\b[\s\S]*?<\/item>/gi) ?? [];
+  return itemBlocks
+    .map((block) => {
+      const title = decodeHtmlEntities(extractTag(block, "title"));
+      const description = decodeHtmlEntities(extractTag(block, "description"));
+      const url = decodeHtmlEntities(extractTag(block, "link"));
+      const publishedAt = extractTag(block, "pubDate");
+      const source = decodeHtmlEntities(extractTag(block, "source"));
+      return {
+        title,
+        description,
+        url,
+        publishedAt,
+        source: { name: source || "Google News" },
+      } as NewsArticle;
+    })
+    .filter((a) => !!String(a.title ?? "").trim());
+}
+
+async function fetchGoogleNewsRssArticles(args: {
+  query: string;
+  language: string;
+  pageSize: number;
+  fromHours: number;
+}) {
+  const { query, language, pageSize, fromHours } = args;
+  const safeLang = normalizeLanguage(language);
+  const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(
+    query
+  )}&hl=${safeLang}&gl=US&ceid=US:${safeLang}`;
+
+  const response = await fetch(rssUrl, { method: "GET" });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(
+      `Google News RSS failed (${response.status}): ${clip(body, 400)}`
+    );
+  }
+
+  const xml = await response.text();
+  const parsed = parseGoogleNewsRss(xml);
+  const cutoffMs = Date.now() - Math.max(1, fromHours) * 60 * 60 * 1000;
+
+  const filtered = parsed.filter((article) => {
+    const ts = new Date(String(article.publishedAt ?? "")).getTime();
+    if (!Number.isFinite(ts)) return true;
+    return ts >= cutoffMs;
+  });
+
+  return filtered.slice(0, Math.max(1, Math.min(pageSize, 100)));
+}
+
+async function resolveHostUserId(
+  supabase: ReturnType<typeof createClient>,
+  configuredHostUserId: string
+) {
+  const configured = configuredHostUserId.trim();
+  if (configured) return configured;
+
+  const { data: eventRows } = await supabase
+    .from("events")
+    .select("host_user_id")
+    .order("created_at", { ascending: false })
+    .limit(1);
+  const fromEvent = String((eventRows?.[0] as any)?.host_user_id ?? "").trim();
+  if (fromEvent) return fromEvent;
+
+  const { data: profileRows } = await supabase
+    .from("profiles")
+    .select("id")
+    .order("created_at", { ascending: true })
+    .limit(1);
+  const fromProfile = String((profileRows?.[0] as any)?.id ?? "").trim();
+  if (fromProfile) return fromProfile;
+
+  return "";
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: CORS_HEADERS });
@@ -172,18 +274,23 @@ Deno.serve(async (req) => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL")?.trim() ?? "";
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim() ?? "";
   const newsApiKey = Deno.env.get("NEWS_API_KEY")?.trim() ?? "";
-  const hostUserId = Deno.env.get("NEWS_AUTOGEN_HOST_USER_ID")?.trim() ?? "";
+  const configuredHostUserId =
+    Deno.env.get("NEWS_AUTOGEN_HOST_USER_ID")?.trim() ?? "";
   const defaultTimezone =
     Deno.env.get("NEWS_DEFAULT_TIMEZONE")?.trim() || "UTC";
   const newsApiBaseUrl =
     Deno.env.get("NEWS_API_BASE_URL")?.trim() || "https://newsapi.org";
 
-  if (!supabaseUrl || !serviceRoleKey || !newsApiKey || !hostUserId) {
+  if (!supabaseUrl || !serviceRoleKey) {
     return jsonResponse(500, {
       error:
-        "Missing required env vars. Expected SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, NEWS_API_KEY, NEWS_AUTOGEN_HOST_USER_ID.",
+        "Missing required env vars. Expected SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
     });
   }
+
+  const supabase = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
 
   const body = (await req.json().catch(() => ({}))) as RequestBody;
   const query = clip(
@@ -208,14 +315,29 @@ Deno.serve(async (req) => {
   const dryRun = !!body.dryRun;
 
   try {
-    const articles = await fetchNewsArticles({
-      apiKey: newsApiKey,
-      baseUrl: newsApiBaseUrl,
-      query,
-      language,
-      pageSize,
-      fromHours,
-    });
+    const hostUserId = await resolveHostUserId(supabase, configuredHostUserId);
+    if (!hostUserId) {
+      return jsonResponse(500, {
+        error:
+          "Could not resolve host user id. Set NEWS_AUTOGEN_HOST_USER_ID or ensure at least one profile/event exists.",
+      });
+    }
+
+    const articles = newsApiKey
+      ? await fetchNewsArticles({
+          apiKey: newsApiKey,
+          baseUrl: newsApiBaseUrl,
+          query,
+          language,
+          pageSize,
+          fromHours,
+        })
+      : await fetchGoogleNewsRssArticles({
+          query,
+          language,
+          pageSize,
+          fromHours,
+        });
 
     const startIso = new Date(
       Date.now() + Math.max(0, startOffsetMinutes) * 60_000
@@ -275,10 +397,6 @@ Deno.serve(async (req) => {
         preview: dedupedRows.slice(0, 5),
       });
     }
-
-    const supabase = createClient(supabaseUrl, serviceRoleKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
 
     const fingerprints = dedupedRows.map((r) => r.source_fingerprint);
     const { data: existingRows, error: existingErr } = await supabase

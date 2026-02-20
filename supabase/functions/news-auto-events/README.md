@@ -6,11 +6,11 @@ Supabase Edge Function scaffold to auto-create compassion events from world news
 
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `NEWS_API_KEY`
-- `NEWS_AUTOGEN_HOST_USER_ID`
 
 ## Optional environment variables
 
+- `NEWS_API_KEY` (if omitted, function falls back to Google News RSS)
+- `NEWS_AUTOGEN_HOST_USER_ID` (if omitted, function picks recent event host or first profile id)
 - `NEWS_AUTOGEN_CRON_TOKEN` (recommended; request must include header `x-egregor-cron-token`)
 - `NEWS_DEFAULT_TIMEZONE` (default: `UTC`)
 - `NEWS_API_BASE_URL` (default: `https://newsapi.org`)
