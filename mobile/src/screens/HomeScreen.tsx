@@ -20,6 +20,7 @@ import type { RootStackParamList } from "../types";
 import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
 import { getUnreadNotificationCount } from "../features/notifications/notificationsRepo";
+import { appendSoloHistory, getSoloHistoryStats } from "../features/solo/soloHistoryRepo";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
@@ -169,6 +170,10 @@ export default function HomeScreen() {
   const [soloRunning, setSoloRunning] = useState(false);
   const [ambientPreset, setAmbientPreset] = useState<AmbientPreset>("Silence");
   const [breathMode, setBreathMode] = useState<BreathMode>("Calm");
+  const [soloCompletionTick, setSoloCompletionTick] = useState(0);
+  const [soloSessionsWeek, setSoloSessionsWeek] = useState(0);
+  const [soloMinutesWeek, setSoloMinutesWeek] = useState(0);
+  const [lastSoloAt, setLastSoloAt] = useState<string | null>(null);
 
   const liveEvents = useMemo(() => {
     const now = Date.now();
@@ -196,6 +201,19 @@ export default function HomeScreen() {
       setUnreadNotifications(count);
     } catch {
       setUnreadNotifications(0);
+    }
+  }, []);
+
+  const refreshSoloStats = useCallback(async () => {
+    try {
+      const stats = await getSoloHistoryStats(7);
+      setSoloSessionsWeek(stats.sessionCount);
+      setSoloMinutesWeek(stats.totalMinutes);
+      setLastSoloAt(stats.lastCompletedAt);
+    } catch {
+      setSoloSessionsWeek(0);
+      setSoloMinutesWeek(0);
+      setLastSoloAt(null);
     }
   }, []);
 
@@ -375,17 +393,19 @@ export default function HomeScreen() {
         }
         if (!disposed) await loadHome();
         if (!disposed) await refreshUnreadNotifications();
+        if (!disposed) await refreshSoloStats();
       };
       void run();
       const id = setInterval(() => {
         void loadHome();
         void refreshUnreadNotifications();
+        void refreshSoloStats();
       }, HOME_RESYNC_MS);
       return () => {
         disposed = true;
         clearInterval(id);
       };
-    }, [loadHome, refreshUnreadNotifications])
+    }, [loadHome, refreshUnreadNotifications, refreshSoloStats])
   );
 
   const openEventRoom = useCallback(
@@ -422,6 +442,7 @@ export default function HomeScreen() {
       setSoloSecondsLeft((prev) => {
         if (prev <= 1) {
           setSoloRunning(false);
+          setSoloCompletionTick(Date.now());
           return 0;
         }
         return prev - 1;
@@ -430,6 +451,30 @@ export default function HomeScreen() {
 
     return () => clearInterval(id);
   }, [soloOpen, soloRunning]);
+
+  React.useEffect(() => {
+    if (!soloCompletionTick) return;
+    let cancelled = false;
+    const persist = async () => {
+      try {
+        await appendSoloHistory({
+          completedAt: new Date(soloCompletionTick).toISOString(),
+          intent: soloIntent.trim() || "peace and healing",
+          language: preferredLanguage,
+          ambientPreset,
+          breathMode,
+          minutes: 3,
+        });
+        if (!cancelled) await refreshSoloStats();
+      } catch {
+        // ignore
+      }
+    };
+    void persist();
+    return () => {
+      cancelled = true;
+    };
+  }, [ambientPreset, breathMode, preferredLanguage, refreshSoloStats, soloCompletionTick, soloIntent]);
 
   const renderEvent = ({ item }: { item: EventRow }) => {
     const startMs = safeTimeMs((item as any).start_time_utc);
@@ -628,8 +673,18 @@ export default function HomeScreen() {
             </View>
 
             <View style={styles.row}>
-              <Pressable style={[styles.primaryBtn, { backgroundColor: c.primary }]} onPress={() => setSoloRunning((v) => !v)}>
-                <Text style={[styles.primaryBtnText, { color: "#FFFFFF" }]}>{soloRunning ? "Pause" : "Start"}</Text>
+              <Pressable
+                style={[styles.primaryBtn, { backgroundColor: c.primary }]}
+                onPress={() => {
+                  if (!soloRunning && soloSecondsLeft <= 0) {
+                    setSoloSecondsLeft(180);
+                  }
+                  setSoloRunning((v) => !v);
+                }}
+              >
+                <Text style={[styles.primaryBtnText, { color: "#FFFFFF" }]}>
+                  {soloRunning ? "Pause" : "Start"}
+                </Text>
               </Pressable>
               <Pressable
                 style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
@@ -648,6 +703,12 @@ export default function HomeScreen() {
             >
               <Text style={[styles.secondaryBtnText, { color: c.text }]}>Close</Text>
             </Pressable>
+            <Text style={[styles.modalMeta, { color: c.textMuted }]}>
+              Solo this week: {soloSessionsWeek} sessions ({soloMinutesWeek} min)
+            </Text>
+            <Text style={[styles.modalMeta, { color: c.textMuted }]}>
+              Last completed: {lastSoloAt ? new Date(lastSoloAt).toLocaleString() : "No completed session yet"}
+            </Text>
           </View>
         </View>
       </Modal>

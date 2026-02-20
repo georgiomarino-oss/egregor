@@ -7,6 +7,7 @@ import { supabase } from "../supabase/client";
 import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
 import type { Database } from "../types/db";
+import { getSoloHistoryStats, listSoloHistory, type SoloHistoryEntry } from "../features/solo/soloHistoryRepo";
 
 const KEY_AUTO_JOIN_GLOBAL = "prefs:autoJoinLive";
 const KEY_JOURNAL = "journal:entries";
@@ -133,6 +134,9 @@ export default function ProfileScreen() {
   const [circles, setCircles] = useState<SocialCircle[]>([]);
   const [circleName, setCircleName] = useState("");
   const [circleIntention, setCircleIntention] = useState("Weekly peace and gratitude.");
+  const [soloSessionsWeek, setSoloSessionsWeek] = useState(0);
+  const [soloMinutesWeek, setSoloMinutesWeek] = useState(0);
+  const [soloRecent, setSoloRecent] = useState<SoloHistoryEntry[]>([]);
 
   const loadJournal = useCallback(async () => {
     try {
@@ -258,6 +262,19 @@ export default function ProfileScreen() {
     }
   }, []);
 
+  const loadSoloPractice = useCallback(async () => {
+    try {
+      const [stats, recent] = await Promise.all([getSoloHistoryStats(7), listSoloHistory()]);
+      setSoloSessionsWeek(stats.sessionCount);
+      setSoloMinutesWeek(stats.totalMinutes);
+      setSoloRecent(recent.slice(0, 5));
+    } catch {
+      setSoloSessionsWeek(0);
+      setSoloMinutesWeek(0);
+      setSoloRecent([]);
+    }
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -372,7 +389,8 @@ export default function ProfileScreen() {
     void loadDailyIntention();
     void loadWaitlistDraft();
     void loadCircles();
-  }, [load, loadJournal, loadPrefs, loadSupportTotal, loadDailyIntention, loadWaitlistDraft, loadCircles]);
+    void loadSoloPractice();
+  }, [load, loadJournal, loadPrefs, loadSupportTotal, loadDailyIntention, loadWaitlistDraft, loadCircles, loadSoloPractice]);
 
   useEffect(() => {
     if (!waitlistEmail.trim() && email.trim()) {
@@ -754,6 +772,34 @@ export default function ProfileScreen() {
                   <Pressable onPress={() => deleteJournalEntry(entry.id)} style={[styles.inlineDelete, { borderColor: c.border }]}>
                     <Text style={[styles.meta, { color: c.textMuted }]}>Delete</Text>
                   </Pressable>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+
+        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={[styles.sectionTitle, { color: c.text }]}>Solo Practice</Text>
+          <View style={styles.statsRow}>
+            <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+              <Text style={[styles.statValue, { color: c.text }]}>{soloSessionsWeek}</Text>
+              <Text style={[styles.statLabel, { color: c.textMuted }]}>Sessions (7d)</Text>
+            </View>
+            <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+              <Text style={[styles.statValue, { color: c.text }]}>{soloMinutesWeek}</Text>
+              <Text style={[styles.statLabel, { color: c.textMuted }]}>Minutes (7d)</Text>
+            </View>
+          </View>
+          {soloRecent.length === 0 ? (
+            <Text style={[styles.meta, { color: c.textMuted }]}>No completed solo sessions yet.</Text>
+          ) : (
+            <View style={{ gap: 8 }}>
+              {soloRecent.map((entry) => (
+                <View key={entry.id} style={[styles.journalCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+                  <Text style={[styles.meta, { color: c.textMuted }]}>
+                    {new Date(entry.completedAt).toLocaleString()} • {entry.minutes} min • {entry.ambientPreset}
+                  </Text>
+                  <Text style={[styles.journalBody, { color: c.text }]}>{entry.intent}</Text>
                 </View>
               ))}
             </View>
