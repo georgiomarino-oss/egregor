@@ -12,16 +12,14 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useNavigation } from "@react-navigation/native";
 import { supabase } from "../supabase/client";
 import type { Database } from "../types/db";
+import type { RootStackParamList } from "../types";
 
 type ScriptRow = Database["public"]["Tables"]["scripts"]["Row"];
 type ScriptInsert = Database["public"]["Tables"]["scripts"]["Insert"];
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
-
-type Props = {
-  navigation?: any;
-};
 
 const RESYNC_MS = 60_000;
 
@@ -109,7 +107,8 @@ function buildDefaultSections(durationMinutes: number, intentionText: string) {
   ];
 }
 
-export default function ScriptsScreen({ navigation }: Props) {
+export default function ScriptsScreen() {
+  const navigation = useNavigation<any>();
   const [loading, setLoading] = useState(false);
   const [myUserId, setMyUserId] = useState("");
 
@@ -450,11 +449,9 @@ export default function ScriptsScreen({ navigation }: Props) {
   );
 
   const goProfile = useCallback(() => {
-    if (!navigation?.navigate) {
-      Alert.alert("Navigation not available", "This screen isn't receiving a navigation prop yet.");
-      return;
-    }
-    navigation.navigate("Profile");
+    const parent = navigation.getParent?.();
+    const navToUse = parent ?? navigation;
+    (navToUse as any).navigate("Profile" as keyof RootStackParamList);
   }, [navigation]);
 
   const renderScript = ({ item }: { item: ScriptRow }) => (
