@@ -75,6 +75,17 @@ function defaultTimezone() {
   }
 }
 
+function isValidTimezone(value: string) {
+  const tz = value.trim();
+  if (!tz) return false;
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function upsertEventRow(rows: EventRow[], next: EventRow): EventRow[] {
   const idx = rows.findIndex((r) => r.id === next.id);
   if (idx < 0) return [...rows, next];
@@ -535,6 +546,12 @@ export default function EventsScreen() {
         return;
       }
 
+      const normalizedTz = timezone.trim() || defaultTimezone();
+      if (!isValidTimezone(normalizedTz)) {
+        Alert.alert("Validation", "Timezone must be a valid IANA name (for example: America/New_York).");
+        return;
+      }
+
       const {
         data: { user },
         error: userErr,
@@ -565,7 +582,7 @@ export default function EventsScreen() {
         end_time_utc: endIso,
         duration_minutes: mins,
 
-        timezone: timezone.trim() || defaultTimezone(),
+        timezone: normalizedTz,
 
         visibility: "PUBLIC",
         guidance_mode: "AI",
