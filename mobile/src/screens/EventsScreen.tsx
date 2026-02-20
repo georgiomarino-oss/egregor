@@ -119,6 +119,15 @@ const EVENTS_RESYNC_MS = 60_000;
 const EVENT_TITLE_MAX = 120;
 const EVENT_INTENTION_MAX = 2000;
 const EVENT_DESCRIPTION_MAX = 4000;
+const EVENT_CATEGORIES = ["All", "Healing", "Abundance", "Peace", "Love", "Protection"] as const;
+type EventCategory = (typeof EVENT_CATEGORIES)[number];
+const CATEGORY_KEYWORDS: Record<Exclude<EventCategory, "All">, string[]> = {
+  Healing: ["heal", "healing", "recover", "recovery", "health", "restoration", "strength"],
+  Abundance: ["abundance", "prosper", "prosperity", "wealth", "success", "career", "opportunity"],
+  Peace: ["peace", "calm", "stillness", "harmony", "resolution", "unity", "ceasefire"],
+  Love: ["love", "compassion", "kindness", "heart", "forgiveness", "connection", "relationship"],
+  Protection: ["protection", "safety", "shield", "secure", "resilience", "courage", "guard"],
+};
 
 function formatWhenLabel(event: EventRow, nowMs: number) {
   const startMs = safeTimeMs((event as any).start_time_utc);
@@ -197,6 +206,7 @@ export default function EventsScreen() {
   const [upcomingOnly, setUpcomingOnly] = useState(true);
   const [hostedOnly, setHostedOnly] = useState(false);
   const [eventQuery, setEventQuery] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState<EventCategory>("All");
 
   // Attach modal state
   const [attachOpen, setAttachOpen] = useState(false);
@@ -1102,6 +1112,21 @@ export default function EventsScreen() {
       rows = rows.filter((e) => !isPast(e) || isLive(e));
     }
 
+    if (selectedCategory !== "All") {
+      const keywords = CATEGORY_KEYWORDS[selectedCategory];
+      rows = rows.filter((e) => {
+        const hay = [
+          String((e as any).title ?? ""),
+          String((e as any).intention_statement ?? ""),
+          String((e as any).intention ?? ""),
+          String((e as any).description ?? ""),
+        ]
+          .join(" ")
+          .toLowerCase();
+        return keywords.some((k) => hay.includes(k));
+      });
+    }
+
     if (query) {
       rows = rows.filter((e) => {
         const titleText = String((e as any).title ?? "").toLowerCase();
@@ -1137,7 +1162,7 @@ export default function EventsScreen() {
     });
 
     return rows;
-  }, [events, hostedOnly, myUserId, upcomingOnly, nowTick, eventQuery, displayNameForUserId, scriptsById]);
+  }, [events, hostedOnly, myUserId, upcomingOnly, nowTick, eventQuery, displayNameForUserId, scriptsById, selectedCategory]);
 
   const renderEvent = ({ item }: { item: EventRow }) => {
     void nowTick;
@@ -1367,6 +1392,24 @@ export default function EventsScreen() {
                     Hosted by me
                   </Text>
                 </Pressable>
+              </View>
+
+              <View style={styles.categoryRow}>
+                {EVENT_CATEGORIES.map((cat) => {
+                  const on = selectedCategory === cat;
+                  return (
+                    <Pressable
+                      key={cat}
+                      onPress={() => setSelectedCategory(cat)}
+                      style={[
+                        styles.filterPill,
+                        on ? styles.filterPillOn : styles.filterPillOff,
+                      ]}
+                    >
+                      <Text style={on ? styles.filterTextOn : styles.filterTextOff}>{cat}</Text>
+                    </Pressable>
+                  );
+                })}
               </View>
 
               <Text style={styles.meta}>
@@ -1660,6 +1703,7 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.45 },
 
   filterRow: { flexDirection: "row", gap: 10, flexWrap: "wrap" },
+  categoryRow: { flexDirection: "row", gap: 8, flexWrap: "wrap", marginTop: 10 },
   filterPill: {
     borderRadius: 999,
     paddingVertical: 10,
