@@ -951,7 +951,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         if (cancelled) return;
 
         setIsJoined(true);
-        setPresenceMsg("✅ You joined live.");
+        setPresenceMsg("You joined live.");
         await loadPresence();
       } catch (e: any) {
         if (!cancelled) setPresenceErr(e?.message ?? "Auto-join failed.");
@@ -974,7 +974,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     ensureUserId,
   ]);
 
-  // Heartbeat while joined — only when app is active
+  // Heartbeat while joined - only when app is active
   useEffect(() => {
     if (!isJoined) return;
     if (!hasValidEventId) return;
@@ -1061,7 +1061,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       await upsertPresencePreserveJoinedAt(uid);
 
       setIsJoined(true);
-      setPresenceMsg("✅ You joined live.");
+      setPresenceMsg("You joined live.");
       await writeJoinPref(eventId, true);
       setShouldAutoJoinForEvent(true);
       await loadPresence();
@@ -1417,12 +1417,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         <Text style={styles.sectionTitle}>Attendees</Text>
 
         <Text style={styles.meta}>
-          Total: <Text style={{ fontWeight: "900", color: "white" }}>{presenceRows.length}</Text> • Active now:{" "}
+          Total: <Text style={{ fontWeight: "900", color: "white" }}>{presenceRows.length}</Text> | Active now:{" "}
           <Text style={{ fontWeight: "900", color: "white" }}>{activeCount}</Text>
         </Text>
 
         <Text style={styles.meta}>
-          {new Date((event as any).start_time_utc).toLocaleString()} → {new Date((event as any).end_time_utc).toLocaleString()} (
+          {new Date((event as any).start_time_utc).toLocaleString()}{" -> "}{new Date((event as any).end_time_utc).toLocaleString()} (
           {(event as any).timezone ?? "UTC"})
         </Text>
 
@@ -1439,7 +1439,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             <Text style={[styles.meta, { marginBottom: 6, color: "#C8D3FF" }]}>Active now</Text>
             {activePresence.slice(0, 10).map((p) => renderPersonLine(p, "active"))}
             {activePresence.length > 10 ? (
-              <Text style={styles.meta}>…and {activePresence.length - 10} more active</Text>
+              <Text style={styles.meta}>...and {activePresence.length - 10} more active</Text>
             ) : null}
           </View>
         ) : (
@@ -1451,7 +1451,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             <Text style={[styles.meta, { marginBottom: 6, color: "#C8D3FF" }]}>Recently seen</Text>
             {recentPresence.slice(0, 10).map((p) => renderPersonLine(p, "recent"))}
             {recentPresence.length > 10 ? (
-              <Text style={styles.meta}>…and {recentPresence.length - 10} more</Text>
+              <Text style={styles.meta}>...and {recentPresence.length - 10} more</Text>
             ) : null}
           </View>
         ) : totalAttendees > 0 ? (
@@ -1490,7 +1490,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
             <View style={{ marginTop: 10, flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <View style={[styles.pill, { borderColor: pill.borderColor, backgroundColor: pill.backgroundColor }]}>
-                <Text style={[styles.pillText, { color: pill.textColor }]}>{runReady ? runStatusLabel : "…"}</Text>
+                <Text style={[styles.pillText, { color: pill.textColor }]}>{runReady ? runStatusLabel : "..."}</Text>
               </View>
               {isHost ? (
                 <Text style={styles.meta}>You are the host.</Text>
@@ -1502,7 +1502,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             {!isJoined ? (
               <View style={styles.banner}>
                 <Text style={styles.bannerTitle}>
-                  {autoJoinGlobalLoaded && joinPrefLoaded && autoJoinGlobalEnabled && shouldAutoJoinForEvent ? "Rejoining…" : "You’re not live yet"}
+                  {autoJoinGlobalLoaded && joinPrefLoaded && autoJoinGlobalEnabled && shouldAutoJoinForEvent ? "Rejoining..." : "You are not live yet"}
                 </Text>
                 <Text style={styles.meta}>Join live to appear in the room and be counted as active.</Text>
                 <View style={[styles.row, { marginTop: 8 }]}>
@@ -1517,7 +1517,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
               <View style={styles.banner}>
                 <Text style={styles.bannerTitle}>Preview mode</Text>
                 <Text style={styles.meta}>
-                  You’re reading a different section locally. Tap “Follow host” to return to the live section/timer.
+                  You are reading a different section locally. Tap Follow host to return to the live section/timer.
                 </Text>
                 <View style={[styles.row, { marginTop: 8 }]}>
                   <Pressable style={[styles.btn, styles.btnPrimary]} onPress={handleFollowHost}>
@@ -1680,7 +1680,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
               value={chatText}
               onChangeText={setChatText}
               style={styles.chatInput}
-              placeholder="Message…"
+              placeholder="Message..."
               placeholderTextColor="#6B7BB2"
               maxLength={CHAT_MAX_CHARS}
               multiline
@@ -1694,7 +1694,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             disabled={sending || !chatText.trim()}
             style={[styles.chatSend, (sending || !chatText.trim()) && styles.disabled]}
           >
-            <Text style={styles.btnText}>{sending ? "…" : "Send"}</Text>
+            <Text style={styles.btnText}>{sending ? "..." : "Send"}</Text>
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -1905,3 +1905,5 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 });
+
+

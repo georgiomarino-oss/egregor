@@ -505,6 +505,53 @@ export default function ScriptsScreen() {
     [myEvents, refreshAll]
   );
 
+  const handleDuplicateScript = useCallback(
+    async (script: ScriptRow) => {
+      const baseTitle = String((script as any).title ?? "Untitled").trim();
+      const nextTitle = `${baseTitle} (Copy)`.slice(0, SCRIPT_TITLE_MAX);
+      const nextIntention = String((script as any).intention ?? "").trim();
+      const nextTone = String((script as any).tone ?? "calm").trim().toLowerCase();
+      const nextDuration = Number((script as any).duration_minutes ?? 20);
+
+      const {
+        data: { user },
+        error: userErr,
+      } = await supabase.auth.getUser();
+      if (userErr || !user) {
+        Alert.alert("Not signed in", "Please sign in first.");
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const payload: ScriptInsert = {
+          author_user_id: user.id as any,
+          title: nextTitle,
+          intention: nextIntention,
+          duration_minutes: nextDuration as any,
+          tone: nextTone as any,
+          content_json: {
+            title: nextTitle,
+            durationMinutes: nextDuration,
+            tone: nextTone,
+            sections: buildDefaultSections(nextDuration, nextIntention || "Copied script intention."),
+          } as any,
+        };
+
+        const { error } = await supabase.from("scripts").insert(payload);
+        if (error) {
+          Alert.alert("Duplicate failed", error.message);
+          return;
+        }
+        await refreshAll();
+        Alert.alert("Duplicated", "Script copied.");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [refreshAll]
+  );
+
   const updateEventScript = useCallback(
     async (event: EventRow, nextScriptId: string | null) => {
       const {
@@ -636,6 +683,14 @@ export default function ScriptsScreen() {
           disabled={loading}
         >
           <Text style={styles.btnGhostText}>Edit</Text>
+        </Pressable>
+
+        <Pressable
+          onPress={() => handleDuplicateScript(item)}
+          style={[styles.btn, styles.btnGhost, loading && styles.disabled]}
+          disabled={loading}
+        >
+          <Text style={styles.btnGhostText}>Duplicate</Text>
         </Pressable>
 
         <Pressable
