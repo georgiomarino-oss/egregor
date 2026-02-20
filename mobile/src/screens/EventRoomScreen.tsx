@@ -3,11 +3,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -32,6 +35,9 @@ type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type ScriptDbRow = Database["public"]["Tables"]["scripts"]["Row"];
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
+
+type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
+type EventMessageInsert = Database["public"]["Tables"]["event_messages"]["Insert"];
 
 type ScriptSection = {
   name: string;
@@ -204,11 +210,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const [presenceMsg, setPresenceMsg] = useState("");
   const [presenceErr, setPresenceErr] = useState("");
 
-  // Profiles cache for presence display (STATE for UI)
+  // Profiles cache
   const [profilesById, setProfilesById] = useState<Record<string, ProfileMini>>({});
-  // Ref cache to avoid dependency loops
   const profilesByIdRef = useRef<Record<string, ProfileMini>>({});
-
   useEffect(() => {
     profilesByIdRef.current = profilesById;
   }, [profilesById]);
@@ -365,7 +369,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
     const rows = (data ?? []) as PresenceRow[];
     setPresenceRows(rows);
-
     void loadProfiles(rows.map((r) => r.user_id));
   }, [eventId, hasValidEventId, loadProfiles]);
 
@@ -394,6 +397,78 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     setPreviewSectionIdx(null);
   }, []);
 
+  // ---- Chat (main FlatList data) ----
+  const [messages, setMessages] = useState<EventMessageRow[]>([]);
+  const [chatText, setChatText] = useState("");
+  const [sending, setSending] = useState(false);
+  const chatListRef = useRef<FlatList<EventMessageRow>>(null);
+
+  const scrollChatToEnd = useCallback((animated = true) => {
+    try {
+      chatListRef.current?.scrollToEnd({ animated });
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const loadMessages = useCallback(async () => {
+    if (!hasValidEventId) {
+      setMessages([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("event_messages")
+      .select("id,event_id,user_id,body,created_at")
+      .eq("event_id", eventId)
+      .order("created_at", { ascending: true })
+      .limit(200);
+
+    if (error) return;
+
+    const rows = (data ?? []) as EventMessageRow[];
+    setMessages(rows);
+    void loadProfiles(rows.map((m) => String((m as any).user_id ?? "")));
+  }, [eventId, hasValidEventId, loadProfiles]);
+
+  const sendMessage = useCallback(async () => {
+    const text = chatText.trim();
+    if (!text) return;
+
+    const {
+      data: { user },
+      error: userErr,
+    } = await supabase.auth.getUser();
+
+    if (userErr || !user) {
+      Alert.alert("Not signed in", "Please sign in first.");
+      return;
+    }
+
+    if (!hasValidEventId) return;
+
+    setSending(true);
+    try {
+      const payload: EventMessageInsert = {
+        event_id: eventId,
+        user_id: user.id,
+        body: text,
+      };
+
+      const { error } = await supabase.from("event_messages").insert(payload);
+      if (error) {
+        Alert.alert("Send failed", error.message);
+        return;
+      }
+
+      setChatText("");
+      setTimeout(() => scrollChatToEnd(true), 30);
+    } finally {
+      setSending(false);
+    }
+  }, [chatText, eventId, hasValidEventId, scrollChatToEnd]);
+
+  // ---- Load room ----
   const loadEventRoom = useCallback(async () => {
     if (!hasValidEventId) {
       setLoading(false);
@@ -401,6 +476,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setScript(null);
       setScriptDbRow(null);
       setPresenceRows([]);
+      setMessages([]);
       return;
     }
 
@@ -441,6 +517,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
       await Promise.all([
         loadPresence(),
+        loadMessages(),
         loadScriptById((eventRow as any).script_id ?? null),
         (async () => {
           const row = await ensureRunState(eventId);
@@ -450,11 +527,20 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       ]);
 
       setLoading(false);
+      setTimeout(() => scrollChatToEnd(false), 50);
     } catch (e: any) {
       setLoading(false);
       Alert.alert("Load failed", e?.message ?? "Unknown error");
     }
-  }, [eventId, hasValidEventId, loadPresence, loadScriptById, loadProfiles]);
+  }, [
+    eventId,
+    hasValidEventId,
+    loadPresence,
+    loadMessages,
+    loadScriptById,
+    loadProfiles,
+    scrollChatToEnd,
+  ]);
 
   useEffect(() => {
     loadEventRoom();
@@ -520,16 +606,11 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
           const nextScriptId = (next as any)?.script_id ?? null;
           const prevScriptId = (prev as any)?.script_id ?? null;
-
-          if (nextScriptId !== prevScriptId) {
-            await loadScriptById(nextScriptId);
-          }
+          if (nextScriptId !== prevScriptId) await loadScriptById(nextScriptId);
 
           const nextHostId = String((next as any)?.host_user_id ?? "");
           const prevHostId = String((prev as any)?.host_user_id ?? "");
-          if (nextHostId && nextHostId !== prevHostId) {
-            void loadProfiles([nextHostId]);
-          }
+          if (nextHostId && nextHostId !== prevHostId) void loadProfiles([nextHostId]);
         }
       )
       .subscribe();
@@ -569,31 +650,56 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [eventId, hasValidEventId, loadPresence]);
 
+  // Chat realtime
+  useEffect(() => {
+    if (!hasValidEventId) return;
+
+    const ch = supabase
+      .channel(`chat:${eventId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "event_messages",
+          filter: `event_id=eq.${eventId}`,
+        },
+        (payload) => {
+          const row = payload.new as EventMessageRow;
+
+          setMessages((prev) => {
+            const id = String((row as any).id ?? "");
+            if (id && prev.some((m: any) => String(m.id) === id)) return prev;
+            return [...prev, row];
+          });
+
+          void loadProfiles([String((row as any).user_id ?? "")]);
+          setTimeout(() => scrollChatToEnd(true), 30);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [eventId, hasValidEventId, loadProfiles, scrollChatToEnd]);
+
   // Helper: upsert presence, preserving joined_at if it already exists
   const upsertPresencePreserveJoinedAt = useCallback(
     async (uid: string) => {
       const now = new Date().toISOString();
-
-      // if we already have a row in state, preserve joined_at (and created_at is server default anyway)
       const existing = presenceRows.find((r) => r.user_id === uid);
 
       const payload: Database["public"]["Tables"]["event_presence"]["Insert"] = {
         event_id: eventId,
         user_id: uid,
         last_seen_at: now,
-        // only set joined_at on first join (if missing)
         joined_at: existing?.joined_at ?? (existing ? null : now),
-        // keep created_at only if you want strict; leaving unset is fine
         created_at: existing?.created_at ?? now,
       };
 
-      // If we had existing row, don't overwrite joined_at by sending null:
-      if (existing && existing.joined_at) {
-        (payload as any).joined_at = existing.joined_at;
-      } else if (existing && !existing.joined_at) {
-        // set on first ever "real join" if not present
-        (payload as any).joined_at = now;
-      }
+      if (existing && existing.joined_at) (payload as any).joined_at = existing.joined_at;
+      else if (existing && !existing.joined_at) (payload as any).joined_at = now;
 
       const { error } = await supabase.from("event_presence").upsert(payload, {
         onConflict: "event_id,user_id",
@@ -604,10 +710,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     [eventId, presenceRows]
   );
 
-  // Auto-join if:
-  // - global setting enabled
-  // - per-event sticky join enabled
-  // - not already joined
+  // Auto-join
   useEffect(() => {
     let cancelled = false;
 
@@ -626,7 +729,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         if (!user || cancelled) return;
 
         await upsertPresencePreserveJoinedAt(user.id);
-
         if (cancelled) return;
 
         setIsJoined(true);
@@ -652,7 +754,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     upsertPresencePreserveJoinedAt,
   ]);
 
-  // Heartbeat while joined (do NOT touch joined_at)
+  // Heartbeat while joined
   useEffect(() => {
     if (!isJoined) return;
     if (!hasValidEventId) return;
@@ -668,12 +770,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       const now = new Date().toISOString();
 
       const { error } = await supabase.from("event_presence").upsert(
-        {
-          event_id: eventId,
-          user_id: user.id,
-          last_seen_at: now,
-          // DO NOT send joined_at here (preserve existing)
-        },
+        { event_id: eventId, user_id: user.id, last_seen_at: now },
         { onConflict: "event_id,user_id" }
       );
 
@@ -689,8 +786,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [isJoined, eventId, hasValidEventId]);
 
-  // Compute active users: last_seen_at within 25 seconds
-  const activeWindowMs = 25_000;
+  // Presence computed
+  const activeWindowMs = 90_000;
 
   const presenceSortedByLastSeen = useMemo(() => {
     const rows = [...presenceRows];
@@ -999,8 +1096,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     const isMe = userId && p.user_id === userId;
 
     const badge = isHostRow ? "HOST" : isMe ? "YOU" : null;
-
-    // "New" if joined in last 60s
     const isNew = joinedSec !== null && joinedSec <= 60;
 
     return (
@@ -1015,322 +1110,318 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     );
   };
 
-  return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.h1}>{(event as any).title}</Text>
+  const renderMsg = ({ item }: { item: EventMessageRow }) => {
+    const uid = String((item as any).user_id ?? "");
+    const mine = !!userId && uid === userId;
+    const name = uid ? displayNameForUserId(uid) : "Unknown";
+    const ts = (item as any).created_at ? new Date((item as any).created_at).toLocaleTimeString() : "";
+
+    return (
+      <View style={[styles.msgRow, mine ? styles.msgMine : styles.msgOther]}>
+        <Text style={styles.msgMeta}>
+          <Text style={{ color: "#DCE4FF", fontWeight: "800" }}>{mine ? "You" : name}</Text>
+          <Text style={{ color: "#6F83C6" }}> · {ts}</Text>
+        </Text>
+        <Text style={styles.msgText}>{String((item as any).body ?? "")}</Text>
+      </View>
+    );
+  };
+
+  const Header = (
+    <View style={styles.headerWrap}>
+      <Text style={styles.h1}>{(event as any).title}</Text>
+
+      <Text style={styles.meta}>
+        Host: <Text style={{ color: "white", fontWeight: "800" }}>{hostName}</Text>
+      </Text>
+
+      {!!(event as any).description && <Text style={styles.body}>{(event as any).description}</Text>}
+
+      <Text style={styles.body}>Intention: {(event as any).intention_statement}</Text>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Attached Script</Text>
+        <Text style={styles.meta}>
+          {(event as any).script_id
+            ? scriptDbRow?.title
+              ? scriptDbRow.title
+              : (event as any).script_id
+            : "(none)"}
+        </Text>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Attendees</Text>
 
         <Text style={styles.meta}>
-          Host: <Text style={{ color: "white", fontWeight: "800" }}>{hostName}</Text>
+          Total: <Text style={{ fontWeight: "900", color: "white" }}>{presenceRows.length}</Text> • Active now:{" "}
+          <Text style={{ fontWeight: "900", color: "white" }}>{activeCount}</Text>
         </Text>
 
-        {!!(event as any).description && (
-          <Text style={styles.body}>{(event as any).description}</Text>
+        <Text style={styles.meta}>
+          {new Date((event as any).start_time_utc).toLocaleString()} → {new Date((event as any).end_time_utc).toLocaleString()} (
+          {(event as any).timezone ?? "UTC"})
+        </Text>
+
+        <View style={styles.settingsRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.settingsTitle}>Auto-join live</Text>
+            <Text style={styles.meta}>Rejoin rooms automatically when you reopen them.</Text>
+          </View>
+          <Switch value={autoJoinGlobalEnabled} onValueChange={handleToggleAutoJoinGlobal} disabled={!autoJoinGlobalLoaded} />
+        </View>
+
+        {activePresence.length > 0 ? (
+          <View style={{ marginTop: 10 }}>
+            <Text style={[styles.meta, { marginBottom: 6, color: "#C8D3FF" }]}>Active now</Text>
+            {activePresence.slice(0, 10).map((p) => renderPersonLine(p, "active"))}
+            {activePresence.length > 10 ? (
+              <Text style={styles.meta}>…and {activePresence.length - 10} more active</Text>
+            ) : null}
+          </View>
+        ) : (
+          <Text style={[styles.meta, { marginTop: 10 }]}>No one active right now.</Text>
         )}
 
-        <Text style={styles.body}>Intention: {(event as any).intention_statement}</Text>
+        {recentPresence.length > 0 ? (
+          <View style={{ marginTop: 12 }}>
+            <Text style={[styles.meta, { marginBottom: 6, color: "#C8D3FF" }]}>Recently seen</Text>
+            {recentPresence.slice(0, 10).map((p) => renderPersonLine(p, "recent"))}
+            {recentPresence.length > 10 ? (
+              <Text style={styles.meta}>…and {recentPresence.length - 10} more</Text>
+            ) : null}
+          </View>
+        ) : totalAttendees > 0 ? (
+          <Text style={[styles.meta, { marginTop: 12 }]}>Everyone here is currently active (or attendance is empty).</Text>
+        ) : null}
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Attached Script</Text>
-          <Text style={styles.meta}>
-            {(event as any).script_id
-              ? scriptDbRow?.title
-                ? scriptDbRow.title
-                : (event as any).script_id
-              : "(none)"}
-          </Text>
+        <View style={styles.row}>
+          <Pressable style={[styles.btn, styles.btnPrimary, isJoined && styles.disabled]} onPress={handleJoinLive} disabled={isJoined}>
+            <Text style={styles.btnText}>Join live</Text>
+          </Pressable>
+
+          <Pressable style={[styles.btn, styles.btnGhost, !isJoined && styles.disabled]} onPress={handleLeaveLive} disabled={!isJoined}>
+            <Text style={styles.btnGhostText}>Leave live</Text>
+          </Pressable>
+
+          <Pressable style={[styles.btn, styles.btnGhost]} onPress={loadEventRoom}>
+            <Text style={styles.btnGhostText}>Refresh</Text>
+          </Pressable>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Attendees</Text>
+        {!!presenceMsg && <Text style={styles.ok}>{presenceMsg}</Text>}
+        {!!presenceErr && <Text style={styles.err}>{presenceErr}</Text>}
+      </View>
 
-          <Text style={styles.meta}>
-            Total:{" "}
-            <Text style={{ fontWeight: "900", color: "white" }}>{totalAttendees}</Text> • Active now:{" "}
-            <Text style={{ fontWeight: "900", color: "white" }}>{activeCount}</Text>
-          </Text>
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Guided Flow</Text>
 
-          <Text style={styles.meta}>
-            {new Date((event as any).start_time_utc).toLocaleString()} →{" "}
-            {new Date((event as any).end_time_utc).toLocaleString()} (
-            {(event as any).timezone ?? "UTC"})
-          </Text>
-
-          <View style={styles.settingsRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.settingsTitle}>Auto-join live</Text>
-              <Text style={styles.meta}>Rejoin rooms automatically when you reopen them.</Text>
-            </View>
-            <Switch
-              value={autoJoinGlobalEnabled}
-              onValueChange={handleToggleAutoJoinGlobal}
-              disabled={!autoJoinGlobalLoaded}
-            />
-          </View>
-
-          {activePresence.length > 0 ? (
-            <View style={{ marginTop: 10 }}>
-              <Text style={[styles.meta, { marginBottom: 6, color: "#C8D3FF" }]}>Active now</Text>
-              {activePresence.slice(0, 10).map((p) => renderPersonLine(p, "active"))}
-              {activePresence.length > 10 ? (
-                <Text style={styles.meta}>…and {activePresence.length - 10} more active</Text>
-              ) : null}
-            </View>
-          ) : (
-            <Text style={[styles.meta, { marginTop: 10 }]}>No one active right now.</Text>
-          )}
-
-          {recentPresence.length > 0 ? (
-            <View style={{ marginTop: 12 }}>
-              <Text style={[styles.meta, { marginBottom: 6, color: "#C8D3FF" }]}>
-                Recently seen
-              </Text>
-              {recentPresence.slice(0, 10).map((p) => renderPersonLine(p, "recent"))}
-              {recentPresence.length > 10 ? (
-                <Text style={styles.meta}>…and {recentPresence.length - 10} more</Text>
-              ) : null}
-            </View>
-          ) : totalAttendees > 0 ? (
-            <Text style={[styles.meta, { marginTop: 12 }]}>
-              Everyone here is currently active (or attendance is empty).
-            </Text>
-          ) : null}
-
-          <View style={styles.row}>
-            <Pressable
-              style={[styles.btn, styles.btnPrimary, isJoined && styles.disabled]}
-              onPress={handleJoinLive}
-              disabled={isJoined}
-            >
-              <Text style={styles.btnText}>Join live</Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.btn, styles.btnGhost, !isJoined && styles.disabled]}
-              onPress={handleLeaveLive}
-              disabled={!isJoined}
-            >
-              <Text style={styles.btnGhostText}>Leave live</Text>
-            </Pressable>
-
-            <Pressable style={[styles.btn, styles.btnGhost]} onPress={loadEventRoom}>
-              <Text style={styles.btnGhostText}>Refresh</Text>
-            </Pressable>
-          </View>
-
-          {!!presenceMsg && <Text style={styles.ok}>{presenceMsg}</Text>}
-          {!!presenceErr && <Text style={styles.err}>{presenceErr}</Text>}
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Guided Flow</Text>
-
-          {!script ? (
+        {!script ? (
+          <Text style={styles.meta}>No script attached to this event yet. Attach one from the Events screen.</Text>
+        ) : (
+          <>
+            <Text style={styles.cardTitle}>{script.title}</Text>
             <Text style={styles.meta}>
-              No script attached to this event yet. Attach one from the Events screen.
+              Tone: {script.tone} | Duration: {script.durationMinutes} min
             </Text>
-          ) : (
-            <>
-              <Text style={styles.cardTitle}>{script.title}</Text>
-              <Text style={styles.meta}>
-                Tone: {script.tone} | Duration: {script.durationMinutes} min
-              </Text>
 
-              <View
-                style={{
-                  marginTop: 10,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 10,
-                  flexWrap: "wrap",
-                }}
-              >
-                <View
-                  style={[
-                    styles.pill,
-                    { borderColor: pill.borderColor, backgroundColor: pill.backgroundColor },
-                  ]}
-                >
-                  <Text style={[styles.pillText, { color: pill.textColor }]}>
-                    {runReady ? runStatusLabel : "…"}
-                  </Text>
-                </View>
-                {isHost ? (
-                  <Text style={styles.meta}>You are the host.</Text>
-                ) : (
-                  <Text style={styles.meta}>
-                    {viewingHostLive ? "Following host." : "Previewing (not following host)."}
-                  </Text>
-                )}
+            <View style={{ marginTop: 10, flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <View style={[styles.pill, { borderColor: pill.borderColor, backgroundColor: pill.backgroundColor }]}>
+                <Text style={[styles.pillText, { color: pill.textColor }]}>{runReady ? runStatusLabel : "…"}</Text>
               </View>
+              {isHost ? (
+                <Text style={styles.meta}>You are the host.</Text>
+              ) : (
+                <Text style={styles.meta}>{viewingHostLive ? "Following host." : "Previewing (not following host)."}</Text>
+              )}
+            </View>
 
-              {!isJoined ? (
-                <View style={styles.banner}>
-                  <Text style={styles.bannerTitle}>
-                    {autoJoinGlobalLoaded &&
-                    joinPrefLoaded &&
-                    autoJoinGlobalEnabled &&
-                    shouldAutoJoinForEvent
-                      ? "Rejoining…"
-                      : "You’re not live yet"}
-                  </Text>
-                  <Text style={styles.meta}>
-                    Join live to appear in the room and be counted as active.
-                  </Text>
-                  <View style={[styles.row, { marginTop: 8 }]}>
-                    <Pressable style={[styles.btn, styles.btnPrimary]} onPress={handleJoinLive}>
-                      <Text style={styles.btnText}>Join live</Text>
+            {!isJoined ? (
+              <View style={styles.banner}>
+                <Text style={styles.bannerTitle}>
+                  {autoJoinGlobalLoaded && joinPrefLoaded && autoJoinGlobalEnabled && shouldAutoJoinForEvent ? "Rejoining…" : "You’re not live yet"}
+                </Text>
+                <Text style={styles.meta}>Join live to appear in the room and be counted as active.</Text>
+                <View style={[styles.row, { marginTop: 8 }]}>
+                  <Pressable style={[styles.btn, styles.btnPrimary]} onPress={handleJoinLive}>
+                    <Text style={styles.btnText}>Join live</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+
+            {!isHost && !viewingHostLive ? (
+              <View style={styles.banner}>
+                <Text style={styles.bannerTitle}>Preview mode</Text>
+                <Text style={styles.meta}>
+                  You’re reading a different section locally. Tap “Follow host” to return to the live section/timer.
+                </Text>
+                <View style={[styles.row, { marginTop: 8 }]}>
+                  <Pressable style={[styles.btn, styles.btnPrimary]} onPress={handleFollowHost}>
+                    <Text style={styles.btnText}>Follow host</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+
+            <View style={styles.timerBox}>
+              <Text style={styles.timerLabel}>
+                Section {viewingSectionIdx + 1} of {script.sections.length}
+                {!isHost && !viewingHostLive ? " (preview)" : ""}
+              </Text>
+              <Text style={styles.timerValue}>{formatSeconds(secondsLeft)}</Text>
+              <Text style={styles.timerSub}>{currentSection?.name ?? "Section"}</Text>
+            </View>
+
+            {runState.mode === "ended" ? (
+              <View style={[styles.sectionCard, { marginTop: 10 }]}>
+                <Text style={styles.cardTitle}>Session ended</Text>
+                <Text style={styles.meta}>
+                  {isHost ? "You can restart the session when ready." : "Wait for the host to restart the session."}
+                </Text>
+                {isHost ? (
+                  <View style={styles.row}>
+                    <Pressable style={[styles.btn, styles.btnPrimary, !hasScript && styles.disabled]} onPress={hostRestart} disabled={!hasScript}>
+                      <Text style={styles.btnText}>Restart</Text>
                     </Pressable>
                   </View>
-                </View>
+                ) : null}
+              </View>
+            ) : null}
+
+            <View style={styles.sectionCard}>
+              <Text style={styles.cardTitle}>{currentSection?.name}</Text>
+              <Text style={styles.meta}>{currentSection?.minutes ?? 0} min</Text>
+              <Text style={styles.body}>{currentSection?.text ?? ""}</Text>
+            </View>
+
+            <View style={styles.row}>
+              {isHost ? (
+                <>
+                  {(runState.mode === "idle" || runState.mode === "ended") && (
+                    <Pressable style={[styles.btn, styles.btnPrimary, !hasScript && styles.disabled]} onPress={hostStart} disabled={!hasScript}>
+                      <Text style={styles.btnText}>Start</Text>
+                    </Pressable>
+                  )}
+
+                  {runState.mode === "running" && (
+                    <Pressable style={[styles.btn, styles.btnGhost]} onPress={hostPause}>
+                      <Text style={styles.btnGhostText}>Pause</Text>
+                    </Pressable>
+                  )}
+
+                  {runState.mode === "paused" && (
+                    <Pressable style={[styles.btn, styles.btnPrimary]} onPress={hostResume}>
+                      <Text style={styles.btnText}>Resume</Text>
+                    </Pressable>
+                  )}
+                </>
+              ) : null}
+
+              <Pressable style={[styles.btn, styles.btnGhost, atFirst && styles.disabled]} onPress={handlePrev} disabled={atFirst}>
+                <Text style={styles.btnGhostText}>Previous</Text>
+              </Pressable>
+
+              <Pressable style={[styles.btn, styles.btnPrimary, atLast && styles.disabled]} onPress={handleNext} disabled={atLast}>
+                <Text style={styles.btnText}>Next</Text>
+              </Pressable>
+
+              {isHost && runState.mode !== "ended" ? (
+                <Pressable style={[styles.btn, styles.btnGhost]} onPress={hostEnd}>
+                  <Text style={styles.btnGhostText}>End</Text>
+                </Pressable>
               ) : null}
 
               {!isHost && !viewingHostLive ? (
-                <View style={styles.banner}>
-                  <Text style={styles.bannerTitle}>Preview mode</Text>
-                  <Text style={styles.meta}>
-                    You’re reading a different section locally. Tap “Follow host” to return to the
-                    live section/timer.
-                  </Text>
-                  <View style={[styles.row, { marginTop: 8 }]}>
-                    <Pressable style={[styles.btn, styles.btnPrimary]} onPress={handleFollowHost}>
-                      <Text style={styles.btnText}>Follow host</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              ) : null}
-
-              <View style={styles.timerBox}>
-                <Text style={styles.timerLabel}>
-                  Section {viewingSectionIdx + 1} of {script.sections.length}
-                  {!isHost && !viewingHostLive ? " (preview)" : ""}
-                </Text>
-                <Text style={styles.timerValue}>{formatSeconds(secondsLeft)}</Text>
-                <Text style={styles.timerSub}>{currentSection?.name ?? "Section"}</Text>
-              </View>
-
-              {runState.mode === "ended" ? (
-                <View style={[styles.sectionCard, { marginTop: 10 }]}>
-                  <Text style={styles.cardTitle}>Session ended</Text>
-                  <Text style={styles.meta}>
-                    {isHost
-                      ? "You can restart the session when ready."
-                      : "Wait for the host to restart the session."}
-                  </Text>
-                  {isHost ? (
-                    <View style={styles.row}>
-                      <Pressable
-                        style={[styles.btn, styles.btnPrimary, !hasScript && styles.disabled]}
-                        onPress={hostRestart}
-                        disabled={!hasScript}
-                      >
-                        <Text style={styles.btnText}>Restart</Text>
-                      </Pressable>
-                    </View>
-                  ) : null}
-                </View>
-              ) : null}
-
-              <View style={styles.sectionCard}>
-                <Text style={styles.cardTitle}>{currentSection?.name}</Text>
-                <Text style={styles.meta}>{currentSection?.minutes ?? 0} min</Text>
-                <Text style={styles.body}>{currentSection?.text ?? ""}</Text>
-              </View>
-
-              <View style={styles.row}>
-                {isHost ? (
-                  <>
-                    {(runState.mode === "idle" || runState.mode === "ended") && (
-                      <Pressable
-                        style={[styles.btn, styles.btnPrimary, !hasScript && styles.disabled]}
-                        onPress={hostStart}
-                        disabled={!hasScript}
-                      >
-                        <Text style={styles.btnText}>Start</Text>
-                      </Pressable>
-                    )}
-
-                    {runState.mode === "running" && (
-                      <Pressable style={[styles.btn, styles.btnGhost]} onPress={hostPause}>
-                        <Text style={styles.btnGhostText}>Pause</Text>
-                      </Pressable>
-                    )}
-
-                    {runState.mode === "paused" && (
-                      <Pressable style={[styles.btn, styles.btnPrimary]} onPress={hostResume}>
-                        <Text style={styles.btnText}>Resume</Text>
-                      </Pressable>
-                    )}
-                  </>
-                ) : null}
-
-                <Pressable
-                  style={[styles.btn, styles.btnGhost, atFirst && styles.disabled]}
-                  onPress={handlePrev}
-                  disabled={atFirst}
-                >
-                  <Text style={styles.btnGhostText}>Previous</Text>
+                <Pressable style={[styles.btn, styles.btnGhost]} onPress={handleFollowHost}>
+                  <Text style={styles.btnGhostText}>Follow host</Text>
                 </Pressable>
+              ) : null}
+            </View>
 
-                <Pressable
-                  style={[styles.btn, styles.btnPrimary, atLast && styles.disabled]}
-                  onPress={handleNext}
-                  disabled={atLast}
-                >
-                  <Text style={styles.btnText}>Next</Text>
-                </Pressable>
-
-                {isHost && runState.mode !== "ended" ? (
-                  <Pressable style={[styles.btn, styles.btnGhost]} onPress={hostEnd}>
-                    <Text style={styles.btnGhostText}>End</Text>
+            <View style={{ marginTop: 10 }}>
+              {script.sections.map((s, i) => {
+                const isActive = i === viewingSectionIdx;
+                return (
+                  <Pressable
+                    key={`${s.name}-${i}`}
+                    onPress={() => handleSelectSection(i)}
+                    style={[styles.listItem, isActive ? styles.listItemActive : undefined]}
+                  >
+                    <Text style={styles.listTitle}>
+                      {i + 1}. {s.name}
+                      {!isHost && i === hostSectionIdx ? " (host)" : ""}
+                    </Text>
+                    <Text style={styles.meta}>{s.minutes} min</Text>
                   </Pressable>
-                ) : null}
+                );
+              })}
+            </View>
 
-                {!isHost && !viewingHostLive ? (
-                  <Pressable style={[styles.btn, styles.btnGhost]} onPress={handleFollowHost}>
-                    <Text style={styles.btnGhostText}>Follow host</Text>
-                  </Pressable>
-                ) : null}
+            {!!script.speakerNotes && (
+              <View style={[styles.sectionCard, { marginTop: 10 }]}>
+                <Text style={styles.cardTitle}>Speaker Notes</Text>
+                <Text style={styles.body}>{script.speakerNotes}</Text>
               </View>
+            )}
+          </>
+        )}
+      </View>
 
-              <View style={{ marginTop: 10 }}>
-                {script.sections.map((s, i) => {
-                  const isActive = i === viewingSectionIdx;
-                  return (
-                    <Pressable
-                      key={`${s.name}-${i}`}
-                      onPress={() => handleSelectSection(i)}
-                      style={[styles.listItem, isActive ? styles.listItemActive : undefined]}
-                    >
-                      <Text style={styles.listTitle}>
-                        {i + 1}. {s.name}
-                        {!isHost && i === hostSectionIdx ? " (host)" : ""}
-                      </Text>
-                      <Text style={styles.meta}>{s.minutes} min</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Chat</Text>
+        <Text style={styles.meta}>Messages are below. Use the box at the bottom to send.</Text>
+      </View>
+    </View>
+  );
 
-              {!!script.speakerNotes && (
-                <View style={[styles.sectionCard, { marginTop: 10 }]}>
-                  <Text style={styles.cardTitle}>Speaker Notes</Text>
-                  <Text style={styles.body}>{script.speakerNotes}</Text>
-                </View>
-              )}
-            </>
-          )}
+  return (
+    <SafeAreaView style={styles.safe} edges={["top"]}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 0}
+      >
+        <FlatList
+          ref={chatListRef}
+          data={messages}
+          keyExtractor={(m) => String((m as any).id)}
+          renderItem={renderMsg}
+          ListHeaderComponent={Header}
+          contentContainerStyle={styles.content}
+          onContentSizeChange={() => scrollChatToEnd(false)}
+          keyboardShouldPersistTaps="handled"
+        />
+
+        <View style={styles.chatComposerDock}>
+          <TextInput
+            value={chatText}
+            onChangeText={setChatText}
+            style={styles.chatInput}
+            placeholder="Message…"
+            placeholderTextColor="#6B7BB2"
+            multiline
+          />
+          <Pressable
+            onPress={sendMessage}
+            disabled={sending || !chatText.trim()}
+            style={[styles.chatSend, (sending || !chatText.trim()) && styles.disabled]}
+          >
+            <Text style={styles.btnText}>{sending ? "…" : "Send"}</Text>
+          </Pressable>
         </View>
-      </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B1020" },
-  content: { padding: 16, paddingBottom: 28 },
+  content: { padding: 16, paddingBottom: 120 },
 
   center: { flex: 1, justifyContent: "center", alignItems: "center", gap: 10 },
+
+  headerWrap: { paddingBottom: 10 },
 
   h1: { color: "white", fontSize: 28, fontWeight: "800", marginBottom: 10 },
   body: { color: "#D7E0FF", lineHeight: 20 },
@@ -1442,4 +1533,63 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   settingsTitle: { color: "#E4EBFF", fontWeight: "800", marginBottom: 2 },
+
+  // Chat bubbles
+  msgRow: {
+    marginVertical: 6,
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  msgMine: {
+    alignSelf: "flex-end",
+    backgroundColor: "#1A2C5F",
+    borderColor: "#6EA1FF",
+    maxWidth: "88%",
+  },
+  msgOther: {
+    alignSelf: "flex-start",
+    backgroundColor: "#121A31",
+    borderColor: "#27345C",
+    maxWidth: "88%",
+  },
+  msgMeta: { color: "#93A3D9", fontSize: 11, marginBottom: 4 },
+  msgText: { color: "white", lineHeight: 18 },
+
+  // Docked composer (outside FlatList)
+  chatComposerDock: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    padding: 12,
+    paddingBottom: 14,
+    backgroundColor: "#0B1020",
+    borderTopWidth: 1,
+    borderTopColor: "#243258",
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "flex-end",
+  },
+  chatInput: {
+    flex: 1,
+    minHeight: 44,
+    maxHeight: 120,
+    backgroundColor: "#0E1428",
+    borderWidth: 1,
+    borderColor: "#2A365E",
+    borderRadius: 10,
+    color: "white",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  chatSend: {
+    backgroundColor: "#5B8CFF",
+    borderRadius: 10,
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    minWidth: 80,
+    alignItems: "center",
+    justifyContent: "center",
+  },
 });

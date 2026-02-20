@@ -58,7 +58,40 @@ function shortId(id: string) {
   return `${id.slice(0, 6)}…${id.slice(-4)}`;
 }
 
-type EventsFilter = "all" | "hosted";
+function safeTimeMs(iso: string | null | undefined): number {
+  if (!iso) return 0;
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+function formatWhenLabel(event: EventRow, nowMs: number) {
+  const startMs = safeTimeMs((event as any).start_time_utc);
+  const endMs = safeTimeMs((event as any).end_time_utc);
+
+  if (!startMs) return { text: "Unknown time", kind: "neutral" as const };
+
+  const isLive = startMs <= nowMs && (!!endMs ? nowMs <= endMs : true);
+  if (isLive) return { text: "LIVE", kind: "live" as const };
+
+  const minsToStart = Math.round((startMs - nowMs) / 60_000);
+
+  if (minsToStart <= 5 && minsToStart >= -5) return { text: "Starting now", kind: "soon" as const };
+  if (minsToStart <= 30 && minsToStart > 5) return { text: "Soon", kind: "soon" as const };
+
+  const dStart = new Date(startMs);
+  const dNow = new Date(nowMs);
+  const isSameDay =
+    dStart.getFullYear() === dNow.getFullYear() &&
+    dStart.getMonth() === dNow.getMonth() &&
+    dStart.getDate() === dNow.getDate();
+
+  const endOrStart = endMs || startMs;
+  if (endOrStart && endOrStart < nowMs) return { text: "Past", kind: "past" as const };
+
+  if (isSameDay) return { text: "Today", kind: "today" as const };
+
+  return { text: "Upcoming", kind: "upcoming" as const };
+}
 
 export default function EventsScreen() {
   // IMPORTANT:
@@ -90,19 +123,27 @@ export default function EventsScreen() {
   const [endLocal, setEndLocal] = useState(plusMinutesToLocalInput(40));
   const [timezone, setTimezone] = useState("Europe/London");
 
-  // Presence
+  // Presence (quick join from list header)
   const [selectedEventId, setSelectedEventId] = useState<string>("");
   const [isJoined, setIsJoined] = useState(false);
   const [presenceStatus, setPresenceStatus] = useState("");
   const [presenceError, setPresenceError] = useState("");
 
-  // Events list filter (All vs Hosted)
-  const [eventsFilter, setEventsFilter] = useState<EventsFilter>("all");
+  // Filters
+  const [upcomingOnly, setUpcomingOnly] = useState(true);
+  const [hostedOnly, setHostedOnly] = useState(false);
 
   // Attach modal state
   const [attachOpen, setAttachOpen] = useState(false);
   const [attachEventId, setAttachEventId] = useState<string>("");
   const [scriptQuery, setScriptQuery] = useState("");
+
+  // Ticker: refresh LIVE/Soon/Today labels + sorting while screen is open
+  const [nowTick, setNowTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setNowTick((t) => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   const selectedEvent = useMemo(
     () => events.find((e) => e.id === selectedEventId) ?? null,
@@ -268,35 +309,14 @@ export default function EventsScreen() {
     };
   }, [loadEvents]);
 
-  // --- Filtered list (All vs Hosted by me) ---
-  const visibleEvents = useMemo(() => {
-    if (eventsFilter === "hosted") {
-      if (!myUserId) return [];
-      return events.filter((e) => (e as any).host_user_id === myUserId);
-    }
-    return events;
-  }, [events, eventsFilter, myUserId]);
-
-  // When filter changes, ensure selectedEventId is valid in the visible list
-  useEffect(() => {
-    if (visibleEvents.length === 0) {
-      setSelectedEventId("");
-      return;
-    }
-    if (!selectedEventId || !visibleEvents.some((e) => e.id === selectedEventId)) {
-      setSelectedEventId(visibleEvents[0].id);
-    }
-  }, [visibleEvents, selectedEventId]);
-
+  // Presence upsert (heartbeat-safe): NEVER send created_at from the client
   const upsertPresence = useCallback(async (eventId: string) => {
     const {
       data: { user },
       error: userErr,
     } = await supabase.auth.getUser();
 
-    if (userErr || !user) {
-      throw new Error("Not signed in.");
-    }
+    if (userErr || !user) throw new Error("Not signed in.");
 
     const now = new Date().toISOString();
 
@@ -305,7 +325,7 @@ export default function EventsScreen() {
         event_id: eventId,
         user_id: user.id,
         last_seen_at: now,
-        created_at: now,
+        // IMPORTANT: do not send created_at here; let DB defaults preserve it
       },
       { onConflict: "event_id,user_id" }
     );
@@ -403,11 +423,6 @@ export default function EventsScreen() {
       }
 
       Alert.alert("Success", "Event created.");
-
-      // Handy UX: if user is looking at "Hosted", keep them there;
-      // also guarantees the new event appears immediately.
-      setEventsFilter("hosted");
-
       await refreshAll();
     } catch (e: any) {
       Alert.alert("Create event failed", e?.message ?? "Unknown error");
@@ -622,9 +637,73 @@ export default function EventsScreen() {
     );
   };
 
+  // ---- Filtering + sorting ----
+  const visibleEvents = useMemo(() => {
+    // nowTick is intentionally referenced to recompute periodically while screen is open
+    void nowTick;
+
+    const now = Date.now();
+
+    let rows = [...events];
+
+    if (hostedOnly && myUserId) {
+      rows = rows.filter((e) => (e as any).host_user_id === myUserId);
+    } else if (hostedOnly && !myUserId) {
+      rows = [];
+    }
+
+    const isPast = (e: EventRow) => {
+      const endMs = safeTimeMs((e as any).end_time_utc);
+      const startMs = safeTimeMs((e as any).start_time_utc);
+      const t = endMs || startMs;
+      return t > 0 ? t < now : false;
+    };
+
+    const isLive = (e: EventRow) => {
+      const startMs = safeTimeMs((e as any).start_time_utc);
+      const endMs = safeTimeMs((e as any).end_time_utc);
+      if (!startMs) return false;
+      if (!endMs) return startMs <= now;
+      return startMs <= now && now <= endMs;
+    };
+
+    if (upcomingOnly) {
+      // Show live + upcoming (not past)
+      rows = rows.filter((e) => !isPast(e) || isLive(e));
+    }
+
+    // Sort:
+    // 1) LIVE first
+    // 2) then upcoming by start ascending
+    // 3) then past by start descending
+    rows.sort((a, b) => {
+      const aLive = isLive(a) ? 1 : 0;
+      const bLive = isLive(b) ? 1 : 0;
+      if (aLive !== bLive) return bLive - aLive;
+
+      const aPast = isPast(a) ? 1 : 0;
+      const bPast = isPast(b) ? 1 : 0;
+      if (aPast !== bPast) return aPast - bPast; // non-past first
+
+      const aStart = safeTimeMs((a as any).start_time_utc);
+      const bStart = safeTimeMs((b as any).start_time_utc);
+
+      if (aPast && bPast) return bStart - aStart; // past descending
+      return aStart - bStart; // upcoming ascending
+    });
+
+    return rows;
+  }, [events, hostedOnly, myUserId, upcomingOnly, nowTick]);
+
   const renderEvent = ({ item }: { item: EventRow }) => {
+    // use nowTick to refresh pill labels without changing props
+    void nowTick;
+    const nowMs = Date.now();
+
     const isHost = !!myUserId && item.host_user_id === myUserId;
     const hostLabel = displayNameForUserId((item as any).host_user_id as string);
+
+    const when = formatWhenLabel(item, nowMs);
 
     return (
       <Pressable
@@ -632,7 +711,40 @@ export default function EventsScreen() {
         style={[styles.card, item.id === selectedEventId ? styles.cardSelected : undefined]}
       >
         <View style={styles.cardTopRow}>
-          <Text style={styles.cardTitle}>{item.title}</Text>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <Text style={styles.cardTitle} numberOfLines={1}>
+                {item.title}
+              </Text>
+
+              {isHost ? (
+                <View style={styles.chip}>
+                  <Text style={styles.chipText}>HOST</Text>
+                </View>
+              ) : null}
+
+              <View
+                style={[
+                  styles.whenPill,
+                  when.kind === "live"
+                    ? styles.whenLive
+                    : when.kind === "soon"
+                    ? styles.whenSoon
+                    : when.kind === "today"
+                    ? styles.whenToday
+                    : when.kind === "past"
+                    ? styles.whenPast
+                    : styles.whenUpcoming,
+                ]}
+              >
+                <Text style={styles.whenText}>{when.text}</Text>
+              </View>
+            </View>
+
+            <Text style={styles.meta}>
+              Hosted by: <Text style={{ color: "white", fontWeight: "800" }}>{hostLabel}</Text>
+            </Text>
+          </View>
 
           <View style={{ flexDirection: "row", gap: 8 }}>
             <Pressable
@@ -656,10 +768,6 @@ export default function EventsScreen() {
           </View>
         </View>
 
-        <Text style={styles.meta}>
-          Host: <Text style={{ color: "white", fontWeight: "800" }}>{hostLabel}</Text>
-        </Text>
-
         {!!item.description && <Text style={styles.cardText}>{item.description}</Text>}
 
         <Text style={styles.cardText}>Intention: {item.intention_statement}</Text>
@@ -681,34 +789,6 @@ export default function EventsScreen() {
       </Pressable>
     );
   };
-
-  const FilterChips = (
-    <View style={styles.filterRow}>
-      <Pressable
-        onPress={() => setEventsFilter("all")}
-        style={[styles.chip, eventsFilter === "all" ? styles.chipOn : styles.chipOff]}
-      >
-        <Text style={eventsFilter === "all" ? styles.chipTextOn : styles.chipTextOff}>All</Text>
-      </Pressable>
-
-      <Pressable
-        onPress={() => setEventsFilter("hosted")}
-        style={[styles.chip, eventsFilter === "hosted" ? styles.chipOn : styles.chipOff]}
-        disabled={!myUserId}
-      >
-        <Text style={eventsFilter === "hosted" ? styles.chipTextOn : styles.chipTextOff}>
-          Hosted by me
-        </Text>
-      </Pressable>
-
-      <View style={{ flex: 1 }} />
-
-      <Text style={styles.meta}>
-        Showing <Text style={{ color: "white", fontWeight: "800" }}>{visibleEvents.length}</Text> of{" "}
-        <Text style={{ color: "white", fontWeight: "800" }}>{events.length}</Text>
-      </Text>
-    </View>
-  );
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -772,8 +852,46 @@ export default function EventsScreen() {
             </View>
 
             <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Filters</Text>
+
+              <View style={styles.filterRow}>
+                <Pressable
+                  onPress={() => setUpcomingOnly((v) => !v)}
+                  style={[
+                    styles.filterPill,
+                    upcomingOnly ? styles.filterPillOn : styles.filterPillOff,
+                  ]}
+                >
+                  <Text style={upcomingOnly ? styles.filterTextOn : styles.filterTextOff}>
+                    Upcoming only
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={() => setHostedOnly((v) => !v)}
+                  style={[
+                    styles.filterPill,
+                    hostedOnly ? styles.filterPillOn : styles.filterPillOff,
+                  ]}
+                >
+                  <Text style={hostedOnly ? styles.filterTextOn : styles.filterTextOff}>
+                    Hosted by me
+                  </Text>
+                </Pressable>
+              </View>
+
+              <Text style={styles.meta}>
+                Showing{" "}
+                <Text style={{ color: "white", fontWeight: "900" }}>{visibleEvents.length}</Text>{" "}
+                event{visibleEvents.length === 1 ? "" : "s"}
+              </Text>
+            </View>
+
+            <View style={styles.section}>
               <Text style={styles.sectionTitle}>Live Presence</Text>
-              <Text style={styles.meta}>Selected: {selectedEvent ? selectedEvent.title : "(none)"}</Text>
+              <Text style={styles.meta}>
+                Selected: {selectedEvent ? selectedEvent.title : "(none)"}
+              </Text>
 
               <View style={styles.row}>
                 <Pressable
@@ -820,11 +938,10 @@ export default function EventsScreen() {
             </View>
 
             <Text style={styles.sectionTitle}>All Events</Text>
-            {FilterChips}
           </View>
         }
         ListEmptyComponent={
-          <Text style={styles.empty}>{loading ? "Loading..." : "No events match this filter."}</Text>
+          <Text style={styles.empty}>{loading ? "Loading..." : "No events yet."}</Text>
         }
       />
 
@@ -966,29 +1083,17 @@ const styles = StyleSheet.create({
   btnGhostText: { color: "#C8D3FF", fontWeight: "700" },
   disabled: { opacity: 0.45 },
 
-  filterRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 12,
-    flexWrap: "wrap",
-  },
-  chip: {
+  filterRow: { flexDirection: "row", gap: 10, flexWrap: "wrap" },
+  filterPill: {
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
     borderWidth: 1,
   },
-  chipOn: {
-    backgroundColor: "#1A2C5F",
-    borderColor: "#6EA1FF",
-  },
-  chipOff: {
-    backgroundColor: "transparent",
-    borderColor: "#3E4C78",
-  },
-  chipTextOn: { color: "white", fontWeight: "800" },
-  chipTextOff: { color: "#C8D3FF", fontWeight: "800" },
+  filterPillOn: { backgroundColor: "#0F1C44", borderColor: "#2E5BFF" },
+  filterPillOff: { backgroundColor: "transparent", borderColor: "#3E4C78" },
+  filterTextOn: { color: "#DCE4FF", fontWeight: "900" },
+  filterTextOff: { color: "#C8D3FF", fontWeight: "800" },
 
   card: {
     backgroundColor: "#121A31",
@@ -1001,19 +1106,18 @@ const styles = StyleSheet.create({
   cardSelected: { borderColor: "#6EA1FF", backgroundColor: "#1A2C5F" },
   cardTopRow: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
     gap: 10,
   },
   cardTitle: {
     color: "white",
     fontSize: 16,
-    fontWeight: "700",
-    marginBottom: 6,
-    flex: 1,
+    fontWeight: "900",
+    maxWidth: 220,
   },
   cardText: { color: "#C6D0F5", marginBottom: 6 },
-  meta: { color: "#93A3D9", fontSize: 12 },
+  meta: { color: "#93A3D9", fontSize: 12, marginTop: 4 },
 
   smallBtn: {
     borderRadius: 10,
@@ -1030,6 +1134,29 @@ const styles = StyleSheet.create({
   },
   smallBtnText: { color: "white", fontWeight: "800" },
   smallBtnGhostText: { color: "#C8D3FF", fontWeight: "800" },
+
+  chip: {
+    borderWidth: 1,
+    borderColor: "#6EA1FF",
+    backgroundColor: "#0F1C44",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  chipText: { color: "#DCE4FF", fontWeight: "900", fontSize: 12 },
+
+  whenPill: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  whenText: { fontWeight: "900", fontSize: 12, color: "white" },
+  whenLive: { borderColor: "#10B981", backgroundColor: "#052A1F" },
+  whenSoon: { borderColor: "#F59E0B", backgroundColor: "#2A1A05" },
+  whenToday: { borderColor: "#5B8CFF", backgroundColor: "#0F1C44" },
+  whenUpcoming: { borderColor: "#3E4C78", backgroundColor: "#0E1428" },
+  whenPast: { borderColor: "#FB7185", backgroundColor: "#2A1220" },
 
   ok: { color: "#6EE7B7", marginTop: 8 },
   err: { color: "#FB7185", marginTop: 8 },
