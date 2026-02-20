@@ -353,6 +353,60 @@ export default function EventsScreen() {
     }
   }, [events, selectedEventId, attachOpen, attachEventId]);
 
+  useEffect(() => {
+    if (!selectedEventId || !myUserId) {
+      setIsJoined(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadSelectedJoinState = async () => {
+      const { data, error } = await supabase
+        .from("event_presence")
+        .select("event_id,user_id")
+        .eq("event_id", selectedEventId)
+        .eq("user_id", myUserId)
+        .maybeSingle();
+
+      if (cancelled || error) return;
+      setIsJoined(!!data);
+    };
+
+    void loadSelectedJoinState();
+
+    const channel = supabase
+      .channel(`events:selected-presence:${selectedEventId}:${myUserId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "event_presence",
+          filter: `event_id=eq.${selectedEventId}`,
+        },
+        (payload) => {
+          const eventType = String((payload as any).eventType ?? "");
+          const next = (payload as any).new ?? null;
+          const prev = (payload as any).old ?? null;
+          const rowUserId = String((next as any)?.user_id ?? (prev as any)?.user_id ?? "");
+          if (rowUserId !== myUserId) return;
+
+          if (eventType === "DELETE") {
+            setIsJoined(false);
+            return;
+          }
+          setIsJoined(true);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
+  }, [selectedEventId, myUserId]);
+
   // Realtime updates from events table
   useEffect(() => {
     let disposed = false;
