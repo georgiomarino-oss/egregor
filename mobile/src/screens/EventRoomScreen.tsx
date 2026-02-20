@@ -1417,11 +1417,11 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   if (!hasValidEventId) {
     return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
+      <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
         <View style={styles.center}>
           <Text style={styles.err}>Missing or invalid event id.</Text>
-          <Pressable style={[styles.btn, styles.btnGhost]} onPress={handleBack}>
-            <Text style={styles.btnGhostText}>Back</Text>
+          <Pressable style={[styles.btn, styles.btnGhost, { borderColor: c.border }]} onPress={handleBack}>
+            <Text style={[styles.btnGhostText, { color: c.text }]}>Back</Text>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -1430,10 +1430,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
+      <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
         <View style={styles.center}>
           <ActivityIndicator />
-          <Text style={styles.meta}>Loading event room…</Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>Loading event room...</Text>
         </View>
       </SafeAreaView>
     );
@@ -1441,11 +1441,11 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   if (!event) {
     return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
+      <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
         <View style={styles.center}>
           <Text style={styles.err}>Event not found.</Text>
-          <Pressable style={[styles.btn, styles.btnGhost]} onPress={handleBack}>
-            <Text style={styles.btnGhostText}>Back</Text>
+          <Pressable style={[styles.btn, styles.btnGhost, { borderColor: c.border }]} onPress={handleBack}>
+            <Text style={[styles.btnGhostText, { color: c.text }]}>Back</Text>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -1470,13 +1470,13 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     const isNew = joinedSec !== null && joinedSec <= 60;
 
     return (
-      <Text key={`${kind}-${p.user_id}`} style={styles.meta}>
-        • {displayNameForUserId(p.user_id)}{" "}
-        <Text style={{ color: "#5B8CFF" }}>({shortId(p.user_id)})</Text>
-        {badge ? <Text style={{ color: "#DCE4FF" }}>  [{badge}]</Text> : null}
+      <Text key={`${kind}-${p.user_id}`} style={[styles.meta, { color: c.textMuted }]}>
+        - {displayNameForUserId(p.user_id)}{" "}
+        <Text style={{ color: c.primary }}>({shortId(p.user_id)})</Text>
+        {badge ? <Text style={{ color: c.text }}>  [{badge}]</Text> : null}
         {isNew ? <Text style={{ color: "#6EE7B7" }}>  NEW</Text> : null}
-        {"  "}• seen {formatAgo(seenSec)} ago
-        {joinedSec !== null ? <Text> • first joined {formatAgo(joinedSec)} ago</Text> : null}
+        {"  "}- seen {formatAgo(seenSec)} ago
+        {joinedSec !== null ? <Text> - first joined {formatAgo(joinedSec)} ago</Text> : null}
       </Text>
     );
   };
@@ -1500,10 +1500,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         ) : null}
         <View style={[styles.msgRow, mine ? styles.msgMine : styles.msgOther]}>
           <Text style={styles.msgMeta}>
-            <Text style={{ color: "#DCE4FF", fontWeight: "800" }}>{mine ? "You" : name}</Text>
-            <Text style={{ color: "#6F83C6" }}> | {ts}</Text>
+            <Text style={{ color: c.text, fontWeight: "800" }}>{mine ? "You" : name}</Text>
+            <Text style={{ color: c.textMuted }}> | {ts}</Text>
           </Text>
-          <Text style={styles.msgText}>{String((item as any).body ?? "")}</Text>
+          <Text style={[styles.msgText, { color: c.text }]}>{String((item as any).body ?? "")}</Text>
         </View>
       </View>
     );
@@ -1511,19 +1511,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   const Header = (
     <View style={styles.headerWrap}>
-      <Text style={styles.h1}>{(event as any).title}</Text>
+      <Text style={[styles.h1, { color: c.text }]}>{(event as any).title}</Text>
 
-      <Text style={styles.meta}>
-        Host: <Text style={{ color: "white", fontWeight: "800" }}>{hostName}</Text>
-      </Text>
+      <Text style={[styles.meta, { color: c.textMuted }]}>Host: <Text style={{ color: c.text, fontWeight: "800" }}>{hostName}</Text></Text>
 
-      {!!(event as any).description && <Text style={styles.body}>{(event as any).description}</Text>}
+      {!!(event as any).description && <Text style={[styles.body, { color: c.text }]}>{(event as any).description}</Text>}
 
-      <Text style={styles.body}>Intention: {(event as any).intention_statement}</Text>
+      <Text style={[styles.body, { color: c.text }]}>Intention: {(event as any).intention_statement}</Text>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Attached Script</Text>
-        <Text style={styles.meta}>
+      <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+        <Text style={[styles.sectionTitle, { color: c.text }]}>Attached Script</Text>
+        <Text style={[styles.meta, { color: c.textMuted }]}>
           {(event as any).script_id
             ? scriptDbRow?.title
               ? scriptDbRow.title
@@ -1532,30 +1530,26 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         </Text>
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Attendees</Text>
+      <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+        <Text style={[styles.sectionTitle, { color: c.text }]}>Attendees</Text>
 
-        <Text style={styles.meta}>
-          Total: <Text style={{ fontWeight: "900", color: "white" }}>{presenceRows.length}</Text> | Active now:{" "}
-          <Text style={{ fontWeight: "900", color: "white" }}>{activeCount}</Text>
-        </Text>
+        <Text style={[styles.meta, { color: c.textMuted }]}>Total: <Text style={{ fontWeight: "900", color: c.text }}>{presenceRows.length}</Text> | Active now:{" "}<Text style={{ fontWeight: "900", color: c.text }}>{activeCount}</Text></Text>
 
-        <Text style={styles.meta}>
-          {new Date((event as any).start_time_utc).toLocaleString()}{" -> "}{new Date((event as any).end_time_utc).toLocaleString()} (
+        <Text style={[styles.meta, { color: c.textMuted }]}>{new Date((event as any).start_time_utc).toLocaleString()}{" -> "}{new Date((event as any).end_time_utc).toLocaleString()} (
           {(event as any).timezone ?? "UTC"})
         </Text>
 
-        <View style={styles.settingsRow}>
+        <View style={[styles.settingsRow, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.settingsTitle}>Auto-join live</Text>
-            <Text style={styles.meta}>Rejoin rooms automatically when you reopen them.</Text>
+            <Text style={[styles.settingsTitle, { color: c.text }]}>Auto-join live</Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>Rejoin rooms automatically when you reopen them.</Text>
           </View>
           <Switch value={autoJoinGlobalEnabled} onValueChange={handleToggleAutoJoinGlobal} disabled={!autoJoinGlobalLoaded} />
         </View>
 
         {activePresence.length > 0 ? (
           <View style={{ marginTop: 10 }}>
-            <Text style={[styles.meta, { marginBottom: 6, color: "#C8D3FF" }]}>Active now</Text>
+            <Text style={[styles.meta, { marginBottom: 6, color: c.text }]}>Active now</Text>
             {activePresence.slice(0, 10).map((p) => renderPersonLine(p, "active"))}
             {activePresence.length > 10 ? (
               <Text style={styles.meta}>...and {activePresence.length - 10} more active</Text>
@@ -1567,7 +1561,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
         {recentPresence.length > 0 ? (
           <View style={{ marginTop: 12 }}>
-            <Text style={[styles.meta, { marginBottom: 6, color: "#C8D3FF" }]}>Recently seen</Text>
+            <Text style={[styles.meta, { marginBottom: 6, color: c.text }]}>Recently seen</Text>
             {recentPresence.slice(0, 10).map((p) => renderPersonLine(p, "recent"))}
             {recentPresence.length > 10 ? (
               <Text style={styles.meta}>...and {recentPresence.length - 10} more</Text>
@@ -1578,16 +1572,16 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         ) : null}
 
         <View style={styles.row}>
-          <Pressable style={[styles.btn, styles.btnPrimary, isJoined && styles.disabled]} onPress={handleJoinLive} disabled={isJoined}>
+          <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, isJoined && styles.disabled]} onPress={handleJoinLive} disabled={isJoined}>
             <Text style={styles.btnText}>Join live</Text>
           </Pressable>
 
-          <Pressable style={[styles.btn, styles.btnGhost, !isJoined && styles.disabled]} onPress={handleLeaveLive} disabled={!isJoined}>
-            <Text style={styles.btnGhostText}>Leave live</Text>
+          <Pressable style={[styles.btn, styles.btnGhost, { borderColor: c.border }, !isJoined && styles.disabled]} onPress={handleLeaveLive} disabled={!isJoined}>
+            <Text style={[styles.btnGhostText, { color: c.text }]}>Leave live</Text>
           </Pressable>
 
-          <Pressable style={[styles.btn, styles.btnGhost]} onPress={loadEventRoom}>
-            <Text style={styles.btnGhostText}>Refresh</Text>
+          <Pressable style={[styles.btn, styles.btnGhost, { borderColor: c.border }]} onPress={loadEventRoom}>
+            <Text style={[styles.btnGhostText, { color: c.text }]}>Refresh</Text>
           </Pressable>
         </View>
 
@@ -1595,8 +1589,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         {!!presenceErr && <Text style={styles.err}>{presenceErr}</Text>}
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Guided Flow</Text>
+      <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+        <Text style={[styles.sectionTitle, { color: c.text }]}>Guided Flow</Text>
 
         {!script ? (
           <Text style={styles.meta}>No script attached to this event yet. Attach one from the Events screen.</Text>
@@ -1612,20 +1606,20 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                 <Text style={[styles.pillText, { color: pill.textColor }]}>{runReady ? runStatusLabel : "..."}</Text>
               </View>
               {isHost ? (
-                <Text style={styles.meta}>You are the host.</Text>
+                <Text style={[styles.meta, { color: c.textMuted }]}>You are the host.</Text>
               ) : (
-                <Text style={styles.meta}>{viewingHostLive ? "Following host." : "Previewing (not following host)."}</Text>
+                <Text style={[styles.meta, { color: c.textMuted }]}>{viewingHostLive ? "Following host." : "Previewing (not following host)."}</Text>
               )}
             </View>
 
             {!isJoined ? (
-              <View style={styles.banner}>
-                <Text style={styles.bannerTitle}>
+              <View style={[styles.banner, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+                <Text style={[styles.bannerTitle, { color: c.text }]}>
                   {autoJoinGlobalLoaded && joinPrefLoaded && autoJoinGlobalEnabled && shouldAutoJoinForEvent ? "Rejoining..." : "You are not live yet"}
                 </Text>
-                <Text style={styles.meta}>Join live to appear in the room and be counted as active.</Text>
+                <Text style={[styles.meta, { color: c.textMuted }]}>Join live to appear in the room and be counted as active.</Text>
                 <View style={[styles.row, { marginTop: 8 }]}>
-                  <Pressable style={[styles.btn, styles.btnPrimary]} onPress={handleJoinLive}>
+                  <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }]} onPress={handleJoinLive}>
                     <Text style={styles.btnText}>Join live</Text>
                   </Pressable>
                 </View>
@@ -1633,37 +1627,37 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             ) : null}
 
             {!isHost && !viewingHostLive ? (
-              <View style={styles.banner}>
-                <Text style={styles.bannerTitle}>Preview mode</Text>
-                <Text style={styles.meta}>
+              <View style={[styles.banner, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+                <Text style={[styles.bannerTitle, { color: c.text }]}>Preview mode</Text>
+                <Text style={[styles.meta, { color: c.textMuted }]}>
                   You are reading a different section locally. Tap Follow host to return to the live section/timer.
                 </Text>
                 <View style={[styles.row, { marginTop: 8 }]}>
-                  <Pressable style={[styles.btn, styles.btnPrimary]} onPress={handleFollowHost}>
+                  <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }]} onPress={handleFollowHost}>
                     <Text style={styles.btnText}>Follow host</Text>
                   </Pressable>
                 </View>
               </View>
             ) : null}
 
-            <View style={styles.timerBox}>
-              <Text style={styles.timerLabel}>
+            <View style={[styles.timerBox, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+              <Text style={[styles.timerLabel, { color: c.textMuted }]}>
                 Section {viewingSectionIdx + 1} of {script.sections.length}
                 {!isHost && !viewingHostLive ? " (preview)" : ""}
               </Text>
-              <Text style={styles.timerValue}>{formatSeconds(secondsLeft)}</Text>
-              <Text style={styles.timerSub}>{currentSection?.name ?? "Section"}</Text>
+              <Text style={[styles.timerValue, { color: c.text }]}>{formatSeconds(secondsLeft)}</Text>
+              <Text style={[styles.timerSub, { color: c.text }]}>{currentSection?.name ?? "Section"}</Text>
             </View>
 
             {runState.mode === "ended" ? (
-              <View style={[styles.sectionCard, { marginTop: 10 }]}>
-                <Text style={styles.cardTitle}>Session ended</Text>
-                <Text style={styles.meta}>
+              <View style={[styles.sectionCard, { marginTop: 10, backgroundColor: c.cardAlt, borderColor: c.border }]}>
+                <Text style={[styles.cardTitle, { color: c.text }]}>Session ended</Text>
+                <Text style={[styles.meta, { color: c.textMuted }]}>
                   {isHost ? "You can restart the session when ready." : "Wait for the host to restart the session."}
                 </Text>
                 {isHost ? (
                   <View style={styles.row}>
-                    <Pressable style={[styles.btn, styles.btnPrimary, !hasScript && styles.disabled]} onPress={hostRestart} disabled={!hasScript}>
+                    <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, !hasScript && styles.disabled]} onPress={hostRestart} disabled={!hasScript}>
                       <Text style={styles.btnText}>Restart</Text>
                     </Pressable>
                   </View>
@@ -1671,52 +1665,52 @@ export default function EventRoomScreen({ route, navigation }: Props) {
               </View>
             ) : null}
 
-            <View style={styles.sectionCard}>
-              <Text style={styles.cardTitle}>{currentSection?.name}</Text>
-              <Text style={styles.meta}>{currentSection?.minutes ?? 0} min</Text>
-              <Text style={styles.body}>{currentSection?.text ?? ""}</Text>
+            <View style={[styles.sectionCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+              <Text style={[styles.cardTitle, { color: c.text }]}>{currentSection?.name}</Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>{currentSection?.minutes ?? 0} min</Text>
+              <Text style={[styles.body, { color: c.text }]}>{currentSection?.text ?? ""}</Text>
             </View>
 
             <View style={styles.row}>
               {isHost ? (
                 <>
                   {(runState.mode === "idle" || runState.mode === "ended") && (
-                    <Pressable style={[styles.btn, styles.btnPrimary, !hasScript && styles.disabled]} onPress={hostStart} disabled={!hasScript}>
+                    <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, !hasScript && styles.disabled]} onPress={hostStart} disabled={!hasScript}>
                       <Text style={styles.btnText}>Start</Text>
                     </Pressable>
                   )}
 
                   {runState.mode === "running" && (
-                    <Pressable style={[styles.btn, styles.btnGhost]} onPress={hostPause}>
-                      <Text style={styles.btnGhostText}>Pause</Text>
+                    <Pressable style={[styles.btn, styles.btnGhost, { borderColor: c.border }]} onPress={hostPause}>
+                      <Text style={[styles.btnGhostText, { color: c.text }]}>Pause</Text>
                     </Pressable>
                   )}
 
                   {runState.mode === "paused" && (
-                    <Pressable style={[styles.btn, styles.btnPrimary]} onPress={hostResume}>
+                    <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }]} onPress={hostResume}>
                       <Text style={styles.btnText}>Resume</Text>
                     </Pressable>
                   )}
                 </>
               ) : null}
 
-              <Pressable style={[styles.btn, styles.btnGhost, atFirst && styles.disabled]} onPress={handlePrev} disabled={atFirst}>
-                <Text style={styles.btnGhostText}>Previous</Text>
+              <Pressable style={[styles.btn, styles.btnGhost, { borderColor: c.border }, atFirst && styles.disabled]} onPress={handlePrev} disabled={atFirst}>
+                <Text style={[styles.btnGhostText, { color: c.text }]}>Previous</Text>
               </Pressable>
 
-              <Pressable style={[styles.btn, styles.btnPrimary, atLast && styles.disabled]} onPress={handleNext} disabled={atLast}>
+              <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, atLast && styles.disabled]} onPress={handleNext} disabled={atLast}>
                 <Text style={styles.btnText}>Next</Text>
               </Pressable>
 
               {isHost && runState.mode !== "ended" ? (
-                <Pressable style={[styles.btn, styles.btnGhost]} onPress={hostEnd}>
-                  <Text style={styles.btnGhostText}>End</Text>
+                <Pressable style={[styles.btn, styles.btnGhost, { borderColor: c.border }]} onPress={hostEnd}>
+                  <Text style={[styles.btnGhostText, { color: c.text }]}>End</Text>
                 </Pressable>
               ) : null}
 
               {!isHost && !viewingHostLive ? (
-                <Pressable style={[styles.btn, styles.btnGhost]} onPress={handleFollowHost}>
-                  <Text style={styles.btnGhostText}>Follow host</Text>
+                <Pressable style={[styles.btn, styles.btnGhost, { borderColor: c.border }]} onPress={handleFollowHost}>
+                  <Text style={[styles.btnGhostText, { color: c.text }]}>Follow host</Text>
                 </Pressable>
               ) : null}
             </View>
@@ -1728,22 +1722,27 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                   <Pressable
                     key={`${s.name}-${i}`}
                     onPress={() => handleSelectSection(i)}
-                    style={[styles.listItem, isActive ? styles.listItemActive : undefined]}
+                    style={[
+                      styles.listItem,
+                      { backgroundColor: c.cardAlt, borderColor: c.border },
+                      isActive ? styles.listItemActive : undefined,
+                      isActive ? { borderColor: c.primary, backgroundColor: c.card } : undefined,
+                    ]}
                   >
-                    <Text style={styles.listTitle}>
+                    <Text style={[styles.listTitle, { color: c.text }]}>
                       {i + 1}. {s.name}
                       {!isHost && i === hostSectionIdx ? " (host)" : ""}
                     </Text>
-                    <Text style={styles.meta}>{s.minutes} min</Text>
+                    <Text style={[styles.meta, { color: c.textMuted }]}>{s.minutes} min</Text>
                   </Pressable>
                 );
               })}
             </View>
 
             {!!script.speakerNotes && (
-              <View style={[styles.sectionCard, { marginTop: 10 }]}>
-                <Text style={styles.cardTitle}>Speaker Notes</Text>
-                <Text style={styles.body}>{script.speakerNotes}</Text>
+              <View style={[styles.sectionCard, { marginTop: 10, backgroundColor: c.cardAlt, borderColor: c.border }]}>
+                <Text style={[styles.cardTitle, { color: c.text }]}>Speaker Notes</Text>
+                <Text style={[styles.body, { color: c.text }]}>{script.speakerNotes}</Text>
               </View>
             )}
 
@@ -1752,9 +1751,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         )}
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Chat</Text>
-        <Text style={styles.meta}>Messages are below. Use the box at the bottom to send.</Text>
+      <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+        <Text style={[styles.sectionTitle, { color: c.text }]}>Chat</Text>
+        <Text style={[styles.meta, { color: c.textMuted }]}>Messages are below. Use the box at the bottom to send.</Text>
       </View>
     </View>
   );
@@ -2060,3 +2059,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 });
+
+
+
+
