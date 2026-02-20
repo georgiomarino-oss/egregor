@@ -843,6 +843,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   // Load per-event sticky join pref
   useEffect(() => {
     let cancelled = false;
+    setJoinPrefLoaded(false);
+    setShouldAutoJoinForEvent(false);
     if (!hasValidEventId) return;
 
     (async () => {
@@ -856,6 +858,14 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       cancelled = true;
     };
   }, [eventId, hasValidEventId]);
+
+  useEffect(() => {
+    setPendingMessageCount(0);
+    setUnreadMarkerMessageId(null);
+    shouldAutoScrollRef.current = true;
+    chatContentHeightRef.current = 0;
+    chatScrollOffsetYRef.current = 0;
+  }, [eventId]);
 
   useEffect(() => {
     if (tickRef.current) clearInterval(tickRef.current);
