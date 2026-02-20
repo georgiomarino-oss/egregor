@@ -739,6 +739,7 @@ export default function ScriptsScreen() {
                 placeholderTextColor="#6B7BB2"
                 maxLength={SCRIPT_TITLE_MAX}
               />
+              <Text style={styles.meta}>{title.trim().length}/{SCRIPT_TITLE_MAX}</Text>
 
               <Text style={styles.label}>Intention</Text>
               <TextInput
@@ -750,6 +751,7 @@ export default function ScriptsScreen() {
                 placeholderTextColor="#6B7BB2"
                 maxLength={SCRIPT_INTENTION_MAX}
               />
+              <Text style={styles.meta}>{intention.trim().length}/{SCRIPT_INTENTION_MAX}</Text>
 
               <View style={styles.row}>
                 <View style={{ flex: 1, minWidth: 140 }}>
@@ -878,6 +880,7 @@ export default function ScriptsScreen() {
               placeholderTextColor="#6B7BB2"
               maxLength={SCRIPT_TITLE_MAX}
             />
+            <Text style={styles.meta}>{editTitle.trim().length}/{SCRIPT_TITLE_MAX}</Text>
 
             <Text style={styles.label}>Intention</Text>
             <TextInput
@@ -889,6 +892,7 @@ export default function ScriptsScreen() {
               placeholderTextColor="#6B7BB2"
               maxLength={SCRIPT_INTENTION_MAX}
             />
+            <Text style={styles.meta}>{editIntention.trim().length}/{SCRIPT_INTENTION_MAX}</Text>
 
             <View style={styles.row}>
               <View style={{ flex: 1, minWidth: 140 }}>
