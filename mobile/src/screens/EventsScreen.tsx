@@ -200,6 +200,9 @@ export default function EventsScreen() {
   const [joinedEventId, setJoinedEventId] = useState<string>("");
   const [presenceStatus, setPresenceStatus] = useState("");
   const [presenceError, setPresenceError] = useState("");
+  const [energyStatus, setEnergyStatus] = useState("");
+  const [energyError, setEnergyError] = useState("");
+  const [sendingEnergy, setSendingEnergy] = useState<number | null>(null);
   const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
 
   // Filters
@@ -741,6 +744,46 @@ export default function EventsScreen() {
       setPresenceError(e?.message ?? "Failed to leave");
     }
   }, [selectedEventId, joinedEventId]);
+
+  const handleSendEnergy = useCallback(async (amount: number) => {
+    setEnergyError("");
+    setEnergyStatus("");
+
+    if (!selectedEventId) {
+      Alert.alert("Select event", "Please select an event first.");
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) return;
+
+    const {
+      data: { user },
+      error: userErr,
+    } = await supabase.auth.getUser();
+
+    if (userErr || !user) {
+      setEnergyError("Not signed in.");
+      return;
+    }
+
+    setSendingEnergy(amount);
+    try {
+      const payload: Database["public"]["Tables"]["event_messages"]["Insert"] = {
+        event_id: selectedEventId,
+        user_id: user.id,
+        body: `Sent ${amount} energy to this circle.`,
+      };
+
+      const { error } = await supabase.from("event_messages").insert(payload);
+      if (error) {
+        setEnergyError(error.message);
+        return;
+      }
+
+      setEnergyStatus(`Sent +${amount} energy.`);
+    } finally {
+      setSendingEnergy(null);
+    }
+  }, [selectedEventId]);
 
   const openRoom = useCallback(
     (eventId: string) => {
@@ -1473,8 +1516,30 @@ export default function EventsScreen() {
                 </Pressable>
               </View>
 
+              <View style={styles.row}>
+                {[1, 3, 7].map((amount) => (
+                  <Pressable
+                    key={amount}
+                    style={[
+                      styles.btn,
+                      styles.btnGhost,
+                      { borderColor: c.border },
+                      (!selectedEventId || !!sendingEnergy) && styles.disabled,
+                    ]}
+                    onPress={() => void handleSendEnergy(amount)}
+                    disabled={!selectedEventId || !!sendingEnergy}
+                  >
+                    <Text style={[styles.btnGhostText, { color: c.text }]}>
+                      {sendingEnergy === amount ? "Sending..." : `+${amount} energy`}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
               {!!presenceStatus && <Text style={styles.ok}>{presenceStatus}</Text>}
               {!!presenceError && <Text style={styles.err}>{presenceError}</Text>}
+              {!!energyStatus && <Text style={styles.ok}>{energyStatus}</Text>}
+              {!!energyError && <Text style={styles.err}>{energyError}</Text>}
             </View>
 
             <Text style={[styles.sectionTitle, { color: c.text }]}>All Events</Text>
