@@ -35,9 +35,6 @@ import {
 import { logMonetizationEvent } from "../features/billing/billingAnalyticsRepo";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
-type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
-type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
-type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 type CommunityFeedItem = {
   id: string;
   body: string;
@@ -47,8 +44,14 @@ type CommunityFeedItem = {
   eventTitle: string;
   displayName: string;
 };
+type HomeDashboardSnapshotRow = {
+  weekly_impact: number | null;
+  previous_weekly_impact: number | null;
+  active_global_participants: number | null;
+  active_global_events: number | null;
+  feed_items: unknown;
+};
 
-const ACTIVE_WINDOW_MS = 90_000;
 const HOME_RESYNC_MS = 30_000;
 const KEY_PROFILE_PREFS = "profile:prefs:v1";
 const KEY_DAILY_INTENTION = "onboarding:intention:v1";
@@ -161,6 +164,12 @@ function truncate(text: string, max = 150) {
   const clean = text.trim();
   if (clean.length <= max) return clean;
   return `${clean.slice(0, max - 1)}...`;
+}
+
+function safeCount(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.floor(n));
 }
 
 export default function HomeScreen() {
@@ -331,94 +340,53 @@ export default function HomeScreen() {
     homeLoadInFlightRef.current = true;
     setLoading(true);
     try {
-      const { data: eventRows } = await supabase
-        .from("events")
-        .select(
-          "id,title,intention_statement,start_time_utc,end_time_utc,timezone,active_count_snapshot,total_join_count,host_user_id"
-        )
-        .order("start_time_utc", { ascending: true })
-        .limit(80);
+      const [{ data: eventRows }, { data: snapshotData, error: snapshotError }] =
+        await Promise.all([
+          supabase
+            .from("events")
+            .select(
+              "id,title,intention_statement,start_time_utc,end_time_utc,timezone,active_count_snapshot,total_join_count,host_user_id"
+            )
+            .order("start_time_utc", { ascending: true })
+            .limit(80),
+          supabase.rpc("get_home_dashboard_snapshot"),
+        ]);
 
       setEvents((eventRows ?? []) as EventRow[]);
+      if (snapshotError) {
+        setWeeklyImpact(0);
+        setPreviousWeeklyImpact(0);
+        setActiveGlobalParticipants(0);
+        setActiveGlobalEvents(0);
+        setFeedItems([]);
+      } else {
+        const snapshot = Array.isArray(snapshotData)
+          ? ((snapshotData[0] as HomeDashboardSnapshotRow | undefined) ?? null)
+          : ((snapshotData as HomeDashboardSnapshotRow | null) ?? null);
 
-      const weekAgoIso = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-      const twoWeeksAgoIso = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
-      const [{ count: thisWeekCount }, { count: prevWeekCount }] = await Promise.all([
-        supabase
-          .from("event_presence")
-          .select("*", { count: "exact", head: true })
-          .gte("last_seen_at", weekAgoIso),
-        supabase
-          .from("event_presence")
-          .select("*", { count: "exact", head: true })
-          .gte("last_seen_at", twoWeeksAgoIso)
-          .lt("last_seen_at", weekAgoIso),
-      ]);
+        setWeeklyImpact(safeCount(snapshot?.weekly_impact));
+        setPreviousWeeklyImpact(safeCount(snapshot?.previous_weekly_impact));
+        setActiveGlobalParticipants(safeCount(snapshot?.active_global_participants));
+        setActiveGlobalEvents(safeCount(snapshot?.active_global_events));
 
-      setWeeklyImpact(thisWeekCount ?? 0);
-      setPreviousWeeklyImpact(prevWeekCount ?? 0);
-
-      const activeCutoffIso = new Date(Date.now() - ACTIVE_WINDOW_MS).toISOString();
-      const { data: activePresenceRows } = await supabase
-        .from("event_presence")
-        .select("event_id,user_id,last_seen_at")
-        .gte("last_seen_at", activeCutoffIso)
-        .limit(5000);
-
-      const activeRows = (activePresenceRows ?? []) as Pick<PresenceRow, "event_id" | "user_id" | "last_seen_at">[];
-      const activeRowsInWindow = activeRows.filter(
-        (r) => safeTimeMs((r as any).last_seen_at) >= Date.now() - ACTIVE_WINDOW_MS
-      );
-      setActiveGlobalParticipants(activeRowsInWindow.length);
-      setActiveGlobalEvents(new Set(activeRowsInWindow.map((r) => String((r as any).event_id ?? ""))).size);
-
-      const { data: feedRows } = await supabase
-        .from("event_messages")
-        .select("id,event_id,user_id,body,created_at")
-        .order("created_at", { ascending: false })
-        .limit(20);
-
-      const messages = (feedRows ?? []) as Pick<EventMessageRow, "id" | "event_id" | "user_id" | "body" | "created_at">[];
-      const eventIds = Array.from(new Set(messages.map((m) => String((m as any).event_id ?? "")).filter(Boolean)));
-      const userIds = Array.from(new Set(messages.map((m) => String((m as any).user_id ?? "")).filter(Boolean)));
-
-      const [{ data: feedEvents }, { data: feedProfiles }] = await Promise.all([
-        eventIds.length
-          ? supabase.from("events").select("id,title").in("id", eventIds)
-          : Promise.resolve({ data: [] as Pick<EventRow, "id" | "title">[] }),
-        userIds.length
-          ? supabase.from("profiles").select("id,display_name").in("id", userIds)
-          : Promise.resolve({ data: [] as Pick<ProfileRow, "id" | "display_name">[] }),
-      ]);
-
-      const eventTitleById: Record<string, string> = {};
-      for (const e of ((feedEvents ?? []) as Pick<EventRow, "id" | "title">[])) {
-        eventTitleById[String((e as any).id ?? "")] = String((e as any).title ?? "Event");
-      }
-      const displayNameById: Record<string, string> = {};
-      for (const p of ((feedProfiles ?? []) as Pick<ProfileRow, "id" | "display_name">[])) {
-        const name = String((p as any).display_name ?? "").trim();
-        displayNameById[String((p as any).id ?? "")] = name || shortId(String((p as any).id ?? ""));
-      }
-
-      setFeedItems(
-        messages
-          .filter((m) => String((m as any).body ?? "").trim().length > 0)
-          .map((m) => {
-            const eventId = String((m as any).event_id ?? "");
-            const userId = String((m as any).user_id ?? "");
+        const rawFeed = snapshot?.feed_items;
+        const feed = Array.isArray(rawFeed) ? rawFeed : [];
+        setFeedItems(
+          feed.map((item) => {
+            const row = item as Record<string, unknown>;
+            const userId = String(row.userId ?? "");
             return {
-              id: String((m as any).id ?? ""),
-              body: String((m as any).body ?? ""),
-              createdAt: String((m as any).created_at ?? ""),
-              eventId,
+              id: String(row.id ?? ""),
+              body: String(row.body ?? ""),
+              createdAt: String(row.createdAt ?? ""),
+              eventId: String(row.eventId ?? ""),
               userId,
-              eventTitle: eventTitleById[eventId] ?? "Live circle",
-              displayName: displayNameById[userId] ?? shortId(userId),
+              eventTitle: String(row.eventTitle ?? "Live circle"),
+              displayName: String(row.displayName ?? shortId(userId)),
             };
           })
-          .slice(0, 6)
-      );
+        );
+      }
     } finally {
       setLoading(false);
       homeLoadInFlightRef.current = false;

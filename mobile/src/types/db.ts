@@ -738,6 +738,16 @@ export type Database = {
         Args: { p_event_id: string; p_stale_seconds?: number }
         Returns: number
       }
+      get_home_dashboard_snapshot: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          active_global_events: number
+          active_global_participants: number
+          feed_items: Json
+          previous_weekly_impact: number
+          weekly_impact: number
+        }[]
+      }
       get_monetization_funnel_summary: {
         Args: { p_user_id?: string }
         Returns: {
