@@ -1,12 +1,17 @@
 // mobile/App.tsx
 import "react-native-gesture-handler";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, View } from "react-native";
-import { NavigationContainer, DefaultTheme } from "@react-navigation/native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, AppState, View } from "react-native";
+import {
+  NavigationContainer,
+  DefaultTheme,
+  createNavigationContainerRef,
+} from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Notifications from "expo-notifications";
 
 import AuthScreen from "./src/screens/AuthScreen";
 import OnboardingScreen from "./src/screens/OnboardingScreen";
@@ -21,9 +26,15 @@ import NotificationsScreen from "./src/screens/NotificationsScreen";
 import { AppStateProvider, useAppState } from "./src/state";
 import type { RootStackParamList, RootTabParamList } from "./src/types";
 import { getAppColors } from "./src/theme/appearance";
+import {
+  ensurePushNotificationsConfigured,
+  extractEventIdFromNotificationData,
+  registerPushTokenForCurrentUser,
+} from "./src/features/notifications/pushRepo";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tabs = createBottomTabNavigator<RootTabParamList>();
+const rootNavRef = createNavigationContainerRef<RootStackParamList>();
 const KEY_ONBOARDING_DONE = "onboarding:done:v1";
 const KEY_DAILY_INTENTION = "onboarding:intention:v1";
 
@@ -81,6 +92,9 @@ function RootNav() {
   const c = getAppColors(theme, highContrast);
   const [onboardingResolved, setOnboardingResolved] = useState(false);
   const [onboardingDone, setOnboardingDone] = useState(false);
+  const pendingPushEventIdRef = useRef<string | null>(null);
+  const lastHandledNotificationIdRef = useRef("");
+  const lastRegisteredPushUserIdRef = useRef("");
 
   useEffect(() => {
     let cancelled = false;
@@ -120,6 +134,90 @@ function RootNav() {
     }
   }, []);
 
+  const openEventFromPushData = useCallback(
+    (data: unknown) => {
+      const eventId = extractEventIdFromNotificationData(data);
+      if (!eventId) return;
+
+      pendingPushEventIdRef.current = eventId;
+      if (!user || !onboardingDone) return;
+      if (!rootNavRef.isReady()) return;
+
+      rootNavRef.navigate("EventRoom", { eventId });
+      pendingPushEventIdRef.current = null;
+    },
+    [onboardingDone, user]
+  );
+
+  useEffect(() => {
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      const notificationId = String(response?.notification?.request?.identifier ?? "").trim();
+      if (notificationId && notificationId === lastHandledNotificationIdRef.current) return;
+      if (notificationId) lastHandledNotificationIdRef.current = notificationId;
+      openEventFromPushData(response?.notification?.request?.content?.data);
+    });
+
+    void Notifications.getLastNotificationResponseAsync()
+      .then((response) => {
+        if (!response) return;
+        const notificationId = String(response?.notification?.request?.identifier ?? "").trim();
+        if (notificationId && notificationId === lastHandledNotificationIdRef.current) return;
+        if (notificationId) lastHandledNotificationIdRef.current = notificationId;
+        openEventFromPushData(response?.notification?.request?.content?.data);
+      })
+      .catch(() => {
+        // ignore
+      });
+
+    return () => {
+      sub.remove();
+    };
+  }, [openEventFromPushData]);
+
+  useEffect(() => {
+    if (!user || !onboardingDone) return;
+    const eventId = pendingPushEventIdRef.current;
+    if (!eventId) return;
+
+    const open = () => {
+      if (!rootNavRef.isReady()) return false;
+      rootNavRef.navigate("EventRoom", { eventId });
+      pendingPushEventIdRef.current = null;
+      return true;
+    };
+
+    if (open()) return;
+    const timer = setTimeout(() => {
+      void open();
+    }, 350);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [onboardingDone, user]);
+
+  useEffect(() => {
+    const uid = user?.id ?? "";
+    if (!uid) {
+      lastRegisteredPushUserIdRef.current = "";
+      return;
+    }
+    if (lastRegisteredPushUserIdRef.current === uid) return;
+    lastRegisteredPushUserIdRef.current = uid;
+
+    void registerPushTokenForCurrentUser();
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      void registerPushTokenForCurrentUser();
+    });
+    return () => {
+      sub.remove();
+    };
+  }, [user?.id]);
+
   const navTheme = useMemo(
     () => ({
       ...DefaultTheme,
@@ -143,7 +241,7 @@ function RootNav() {
   }
 
   return (
-    <NavigationContainer theme={navTheme}>
+    <NavigationContainer ref={rootNavRef} theme={navTheme}>
       <Stack.Navigator
         screenOptions={{
           headerShown: false,
@@ -186,6 +284,10 @@ function RootNav() {
 }
 
 export default function App() {
+  useEffect(() => {
+    ensurePushNotificationsConfigured();
+  }, []);
+
   return (
     <SafeAreaProvider>
       <AppStateProvider>

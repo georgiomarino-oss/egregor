@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from "
 import type { Session, User } from "@supabase/supabase-js";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "./supabase/client";
+import { unregisterPushTokenForCurrentUser } from "./features/notifications/pushRepo";
 
 export type AppTheme = "light" | "dark" | "cosmic";
 const KEY_APP_THEME = "prefs:appTheme";
@@ -127,6 +128,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     if (uid) {
       try {
         await supabase.from("event_presence").delete().eq("user_id", uid);
+      } catch {
+        // best effort: auth signout should still proceed
+      }
+      try {
+        await unregisterPushTokenForCurrentUser();
       } catch {
         // best effort: auth signout should still proceed
       }

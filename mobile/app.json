@@ -13,16 +13,21 @@
     "ios": {
       "supportsTablet": false,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Egregor uses your location (optional) to show live regional participation heat map."
+        "NSLocationWhenInUseUsageDescription": "Egregor uses your location (optional) to show live regional participation heat map.",
+        "NSUserNotificationUsageDescription": "Egregor sends gentle alerts for live circles, responses, and compassionate global events."
       }
     },
     "android": {
       "usesCleartextTraffic": true,
       "permissions": [
+        "POST_NOTIFICATIONS",
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION"
       ]
     },
+    "plugins": [
+      "expo-notifications"
+    ],
     "web": {
       "bundler": "metro"
     },
