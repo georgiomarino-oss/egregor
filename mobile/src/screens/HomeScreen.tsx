@@ -563,9 +563,17 @@ export default function HomeScreen() {
   const renderEvent = ({ item }: { item: EventRow }) => {
     const startMs = safeTimeMs((item as any).start_time_utc);
     const label = startMs ? new Date(startMs).toLocaleString() : "Unknown time";
+    const isNewsEvent = String((item as any).source ?? "").trim().toLowerCase() === "news";
     return (
       <Pressable style={[styles.eventCard, { backgroundColor: c.card, borderColor: c.border }]} onPress={() => openEventRoom(item.id)}>
-        <Text style={[styles.eventTitle, { color: c.text }]}>{String((item as any).title ?? "Untitled")}</Text>
+        <View style={styles.eventTitleRow}>
+          <Text style={[styles.eventTitle, { color: c.text }]}>{String((item as any).title ?? "Untitled")}</Text>
+          {isNewsEvent ? (
+            <View style={[styles.eventBadge, { borderColor: c.primary, backgroundColor: c.cardAlt }]}>
+              <Text style={[styles.eventBadgeText, { color: c.primary }]}>Crisis response</Text>
+            </View>
+          ) : null}
+        </View>
         <Text style={[styles.eventMeta, { color: c.textMuted }]}>{label}</Text>
         <Text style={[styles.eventMeta, { color: c.text }]}>
           {(item as any).intention_statement
@@ -926,7 +934,24 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: 12,
   },
+  eventTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
   eventTitle: { fontSize: 16, fontWeight: "800", marginBottom: 4 },
+  eventBadge: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  eventBadgeText: {
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.2,
+  },
   eventMeta: { fontSize: 12, lineHeight: 17 },
   empty: {
     paddingVertical: 28,

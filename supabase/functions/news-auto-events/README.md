@@ -15,6 +15,16 @@ Supabase Edge Function scaffold to auto-create compassion events from world news
 - `NEWS_DEFAULT_TIMEZONE` (default: `UTC`)
 - `NEWS_API_BASE_URL` (default: `https://newsapi.org`)
 
+## Scheduler notes
+
+- Migration `202602200014_schedule_news_auto_events_job.sql` schedules this function every 15 minutes.
+- It sends `Authorization` + `apikey` headers from `app.settings.anon_key`.
+- If you set `NEWS_AUTOGEN_CRON_TOKEN`, also set the matching DB setting so pg_cron includes it:
+
+```sql
+alter database postgres set app.settings.news_autogen_cron_token = 'replace-with-same-token';
+```
+
 ## Request
 
 - Method: `POST`

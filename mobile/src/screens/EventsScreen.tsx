@@ -1212,6 +1212,7 @@ export default function EventsScreen() {
     const nowMs = Date.now();
 
     const isHost = !!myUserId && item.host_user_id === myUserId;
+    const isNewsEvent = String((item as any).source ?? "").trim().toLowerCase() === "news";
     const hostLabel = displayNameForUserId((item as any).host_user_id as string);
 
     const when = formatWhenLabel(item, nowMs);
@@ -1255,6 +1256,12 @@ export default function EventsScreen() {
               >
                 <Text style={styles.whenText}>{when.text}</Text>
               </View>
+
+              {isNewsEvent ? (
+                <View style={[styles.whenPill, styles.whenNews]}>
+                  <Text style={styles.whenText}>Crisis response</Text>
+                </View>
+              ) : null}
             </View>
 
             <Text style={[styles.meta, { color: c.textMuted }]}>
@@ -1841,6 +1848,7 @@ const styles = StyleSheet.create({
   whenLive: { borderColor: "#10B981", backgroundColor: "#052A1F" },
   whenSoon: { borderColor: "#F59E0B", backgroundColor: "#2A1A05" },
   whenToday: { borderColor: "#5B8CFF", backgroundColor: "#0F1C44" },
+  whenNews: { borderColor: "#FBBF24", backgroundColor: "#2D2107" },
   whenUpcoming: { borderColor: "#3E4C78", backgroundColor: "#0E1428" },
   whenPast: { borderColor: "#FB7185", backgroundColor: "#2A1220" },
 

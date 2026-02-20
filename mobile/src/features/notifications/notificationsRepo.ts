@@ -40,6 +40,15 @@ function safeTimeMs(iso: string | null | undefined): number {
   return Number.isFinite(t) ? t : 0;
 }
 
+function notificationPriority(kind: NotificationItem["kind"]) {
+  if (kind === "news") return 5;
+  if (kind === "live") return 4;
+  if (kind === "soon") return 3;
+  if (kind === "streak") return 2;
+  if (kind === "invite") return 1;
+  return 0;
+}
+
 function normalizePrefs(raw: any): ProfilePrefs {
   if (!raw || typeof raw !== "object") return DEFAULT_PREFS;
   return {
@@ -203,7 +212,12 @@ export async function listNotifications(): Promise<NotificationItem[]> {
     });
   }
 
-  next.sort((a, b) => safeTimeMs(b.atIso) - safeTimeMs(a.atIso));
+  next.sort((a, b) => {
+    const pa = notificationPriority(a.kind);
+    const pb = notificationPriority(b.kind);
+    if (pa !== pb) return pb - pa;
+    return safeTimeMs(b.atIso) - safeTimeMs(a.atIso);
+  });
   return next.slice(0, 40);
 }
 
