@@ -520,14 +520,18 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       return;
     }
 
-    const {
-      data: { user },
-      error: userErr,
-    } = await supabase.auth.getUser();
-
-    if (userErr || !user) {
-      Alert.alert("Not signed in", "Please sign in first.");
-      return;
+    let uid = userId;
+    if (!uid) {
+      const {
+        data: { user },
+        error: userErr,
+      } = await supabase.auth.getUser();
+      if (userErr || !user) {
+        Alert.alert("Not signed in", "Please sign in first.");
+        return;
+      }
+      uid = user.id;
+      setUserId(uid);
     }
 
     if (!hasValidEventId) return;
@@ -536,7 +540,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     try {
       const payload: EventMessageInsert = {
         event_id: eventId,
-        user_id: user.id,
+        user_id: uid,
         body: text,
       };
 
@@ -553,7 +557,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     } finally {
       setSending(false);
     }
-  }, [chatText, eventId, hasValidEventId, scrollChatToEnd]);
+  }, [chatText, eventId, hasValidEventId, scrollChatToEnd, userId]);
 
   // ---- Load room ----
   const loadEventRoom = useCallback(async () => {
@@ -953,7 +957,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         { onConflict: "event_id,user_id" }
       );
 
-      if (error && !cancelled) setPresenceErr(error.message);
+      if (error && !cancelled) {
+        setPresenceErr((prev) => (prev === error.message ? prev : error.message));
+      }
     };
 
     void beat();
