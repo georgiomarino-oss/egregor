@@ -38,6 +38,8 @@ const ACTIVE_WINDOW_MS = 90_000;
 const HOME_RESYNC_MS = 30_000;
 const KEY_PROFILE_PREFS = "profile:prefs:v1";
 type HomeLanguage = "English" | "Spanish" | "Portuguese" | "French";
+type AmbientPreset = "Silence" | "Rain" | "Singing Bowls" | "Binaural";
+type BreathMode = "Calm" | "Deep";
 
 function normalizeLanguage(v: string): HomeLanguage {
   const raw = v.trim().toLowerCase();
@@ -69,6 +71,36 @@ function formatClock(totalSeconds: number) {
   const mm = Math.floor(s / 60);
   const ss = s % 60;
   return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+}
+
+function resolveBreathPhase(elapsedSeconds: number, mode: BreathMode) {
+  const pattern =
+    mode === "Deep"
+      ? [
+          { name: "Inhale", seconds: 5 },
+          { name: "Hold", seconds: 4 },
+          { name: "Exhale", seconds: 7 },
+        ]
+      : [
+          { name: "Inhale", seconds: 4 },
+          { name: "Hold", seconds: 4 },
+          { name: "Exhale", seconds: 6 },
+        ];
+
+  const total = pattern.reduce((sum, p) => sum + p.seconds, 0);
+  const t = ((Math.max(0, elapsedSeconds) % total) + total) % total;
+  let cursor = 0;
+  for (const p of pattern) {
+    const next = cursor + p.seconds;
+    if (t < next) {
+      return {
+        phase: p.name,
+        secondsRemaining: next - t,
+      };
+    }
+    cursor = next;
+  }
+  return { phase: "Inhale", secondsRemaining: pattern[0].seconds };
 }
 
 function buildSoloPrayer(intent: string, language: HomeLanguage) {
@@ -131,6 +163,8 @@ export default function HomeScreen() {
   const [soloIntent, setSoloIntent] = useState("peace, healing, and grounded courage");
   const [soloSecondsLeft, setSoloSecondsLeft] = useState(180);
   const [soloRunning, setSoloRunning] = useState(false);
+  const [ambientPreset, setAmbientPreset] = useState<AmbientPreset>("Silence");
+  const [breathMode, setBreathMode] = useState<BreathMode>("Calm");
 
   const liveEvents = useMemo(() => {
     const now = Date.now();
@@ -154,6 +188,10 @@ export default function HomeScreen() {
   }, [liveEvents]);
 
   const soloLines = useMemo(() => buildSoloPrayer(soloIntent, preferredLanguage), [soloIntent, preferredLanguage]);
+  const breathGuide = useMemo(() => {
+    const elapsed = Math.max(0, 180 - soloSecondsLeft);
+    return resolveBreathPhase(elapsed, breathMode);
+  }, [soloSecondsLeft, breathMode]);
 
   const ui = useMemo(() => {
     if (preferredLanguage === "Spanish") {
@@ -474,6 +512,44 @@ export default function HomeScreen() {
             <Text style={[styles.modalTitle, { color: c.text }]}>Solo Guided Prayer</Text>
             <Text style={[styles.modalMeta, { color: c.textMuted }]}>3-minute rhythm. Keep breathing steady and stay with one intention.</Text>
 
+            <View style={styles.row}>
+              {(["Silence", "Rain", "Singing Bowls", "Binaural"] as AmbientPreset[]).map((preset) => {
+                const on = ambientPreset === preset;
+                return (
+                  <Pressable
+                    key={preset}
+                    onPress={() => setAmbientPreset(preset)}
+                    style={[
+                      styles.ambientChip,
+                      { borderColor: c.border, backgroundColor: c.cardAlt },
+                      on && { borderColor: c.primary, backgroundColor: c.card },
+                    ]}
+                  >
+                    <Text style={[styles.ambientChipText, { color: c.text }]}>{preset}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View style={styles.row}>
+              {(["Calm", "Deep"] as BreathMode[]).map((mode) => {
+                const on = breathMode === mode;
+                return (
+                  <Pressable
+                    key={mode}
+                    onPress={() => setBreathMode(mode)}
+                    style={[
+                      styles.ambientChip,
+                      { borderColor: c.border, backgroundColor: c.cardAlt },
+                      on && { borderColor: c.primary, backgroundColor: c.card },
+                    ]}
+                  >
+                    <Text style={[styles.ambientChipText, { color: c.text }]}>{mode} breath</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
             <TextInput
               value={soloIntent}
               onChangeText={setSoloIntent}
@@ -486,6 +562,9 @@ export default function HomeScreen() {
             <View style={[styles.timerChip, { borderColor: c.primary, backgroundColor: c.cardAlt }]}>
               <Text style={[styles.timerValue, { color: c.text }]}>{formatClock(soloSecondsLeft)}</Text>
             </View>
+            <Text style={[styles.modalMeta, { color: c.textMuted }]}>
+              {soloRunning ? `${breathGuide.phase} for ${breathGuide.secondsRemaining}s` : "Press Start to begin guided breathing"} • Ambient: {ambientPreset}
+            </Text>
 
             <View style={{ gap: 6, marginTop: 10 }}>
               {soloLines.map((line, idx) => (
@@ -630,5 +709,12 @@ const styles = StyleSheet.create({
   },
   timerValue: { fontSize: 22, fontWeight: "900" },
   modalLine: { fontSize: 13, lineHeight: 19 },
+  ambientChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  ambientChipText: { fontSize: 11, fontWeight: "800" },
 });
 

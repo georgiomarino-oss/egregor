@@ -38,8 +38,8 @@ function LoadingScreen() {
 }
 
 function AuthedTabs() {
-  const { theme } = useAppState();
-  const c = getAppColors(theme);
+  const { theme, highContrast } = useAppState();
+  const c = getAppColors(theme, highContrast);
 
   return (
     <Tabs.Navigator
@@ -72,8 +72,8 @@ function AuthedTabs() {
 }
 
 function RootNav() {
-  const { user, initializing, theme } = useAppState();
-  const c = getAppColors(theme);
+  const { user, initializing, theme, highContrast } = useAppState();
+  const c = getAppColors(theme, highContrast);
 
   const navTheme = useMemo(
     () => ({
