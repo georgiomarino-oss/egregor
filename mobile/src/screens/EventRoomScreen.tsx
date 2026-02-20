@@ -940,6 +940,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "events", filter: `id=eq.${eventId}` },
         async (payload) => {
+          if (activeEventIdRef.current !== eventId) return;
           const next = payload.new as Partial<EventRow> | null;
           const prev = payload.old as Partial<EventRow> | null;
 
@@ -1016,6 +1017,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         "postgres_changes",
         { event: "*", schema: "public", table: "scripts", filter: `id=eq.${scriptId}` },
         async (payload) => {
+          if (activeEventIdRef.current !== eventId) return;
           const eventType = String((payload as any).eventType ?? "");
           if (eventType === "DELETE") {
             setScriptDbRow(null);
@@ -1053,6 +1055,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         "postgres_changes",
         { event: "*", schema: "public", table: "event_presence", filter: `event_id=eq.${eventId}` },
         (payload) => {
+          if (activeEventIdRef.current !== eventId) return;
           const eventType = String((payload as any).eventType ?? "");
           logTelemetry("presence_realtime_event", { eventType });
           const next = ((payload as any).new ?? null) as PresenceRow | null;
@@ -1108,6 +1111,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           filter: `event_id=eq.${eventId}`,
         },
         (payload) => {
+          if (activeEventIdRef.current !== eventId) return;
           const eventType = String((payload as any).eventType ?? "");
           const nextRow = (payload.new ?? null) as EventMessageRow | null;
           const prevRow = (payload.old ?? null) as EventMessageRow | null;
