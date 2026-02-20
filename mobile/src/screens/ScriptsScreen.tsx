@@ -15,7 +15,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { supabase } from "../supabase/client";
 import type { Database } from "../types/db";
-import type { RootStackParamList } from "../types";
 
 type ScriptRow = Database["public"]["Tables"]["scripts"]["Row"];
 type ScriptInsert = Database["public"]["Tables"]["scripts"]["Insert"];
@@ -449,9 +448,7 @@ export default function ScriptsScreen() {
   );
 
   const goProfile = useCallback(() => {
-    const parent = navigation.getParent?.();
-    const navToUse = parent ?? navigation;
-    (navToUse as any).navigate("Profile" as keyof RootStackParamList);
+    navigation.navigate("Profile");
   }, [navigation]);
 
   const renderScript = ({ item }: { item: ScriptRow }) => (
