@@ -131,6 +131,12 @@ export default function ScriptsScreen() {
   const [attachOpen, setAttachOpen] = useState(false);
   const [attachScriptId, setAttachScriptId] = useState<string>("");
   const [eventQuery, setEventQuery] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editScriptId, setEditScriptId] = useState<string>("");
+  const [editTitle, setEditTitle] = useState("");
+  const [editIntention, setEditIntention] = useState("");
+  const [editDurationMinutes, setEditDurationMinutes] = useState("20");
+  const [editTone, setEditTone] = useState("calm");
 
   const scriptsById = useMemo(() => {
     const map: Record<string, ScriptRow> = {};
@@ -141,6 +147,10 @@ export default function ScriptsScreen() {
   const selectedScript = useMemo(
     () => scripts.find((s) => s.id === attachScriptId) ?? null,
     [scripts, attachScriptId]
+  );
+  const editingScript = useMemo(
+    () => scripts.find((s) => s.id === editScriptId) ?? null,
+    [scripts, editScriptId]
   );
 
   const filteredEvents = useMemo(() => {
@@ -371,6 +381,74 @@ export default function ScriptsScreen() {
     [loadMyHostedEvents]
   );
 
+  const openEditScript = useCallback((script: ScriptRow) => {
+    setEditScriptId(script.id);
+    setEditTitle(String((script as any).title ?? ""));
+    setEditIntention(String((script as any).intention ?? ""));
+    setEditDurationMinutes(String((script as any).duration_minutes ?? "20"));
+    setEditTone(String((script as any).tone ?? "calm"));
+    setEditOpen(true);
+  }, []);
+
+  const saveScriptEdit = useCallback(async () => {
+    if (!editingScript) return;
+
+    const mins = Number(editDurationMinutes);
+    const titleText = editTitle.trim();
+    const intentionText = editIntention.trim();
+    const toneText = editTone.trim().toLowerCase();
+
+    if (!titleText) return Alert.alert("Validation", "Title is required.");
+    if (titleText.length > SCRIPT_TITLE_MAX) {
+      return Alert.alert("Validation", `Title must be ${SCRIPT_TITLE_MAX} characters or fewer.`);
+    }
+    if (!intentionText) return Alert.alert("Validation", "Intention is required.");
+    if (intentionText.length > SCRIPT_INTENTION_MAX) {
+      return Alert.alert("Validation", `Intention must be ${SCRIPT_INTENTION_MAX} characters or fewer.`);
+    }
+    if (!toneText) return Alert.alert("Validation", "Tone is required.");
+    if (toneText.length > SCRIPT_TONE_MAX) {
+      return Alert.alert("Validation", `Tone must be ${SCRIPT_TONE_MAX} characters or fewer.`);
+    }
+    if (!/^[a-z][a-z0-9 _-]*$/.test(toneText)) {
+      return Alert.alert("Validation", "Tone can contain lowercase letters, numbers, spaces, '_' and '-'.");
+    }
+    if (!Number.isFinite(mins) || mins < SCRIPT_DURATION_MIN || mins > SCRIPT_DURATION_MAX) {
+      return Alert.alert(
+        "Validation",
+        `Duration must be between ${SCRIPT_DURATION_MIN} and ${SCRIPT_DURATION_MAX} minutes.`
+      );
+    }
+
+    setLoading(true);
+    try {
+      const payload = {
+        title: titleText,
+        intention: intentionText,
+        duration_minutes: mins,
+        tone: toneText,
+        content_json: {
+          title: titleText,
+          durationMinutes: mins,
+          tone: toneText,
+          sections: buildDefaultSections(mins, intentionText),
+        },
+      };
+
+      const { error } = await supabase.from("scripts").update(payload as any).eq("id", editingScript.id);
+      if (error) {
+        Alert.alert("Update failed", error.message);
+        return;
+      }
+      setEditOpen(false);
+      setEditScriptId("");
+      await refreshAll();
+      Alert.alert("Updated", "Script saved.");
+    } finally {
+      setLoading(false);
+    }
+  }, [editDurationMinutes, editIntention, editTitle, editTone, editingScript, refreshAll]);
+
   const handleDeleteScript = useCallback(
     async (script: ScriptRow) => {
       const attachedCount = myEvents.filter((e) => e.script_id === script.id).length;
@@ -528,6 +606,14 @@ export default function ScriptsScreen() {
       ) : null}
 
       <View style={styles.row}>
+        <Pressable
+          onPress={() => openEditScript(item)}
+          style={[styles.btn, styles.btnGhost, loading && styles.disabled]}
+          disabled={loading}
+        >
+          <Text style={styles.btnGhostText}>Edit</Text>
+        </Pressable>
+
         <Pressable
           onPress={() => openAttachForScript(item.id)}
           style={[styles.btn, styles.btnPrimary, loading && styles.disabled]}
@@ -738,6 +824,82 @@ export default function ScriptsScreen() {
                 contentContainerStyle={{ paddingTop: 10, paddingBottom: 6, gap: 10 }}
               />
             )}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={editOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setEditOpen(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Edit Script</Text>
+              <Pressable onPress={() => setEditOpen(false)} style={styles.modalClose} disabled={loading}>
+                <Text style={styles.btnText}>Close</Text>
+              </Pressable>
+            </View>
+
+            <Text style={styles.label}>Title</Text>
+            <TextInput
+              value={editTitle}
+              onChangeText={setEditTitle}
+              style={styles.input}
+              placeholder="Script title"
+              placeholderTextColor="#6B7BB2"
+              maxLength={SCRIPT_TITLE_MAX}
+            />
+
+            <Text style={styles.label}>Intention</Text>
+            <TextInput
+              value={editIntention}
+              onChangeText={setEditIntention}
+              style={[styles.input, styles.multi]}
+              multiline
+              placeholder="What is this script for?"
+              placeholderTextColor="#6B7BB2"
+              maxLength={SCRIPT_INTENTION_MAX}
+            />
+
+            <View style={styles.row}>
+              <View style={{ flex: 1, minWidth: 140 }}>
+                <Text style={styles.label}>Duration (minutes)</Text>
+                <TextInput
+                  value={editDurationMinutes}
+                  onChangeText={setEditDurationMinutes}
+                  keyboardType="numeric"
+                  style={styles.input}
+                  placeholder="20"
+                  placeholderTextColor="#6B7BB2"
+                  maxLength={3}
+                />
+              </View>
+
+              <View style={{ flex: 1, minWidth: 140 }}>
+                <Text style={styles.label}>Tone</Text>
+                <TextInput
+                  value={editTone}
+                  onChangeText={setEditTone}
+                  style={styles.input}
+                  placeholder="calm"
+                  placeholderTextColor="#6B7BB2"
+                  maxLength={SCRIPT_TONE_MAX}
+                />
+              </View>
+            </View>
+
+            <View style={styles.row}>
+              <Pressable
+                onPress={saveScriptEdit}
+                style={[styles.btn, styles.btnPrimary, loading && styles.disabled]}
+                disabled={loading || !editingScript}
+              >
+                <Text style={styles.btnText}>{loading ? "Working..." : "Save changes"}</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
       </Modal>
