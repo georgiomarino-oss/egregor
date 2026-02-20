@@ -240,6 +240,18 @@ function reconcileSnapshotMessages(
     (max, row) => Math.max(max, safeTimeMs(row.created_at)),
     0
   );
+  const oldestSnapshotMs = snapshotSorted.reduce((min, row) => {
+    const t = safeTimeMs(row.created_at);
+    if (t <= 0) return min;
+    if (min <= 0) return t;
+    return Math.min(min, t);
+  }, 0);
+
+  // Keep rows older than the fetched snapshot window (pagination history).
+  const olderHistory = current.filter((row: any) => {
+    const t = safeTimeMs((row as any)?.created_at);
+    return t > 0 && oldestSnapshotMs > 0 && t < oldestSnapshotMs;
+  });
 
   // Keep local realtime rows that are newer than the fetched snapshot window.
   const recentLocal = current.filter((row: any) => {
@@ -248,7 +260,20 @@ function reconcileSnapshotMessages(
     return safeTimeMs((row as any)?.created_at) > newestSnapshotMs;
   });
 
-  const merged = sortMessagesByCreatedAt([...snapshotSorted, ...recentLocal]);
+  const merged = sortMessagesByCreatedAt([...olderHistory, ...snapshotSorted, ...recentLocal]);
+  if (merged.length <= CHAT_MAX_ROWS) return merged;
+  return merged.slice(merged.length - CHAT_MAX_ROWS);
+}
+
+function prependAndTrimMessages(
+  current: EventMessageRow[],
+  olderRows: EventMessageRow[],
+  maxRows: number
+): EventMessageRow[] {
+  let merged = [...current];
+  for (const row of olderRows) {
+    merged = upsertAndSortMessage(merged, row);
+  }
   if (merged.length <= maxRows) return merged;
   return merged.slice(merged.length - maxRows);
 }
@@ -300,6 +325,9 @@ const CHAT_RESYNC_MS = 60_000;
 const RUN_STATE_RESYNC_MS = 60_000;
 const CHAT_MAX_CHARS = 1000;
 const ENERGY_GIFT_VALUES = [1, 3, 7] as const;
+const CHAT_RECENT_SNAPSHOT_SIZE = 200;
+const CHAT_MAX_ROWS = 1000;
+const CHAT_LOAD_EARLIER_PAGE_SIZE = 50;
 
 function mapChatSendError(message: string) {
   const m = String(message ?? "").toLowerCase();
@@ -639,11 +667,14 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const [sendingEnergy, setSendingEnergy] = useState<number | null>(null);
   const [pendingMessageCount, setPendingMessageCount] = useState(0);
   const [unreadMarkerMessageId, setUnreadMarkerMessageId] = useState<string | null>(null);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [hasEarlierMessages, setHasEarlierMessages] = useState(false);
   const chatListRef = useRef<FlatList<EventMessageRow>>(null);
   const chatContentHeightRef = useRef(0);
   const chatScrollOffsetYRef = useRef(0);
   const messageIdsRef = useRef<Set<string>>(new Set());
   const pendingScrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isPrependingHistoryRef = useRef(false);
 
   // "Should we autoscroll?" tracking
   const shouldAutoScrollRef = useRef(true);
@@ -697,6 +728,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     if (!hasValidEventId) {
       setMessages([]);
       messageIdsRef.current = new Set();
+      setHasEarlierMessages(false);
       return;
     }
 
@@ -706,7 +738,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       .select("id,event_id,user_id,body,created_at")
       .eq("event_id", eventId)
       .order("created_at", { ascending: false })
-      .limit(200);
+      .limit(CHAT_RECENT_SNAPSHOT_SIZE);
 
     if (error) {
       logTelemetry("chat_resync_error", { reason, message: error.message });
@@ -727,7 +759,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       .sort((a, b) => safeTimeMs(a.created_at) - safeTimeMs(b.created_at));
 
     setMessages((prev) => {
-      const merged = reconcileSnapshotMessages(prev, rows, 200);
+      const merged = reconcileSnapshotMessages(prev, rows, CHAT_RECENT_SNAPSHOT_SIZE);
       messageIdsRef.current = new Set(
         merged
           .map((m: any) => String((m as any)?.id ?? ""))
@@ -735,6 +767,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       );
       return merged;
     });
+    if (reason === "initial" || reason === "room_load" || reason === "manual") {
+      setHasEarlierMessages(rows.length >= CHAT_RECENT_SNAPSHOT_SIZE);
+    }
     if (shouldAutoScrollRef.current) {
       setPendingMessageCount(0);
       setUnreadMarkerMessageId(null);
@@ -748,6 +783,61 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     void loadProfiles(rows.map((m) => String((m as any).user_id ?? "")));
     logTelemetry("chat_resync_success", { reason, count: rows.length });
   }, [eventId, hasValidEventId, loadProfiles, logTelemetry]);
+
+  const loadEarlierMessages = useCallback(async () => {
+    if (!hasValidEventId || loadingEarlier || !hasEarlierMessages || messages.length === 0) return;
+    const targetEventId = eventId;
+    const isStale = () => activeEventIdRef.current !== targetEventId;
+    const oldestLoadedCreatedAt = messages[0]?.created_at ?? null;
+    if (!oldestLoadedCreatedAt) return;
+
+    setLoadingEarlier(true);
+    try {
+      const { data, error } = await supabase
+        .from("event_messages")
+        .select("id,event_id,user_id,body,created_at")
+        .eq("event_id", targetEventId)
+        .lt("created_at", oldestLoadedCreatedAt)
+        .order("created_at", { ascending: false })
+        .limit(CHAT_LOAD_EARLIER_PAGE_SIZE + 1);
+
+      if (isStale()) return;
+      if (error) {
+        logTelemetry("chat_load_earlier_error", { message: error.message });
+        return;
+      }
+
+      const rows = (data ?? []) as EventMessageRow[];
+      const hasMore = rows.length > CHAT_LOAD_EARLIER_PAGE_SIZE;
+      const pageRows = sortMessagesByCreatedAt(rows.slice(0, CHAT_LOAD_EARLIER_PAGE_SIZE));
+      setHasEarlierMessages(hasMore);
+      if (pageRows.length === 0) return;
+
+      isPrependingHistoryRef.current = true;
+      shouldAutoScrollRef.current = false;
+      setMessages((prev) => {
+        const merged = prependAndTrimMessages(prev, pageRows, CHAT_MAX_ROWS);
+        messageIdsRef.current = new Set(
+          merged
+            .map((m: any) => String((m as any)?.id ?? ""))
+            .filter((id: string) => !!id)
+        );
+        return merged;
+      });
+      void loadProfiles(pageRows.map((m: any) => String((m as any).user_id ?? "")));
+      logTelemetry("chat_load_earlier_success", { count: pageRows.length, hasMore });
+    } finally {
+      if (!isStale()) setLoadingEarlier(false);
+    }
+  }, [
+    eventId,
+    hasValidEventId,
+    loadingEarlier,
+    hasEarlierMessages,
+    messages,
+    loadProfiles,
+    logTelemetry,
+  ]);
 
   const sendMessage = useCallback(async () => {
     const targetEventId = eventId;
@@ -850,6 +940,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setPresenceRows([]);
       setMessages([]);
       messageIdsRef.current = new Set();
+      setHasEarlierMessages(false);
       return;
     }
 
@@ -970,6 +1061,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   useEffect(() => {
     setPendingMessageCount(0);
     setUnreadMarkerMessageId(null);
+    setLoadingEarlier(false);
+    setHasEarlierMessages(false);
     setChatText("");
     setSending(false);
     setSendingEnergy(null);
@@ -981,6 +1074,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     shouldAutoScrollRef.current = true;
     chatContentHeightRef.current = 0;
     chatScrollOffsetYRef.current = 0;
+    isPrependingHistoryRef.current = false;
   }, [eventId]);
 
   useEffect(() => {
@@ -1204,7 +1298,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           if (nextId) messageIdsRef.current.add(nextId);
 
           setMessages((prev) => {
-            const merged = mergeAndTrimMessages(prev, [nextRow], 200);
+            const merged = mergeAndTrimMessages(prev, [nextRow], CHAT_MAX_ROWS);
             const insertedIdx = merged.findIndex((m: any) => String((m as any).id ?? "") === nextId);
             const expectedTailIdx = Math.max(0, merged.length - 1);
 
@@ -2183,6 +2277,22 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
         <Text style={[styles.sectionTitle, { color: c.text }]}>Chat</Text>
         <Text style={[styles.meta, { color: c.textMuted }]}>Messages are below. Use the box at the bottom to send.</Text>
+        <View style={styles.row}>
+          <Pressable
+            style={[
+              styles.btn,
+              styles.btnGhost,
+              { borderColor: c.border },
+              (!hasEarlierMessages || loadingEarlier || messages.length === 0) && styles.disabled,
+            ]}
+            onPress={loadEarlierMessages}
+            disabled={!hasEarlierMessages || loadingEarlier || messages.length === 0}
+          >
+            <Text style={[styles.btnGhostText, { color: c.text }]}>
+              {loadingEarlier ? "Loading..." : hasEarlierMessages ? "Load earlier" : "No earlier messages"}
+            </Text>
+          </Pressable>
+        </View>
       </View>
     </View>
   );
@@ -2206,6 +2316,21 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           onContentSizeChange={(_, height) => {
             const previousHeight = chatContentHeightRef.current;
             chatContentHeightRef.current = height;
+
+            if (isPrependingHistoryRef.current) {
+              isPrependingHistoryRef.current = false;
+              if (previousHeight > 0 && height > previousHeight) {
+                const delta = height - previousHeight;
+                const nextOffset = Math.max(0, chatScrollOffsetYRef.current + delta);
+                chatScrollOffsetYRef.current = nextOffset;
+                try {
+                  chatListRef.current?.scrollToOffset({ offset: nextOffset, animated: false });
+                } catch {
+                  // ignore
+                }
+              }
+              return;
+            }
 
             if (shouldAutoScrollRef.current) {
               scrollChatToEnd(false);
