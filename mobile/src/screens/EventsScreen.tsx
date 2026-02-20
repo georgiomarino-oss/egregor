@@ -127,6 +127,10 @@ export default function EventsScreen() {
 
   // Profiles cache for host display names
   const [profilesById, setProfilesById] = useState<Record<string, ProfileMini>>({});
+  const profilesByIdRef = React.useRef<Record<string, ProfileMini>>({});
+  useEffect(() => {
+    profilesByIdRef.current = profilesById;
+  }, [profilesById]);
 
   // Create form
   const [title, setTitle] = useState("Global Peace Circle");
@@ -242,7 +246,7 @@ export default function EventsScreen() {
     if (uniq.length === 0) return;
 
     // Use functional update safety: read current state once
-    const missing = uniq.filter((id) => !profilesById[id]);
+    const missing = uniq.filter((id) => !profilesByIdRef.current[id]);
     if (missing.length === 0) return;
 
     const { data, error } = await supabase
@@ -260,7 +264,7 @@ export default function EventsScreen() {
       for (const r of rows) next[r.id] = r;
       return next;
     });
-  }, [profilesById]);
+  }, []);
 
   const displayNameForUserId = useCallback(
     (id: string) => {
