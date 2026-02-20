@@ -1,13 +1,56 @@
 // mobile/src/screens/ProfileScreen.tsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Image, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../supabase/client";
 import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
+import type { Database } from "../types/db";
 
 const KEY_AUTO_JOIN_GLOBAL = "prefs:autoJoinLive";
+const KEY_JOURNAL = "journal:entries";
+type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
+type JournalEntry = { id: string; createdAt: string; text: string };
+
+function safeTimeMs(iso: string | null | undefined): number {
+  if (!iso) return 0;
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+function toDayKey(iso: string) {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function computeStreakDays(dayKeys: string[]): number {
+  if (!dayKeys.length) return 0;
+  const set = new Set(dayKeys.filter(Boolean));
+  if (!set.size) return 0;
+
+  const now = new Date();
+  const utcMidnightMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  let streak = 0;
+
+  for (let i = 0; i < 366; i += 1) {
+    const ms = utcMidnightMs - i * 24 * 60 * 60 * 1000;
+    const d = new Date(ms);
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+    if (set.has(key)) {
+      streak += 1;
+      continue;
+    }
+    if (i === 0) continue;
+    break;
+  }
+
+  return streak;
+}
 
 export default function ProfileScreen() {
   const { theme, setTheme } = useAppState();
@@ -21,6 +64,41 @@ export default function ProfileScreen() {
 
   const [displayName, setDisplayName] = useState<string>("");
   const [avatarUrl, setAvatarUrl] = useState<string>("");
+  const [streakDays, setStreakDays] = useState(0);
+  const [activeDays30, setActiveDays30] = useState(0);
+  const [intentionEnergy, setIntentionEnergy] = useState(0);
+  const [journalText, setJournalText] = useState("");
+  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
+
+  const loadJournal = useCallback(async () => {
+    try {
+      const raw = await AsyncStorage.getItem(KEY_JOURNAL);
+      if (!raw) {
+        setJournalEntries([]);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        setJournalEntries([]);
+        return;
+      }
+      const rows = parsed
+        .map((r: any) => ({
+          id: String(r?.id ?? ""),
+          createdAt: String(r?.createdAt ?? ""),
+          text: String(r?.text ?? ""),
+        }))
+        .filter((r: JournalEntry) => !!r.id && !!r.text.trim());
+      rows.sort((a: JournalEntry, b: JournalEntry) => safeTimeMs(b.createdAt) - safeTimeMs(a.createdAt));
+      setJournalEntries(rows);
+    } catch {
+      setJournalEntries([]);
+    }
+  }, []);
+
+  const saveJournal = useCallback(async (entries: JournalEntry[]) => {
+    await AsyncStorage.setItem(KEY_JOURNAL, JSON.stringify(entries));
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -35,6 +113,9 @@ export default function ProfileScreen() {
         setEmail("");
         setDisplayName("");
         setAvatarUrl("");
+        setStreakDays(0);
+        setActiveDays30(0);
+        setIntentionEnergy(0);
         return;
       }
 
@@ -54,6 +135,26 @@ export default function ProfileScreen() {
         setDisplayName("");
         setAvatarUrl("");
       }
+
+      const { data: presenceRows } = await supabase
+        .from("event_presence")
+        .select("event_id,joined_at,last_seen_at")
+        .eq("user_id", user.id)
+        .order("last_seen_at", { ascending: false })
+        .limit(5000);
+
+      const rows = (presenceRows ?? []) as Pick<PresenceRow, "event_id" | "joined_at" | "last_seen_at">[];
+      const dayKeys = rows
+        .map((r) => toDayKey(String((r as any).last_seen_at ?? (r as any).joined_at ?? "")))
+        .filter(Boolean);
+      const distinctDayKeys = Array.from(new Set(dayKeys));
+      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      const recentDays = distinctDayKeys.filter((k) => safeTimeMs(`${k}T00:00:00.000Z`) >= cutoff).length;
+      const distinctEventCount = new Set(rows.map((r) => String((r as any).event_id ?? ""))).size;
+
+      setStreakDays(computeStreakDays(distinctDayKeys));
+      setActiveDays30(recentDays);
+      setIntentionEnergy(distinctEventCount);
     } finally {
       setLoading(false);
     }
@@ -61,7 +162,8 @@ export default function ProfileScreen() {
 
   useEffect(() => {
     load();
-  }, [load]);
+    void loadJournal();
+  }, [load, loadJournal]);
 
   const initials = useMemo(() => {
     const name = (displayName || email || "").trim();
@@ -153,9 +255,42 @@ export default function ProfileScreen() {
     ]);
   }, []);
 
+  const addJournalEntry = useCallback(async () => {
+    const text = journalText.trim();
+    if (!text) return;
+    if (text.length > 600) {
+      Alert.alert("Validation", "Journal entry must be 600 characters or fewer.");
+      return;
+    }
+
+    const next: JournalEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: new Date().toISOString(),
+      text,
+    };
+    const entries = [next, ...journalEntries].slice(0, 200);
+    setJournalEntries(entries);
+    setJournalText("");
+    try {
+      await saveJournal(entries);
+    } catch {
+      Alert.alert("Save failed", "Could not save journal entry.");
+    }
+  }, [journalEntries, journalText, saveJournal]);
+
+  const deleteJournalEntry = useCallback(async (entryId: string) => {
+    const next = journalEntries.filter((e) => e.id !== entryId);
+    setJournalEntries(next);
+    try {
+      await saveJournal(next);
+    } catch {
+      Alert.alert("Delete failed", "Could not update journal storage.");
+    }
+  }, [journalEntries, saveJournal]);
+
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
-      <View style={styles.wrap}>
+      <ScrollView style={styles.wrap} contentContainerStyle={styles.wrapContent}>
         <Text style={[styles.h1, { color: c.text }]}>Profile</Text>
 
         <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
@@ -186,6 +321,62 @@ export default function ProfileScreen() {
 
             {!!avatarUrl && <Text style={[styles.meta, { color: c.textMuted }]}>Avatar: set</Text>}
           </View>
+        </View>
+
+        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={[styles.sectionTitle, { color: c.text }]}>Spiritual Stats</Text>
+          <View style={styles.statsRow}>
+            <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+              <Text style={[styles.statValue, { color: c.text }]}>{streakDays}</Text>
+              <Text style={[styles.statLabel, { color: c.textMuted }]}>Day streak</Text>
+            </View>
+            <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+              <Text style={[styles.statValue, { color: c.text }]}>{intentionEnergy}</Text>
+              <Text style={[styles.statLabel, { color: c.textMuted }]}>Intention energy</Text>
+            </View>
+            <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+              <Text style={[styles.statValue, { color: c.text }]}>{activeDays30}</Text>
+              <Text style={[styles.statLabel, { color: c.textMuted }]}>Active days (30d)</Text>
+            </View>
+          </View>
+          <Text style={[styles.tip, { color: c.textMuted }]}>
+            Stats are derived from your room presence activity.
+          </Text>
+        </View>
+
+        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={[styles.sectionTitle, { color: c.text }]}>Manifestation Journal</Text>
+          <TextInput
+            style={[styles.input, styles.journalInput, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+            value={journalText}
+            onChangeText={setJournalText}
+            placeholder="Capture what shifted, what you felt, or what you're calling in..."
+            placeholderTextColor={c.textMuted}
+            multiline
+            maxLength={600}
+          />
+          <Text style={[styles.meta, { color: c.textMuted }]}>{journalText.trim().length}/600</Text>
+          <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }]} onPress={addJournalEntry}>
+            <Text style={styles.btnText}>Add entry</Text>
+          </Pressable>
+
+          {journalEntries.length === 0 ? (
+            <Text style={[styles.meta, { color: c.textMuted }]}>No entries yet.</Text>
+          ) : (
+            <View style={{ gap: 8 }}>
+              {journalEntries.slice(0, 8).map((entry) => (
+                <View key={entry.id} style={[styles.journalCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+                  <Text style={[styles.meta, { color: c.textMuted }]}>
+                    {new Date(entry.createdAt).toLocaleString()}
+                  </Text>
+                  <Text style={[styles.journalBody, { color: c.text }]}>{entry.text}</Text>
+                  <Pressable onPress={() => deleteJournalEntry(entry.id)} style={[styles.inlineDelete, { borderColor: c.border }]}>
+                    <Text style={[styles.meta, { color: c.textMuted }]}>Delete</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
 
         <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
@@ -282,14 +473,15 @@ export default function ProfileScreen() {
 
           {loading ? <ActivityIndicator /> : null}
         </View>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B1020" },
-  wrap: { flex: 1, padding: 16 },
+  wrap: { flex: 1 },
+  wrapContent: { padding: 16, paddingBottom: 42 },
 
   h1: { color: "white", fontSize: 28, fontWeight: "800", marginBottom: 12 },
 
@@ -329,6 +521,18 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   sectionTitle: { color: "#DCE4FF", fontSize: 16, fontWeight: "700" },
+  statsRow: { flexDirection: "row", gap: 8 },
+  statCard: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#2A365E",
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    alignItems: "center",
+  },
+  statValue: { fontSize: 20, fontWeight: "900" },
+  statLabel: { fontSize: 11, fontWeight: "700", textAlign: "center", marginTop: 2 },
   themeRow: { flexDirection: "row", gap: 8 },
   themeBtn: {
     flex: 1,
@@ -356,6 +560,22 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
+  },
+  journalInput: { minHeight: 74, textAlignVertical: "top" },
+  journalCard: {
+    borderWidth: 1,
+    borderColor: "#2A365E",
+    borderRadius: 10,
+    padding: 10,
+    gap: 6,
+  },
+  journalBody: { fontSize: 13, lineHeight: 19 },
+  inlineDelete: {
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
   },
 
   btn: {
