@@ -335,12 +335,19 @@ export default function EventsScreen() {
       return;
     }
     if (selectedEventId !== lastSelectedEventId) {
+      if (isJoined && myUserId && lastSelectedEventId) {
+        void supabase
+          .from("event_presence")
+          .delete()
+          .eq("event_id", lastSelectedEventId)
+          .eq("user_id", myUserId);
+      }
       setIsJoined(false);
       setPresenceStatus("");
       setPresenceError("");
       setLastSelectedEventId(selectedEventId);
     }
-  }, [selectedEventId, lastSelectedEventId]);
+  }, [selectedEventId, lastSelectedEventId, isJoined, myUserId]);
 
   useEffect(() => {
     if (!selectedEventId && events.length > 0) {
@@ -589,7 +596,7 @@ export default function EventsScreen() {
       await upsertPresence(selectedEventId);
 
       setIsJoined(true);
-      setPresenceStatus("✅ Joined live.");
+      setPresenceStatus("Joined live.");
     } catch (e: any) {
       setPresenceError(e?.message ?? "Failed to join");
     }
@@ -622,7 +629,7 @@ export default function EventsScreen() {
       }
 
       setIsJoined(false);
-      setPresenceStatus("✅ Left live.");
+      setPresenceStatus("Left live.");
     } catch (e: any) {
       setPresenceError(e?.message ?? "Failed to leave");
     }
@@ -1352,3 +1359,4 @@ const styles = StyleSheet.create({
   pickerTitle: { color: "white", fontSize: 14, fontWeight: "800" },
   pickerMeta: { color: "#93A3D9", fontSize: 12, marginTop: 4 },
 });
+
