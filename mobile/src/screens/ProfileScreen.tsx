@@ -19,6 +19,7 @@ const KEY_DAILY_INTENTION = "onboarding:intention:v1";
 const KEY_CIRCLE_WAITLIST = "circle:waitlist:v1";
 const KEY_MY_CIRCLES = "social:circles:v1";
 type JournalEntry = { id: string; createdAt: string; text: string };
+type JournalDbRow = { id: string | null; created_at: string | null; body: string | null };
 type CircleWaitlistEntry = { id: string; createdAt: string; email: string; note: string };
 type SocialCircle = { id: string; name: string; intention: string; createdAt: string };
 type RhythmDay = { label: string; value: number };
@@ -156,6 +157,41 @@ export default function ProfileScreen() {
   const paywallViewSignatureRef = useRef("");
 
   const loadJournal = useCallback(async () => {
+    const resolveUserId = async () => {
+      if (userId) return userId;
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      return user?.id ?? "";
+    };
+
+    const uid = await resolveUserId();
+    if (uid) {
+      const { data, error } = await supabase
+        .from("manifestation_journal_entries")
+        .select("id,created_at,body")
+        .eq("user_id", uid)
+        .order("created_at", { ascending: false })
+        .limit(200);
+
+      if (!error) {
+        const rows = ((data ?? []) as JournalDbRow[])
+          .map((r) => ({
+            id: String(r.id ?? ""),
+            createdAt: String(r.created_at ?? ""),
+            text: String(r.body ?? ""),
+          }))
+          .filter((r: JournalEntry) => !!r.id && !!r.text.trim());
+        setJournalEntries(rows);
+        try {
+          await AsyncStorage.setItem(KEY_JOURNAL, JSON.stringify(rows));
+        } catch {
+          // ignore local cache write errors
+        }
+        return;
+      }
+    }
+
     try {
       const raw = await AsyncStorage.getItem(KEY_JOURNAL);
       if (!raw) {
@@ -179,9 +215,9 @@ export default function ProfileScreen() {
     } catch {
       setJournalEntries([]);
     }
-  }, []);
+  }, [userId]);
 
-  const saveJournal = useCallback(async (entries: JournalEntry[]) => {
+  const saveJournalLocal = useCallback(async (entries: JournalEntry[]) => {
     await AsyncStorage.setItem(KEY_JOURNAL, JSON.stringify(entries));
   }, []);
 
@@ -588,6 +624,22 @@ export default function ProfileScreen() {
       return;
     }
 
+    if (userId) {
+      setJournalText("");
+      const { error } = await supabase.from("manifestation_journal_entries").insert({
+        user_id: userId,
+        body: text,
+        visibility: "private",
+      });
+      if (error) {
+        setJournalText(text);
+        Alert.alert("Save failed", error.message);
+        return;
+      }
+      await loadJournal();
+      return;
+    }
+
     const next: JournalEntry = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       createdAt: new Date().toISOString(),
@@ -597,21 +649,43 @@ export default function ProfileScreen() {
     setJournalEntries(entries);
     setJournalText("");
     try {
-      await saveJournal(entries);
+      await saveJournalLocal(entries);
     } catch {
       Alert.alert("Save failed", "Could not save journal entry.");
     }
-  }, [journalEntries, journalText, saveJournal]);
+  }, [journalEntries, journalText, loadJournal, saveJournalLocal, userId]);
 
   const deleteJournalEntry = useCallback(async (entryId: string) => {
+    if (userId) {
+      const previous = journalEntries;
+      const next = previous.filter((e) => e.id !== entryId);
+      setJournalEntries(next);
+      const { error } = await supabase
+        .from("manifestation_journal_entries")
+        .delete()
+        .eq("id", entryId)
+        .eq("user_id", userId);
+      if (error) {
+        setJournalEntries(previous);
+        Alert.alert("Delete failed", error.message);
+        return;
+      }
+      try {
+        await AsyncStorage.setItem(KEY_JOURNAL, JSON.stringify(next));
+      } catch {
+        // ignore local cache write errors
+      }
+      return;
+    }
+
     const next = journalEntries.filter((e) => e.id !== entryId);
     setJournalEntries(next);
     try {
-      await saveJournal(next);
+      await saveJournalLocal(next);
     } catch {
       Alert.alert("Delete failed", "Could not update journal storage.");
     }
-  }, [journalEntries, saveJournal]);
+  }, [journalEntries, saveJournalLocal, userId]);
 
   const handleSavePrefs = useCallback(async () => {
     setSavingPrefs(true);

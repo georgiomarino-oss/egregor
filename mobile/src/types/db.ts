@@ -403,6 +403,33 @@ export type Database = {
           },
         ]
       }
+      manifestation_journal_entries: {
+        Row: {
+          body: string
+          created_at: string
+          id: string
+          updated_at: string
+          user_id: string
+          visibility: string
+        }
+        Insert: {
+          body: string
+          created_at?: string
+          id?: string
+          updated_at?: string
+          user_id: string
+          visibility?: string
+        }
+        Update: {
+          body?: string
+          created_at?: string
+          id?: string
+          updated_at?: string
+          user_id?: string
+          visibility?: string
+        }
+        Relationships: []
+      }
       monetization_event_log: {
         Row: {
           created_at: string
