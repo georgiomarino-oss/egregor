@@ -297,6 +297,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     sectionIndex: 0,
   });
   const [runReady, setRunReady] = useState(false);
+  const [runErr, setRunErr] = useState("");
 
   // Local ticker for UI countdown refresh
   const [tick, setTick] = useState(0);
@@ -1138,41 +1139,66 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   );
 
   const hostStart = useCallback(async () => {
-    const idx = clampIndex(runState.sectionIndex ?? 0);
-    await hostSetViaServer("running", idx, 0, true);
+    try {
+      setRunErr("");
+      const idx = clampIndex(runState.sectionIndex ?? 0);
+      await hostSetViaServer("running", idx, 0, true);
+    } catch (e: any) {
+      setRunErr(e?.message ?? "Failed to start.");
+    }
   }, [clampIndex, hostSetViaServer, runState.sectionIndex]);
 
   const hostRestart = useCallback(async () => {
-    const idx = clampIndex(runState.sectionIndex ?? 0);
-    await hostSetViaServer("running", idx, 0, true);
+    try {
+      setRunErr("");
+      const idx = clampIndex(runState.sectionIndex ?? 0);
+      await hostSetViaServer("running", idx, 0, true);
+    } catch (e: any) {
+      setRunErr(e?.message ?? "Failed to restart.");
+    }
   }, [clampIndex, hostSetViaServer, runState.sectionIndex]);
 
   const hostPause = useCallback(async () => {
     if (runState.mode !== "running" || !runState.startedAt) return;
 
-    const elapsedThisRun = secondsBetweenIso(runState.startedAt, nowIso());
-    const accumulated = (runState.elapsedBeforePauseSec ?? 0) + elapsedThisRun;
+    try {
+      setRunErr("");
+      const elapsedThisRun = secondsBetweenIso(runState.startedAt, nowIso());
+      const accumulated = (runState.elapsedBeforePauseSec ?? 0) + elapsedThisRun;
 
-    await hostSetViaServer("paused", clampIndex(runState.sectionIndex), accumulated, false);
+      await hostSetViaServer("paused", clampIndex(runState.sectionIndex), accumulated, false);
+    } catch (e: any) {
+      setRunErr(e?.message ?? "Failed to pause.");
+    }
   }, [clampIndex, hostSetViaServer, runState]);
 
   const hostResume = useCallback(async () => {
     if (runState.mode !== "paused") return;
-    await hostSetViaServer(
-      "running",
-      clampIndex(runState.sectionIndex),
-      runState.elapsedBeforePauseSec ?? 0,
-      false
-    );
+    try {
+      setRunErr("");
+      await hostSetViaServer(
+        "running",
+        clampIndex(runState.sectionIndex),
+        runState.elapsedBeforePauseSec ?? 0,
+        false
+      );
+    } catch (e: any) {
+      setRunErr(e?.message ?? "Failed to resume.");
+    }
   }, [clampIndex, hostSetViaServer, runState]);
 
   const hostEnd = useCallback(async () => {
-    await hostSetViaServer(
-      "ended",
-      clampIndex(runState.sectionIndex),
-      runState.elapsedBeforePauseSec ?? 0,
-      false
-    );
+    try {
+      setRunErr("");
+      await hostSetViaServer(
+        "ended",
+        clampIndex(runState.sectionIndex),
+        runState.elapsedBeforePauseSec ?? 0,
+        false
+      );
+    } catch (e: any) {
+      setRunErr(e?.message ?? "Failed to end session.");
+    }
   }, [clampIndex, hostSetViaServer, runState]);
 
   const hostGoTo = useCallback(
@@ -1218,7 +1244,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     async (idx: number) => {
       if (!script?.sections?.length) return;
       if (isHost) {
-        await hostGoTo(idx);
+        try {
+          setRunErr("");
+          await hostGoTo(idx);
+        } catch (e: any) {
+          setRunErr(e?.message ?? "Failed to change section.");
+        }
         return;
       }
       setPreviewSectionIdx(idx);
@@ -1233,7 +1264,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const handlePrev = useCallback(async () => {
     if (!script?.sections?.length) return;
     if (isHost) {
-      await hostGoTo(hostSectionIdx - 1);
+      try {
+        setRunErr("");
+        await hostGoTo(hostSectionIdx - 1);
+      } catch (e: any) {
+        setRunErr(e?.message ?? "Failed to move to previous section.");
+      }
       return;
     }
     setPreviewSectionIdx((cur) => {
@@ -1245,7 +1281,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const handleNext = useCallback(async () => {
     if (!script?.sections?.length) return;
     if (isHost) {
-      await hostGoTo(hostSectionIdx + 1);
+      try {
+        setRunErr("");
+        await hostGoTo(hostSectionIdx + 1);
+      } catch (e: any) {
+        setRunErr(e?.message ?? "Failed to move to next section.");
+      }
       return;
     }
     setPreviewSectionIdx((cur) => {
@@ -1579,6 +1620,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                 <Text style={styles.body}>{script.speakerNotes}</Text>
               </View>
             )}
+
+            {!!runErr && <Text style={styles.err}>{runErr}</Text>}
           </>
         )}
       </View>
