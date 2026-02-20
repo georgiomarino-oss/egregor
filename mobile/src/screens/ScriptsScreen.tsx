@@ -347,6 +347,42 @@ export default function ScriptsScreen() {
     [loadMyHostedEvents]
   );
 
+  const handleDeleteScript = useCallback(
+    async (script: ScriptRow) => {
+      const attachedCount = myEvents.filter((e) => e.script_id === script.id).length;
+      if (attachedCount > 0) {
+        Alert.alert(
+          "Cannot delete",
+          `This script is attached to ${attachedCount} hosted event${attachedCount === 1 ? "" : "s"}. Detach it first.`
+        );
+        return;
+      }
+
+      Alert.alert("Delete script?", `Delete "${script.title ?? "Untitled"}"?`, [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            setLoading(true);
+            try {
+              const { error } = await supabase.from("scripts").delete().eq("id", script.id);
+              if (error) {
+                Alert.alert("Delete failed", error.message);
+                return;
+              }
+              await refreshAll();
+              Alert.alert("Deleted", "Script removed.");
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]);
+    },
+    [myEvents, refreshAll]
+  );
+
   const updateEventScript = useCallback(
     async (event: EventRow, nextScriptId: string | null) => {
       const {
@@ -474,6 +510,14 @@ export default function ScriptsScreen() {
           disabled={loading}
         >
           <Text style={styles.btnText}>Attach to event</Text>
+        </Pressable>
+
+        <Pressable
+          onPress={() => handleDeleteScript(item)}
+          style={[styles.btn, styles.btnDanger, loading && styles.disabled]}
+          disabled={loading}
+        >
+          <Text style={styles.btnText}>Delete</Text>
         </Pressable>
       </View>
 
