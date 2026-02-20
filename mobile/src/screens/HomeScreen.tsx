@@ -20,7 +20,12 @@ import type { RootStackParamList } from "../types";
 import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
 import { getUnreadNotificationCount } from "../features/notifications/notificationsRepo";
-import { appendSoloHistory, getSoloHistoryStats } from "../features/solo/soloHistoryRepo";
+import {
+  appendSoloHistory,
+  getSoloHistoryStats,
+  listSoloHistory,
+  type SoloHistoryEntry,
+} from "../features/solo/soloHistoryRepo";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
@@ -43,6 +48,7 @@ const KEY_DAILY_INTENTION = "onboarding:intention:v1";
 type HomeLanguage = "English" | "Spanish" | "Portuguese" | "French";
 type AmbientPreset = "Silence" | "Rain" | "Singing Bowls" | "Binaural";
 type BreathMode = "Calm" | "Deep";
+type SoloDurationMin = 3 | 5 | 10;
 
 function normalizeLanguage(v: string): HomeLanguage {
   const raw = v.trim().toLowerCase();
@@ -167,14 +173,17 @@ export default function HomeScreen() {
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [soloOpen, setSoloOpen] = useState(false);
   const [soloIntent, setSoloIntent] = useState("peace, healing, and grounded courage");
+  const [soloDurationMin, setSoloDurationMin] = useState<SoloDurationMin>(3);
   const [soloSecondsLeft, setSoloSecondsLeft] = useState(180);
   const [soloRunning, setSoloRunning] = useState(false);
   const [ambientPreset, setAmbientPreset] = useState<AmbientPreset>("Silence");
   const [breathMode, setBreathMode] = useState<BreathMode>("Calm");
   const [soloCompletionTick, setSoloCompletionTick] = useState(0);
+  const [soloCompletedMinutes, setSoloCompletedMinutes] = useState<SoloDurationMin>(3);
   const [soloSessionsWeek, setSoloSessionsWeek] = useState(0);
   const [soloMinutesWeek, setSoloMinutesWeek] = useState(0);
   const [lastSoloAt, setLastSoloAt] = useState<string | null>(null);
+  const [soloRecent, setSoloRecent] = useState<SoloHistoryEntry[]>([]);
   const homeLoadInFlightRef = useRef(false);
   const homeLoadQueuedRef = useRef(false);
 
@@ -209,14 +218,16 @@ export default function HomeScreen() {
 
   const refreshSoloStats = useCallback(async () => {
     try {
-      const stats = await getSoloHistoryStats(7);
+      const [stats, recent] = await Promise.all([getSoloHistoryStats(7), listSoloHistory()]);
       setSoloSessionsWeek(stats.sessionCount);
       setSoloMinutesWeek(stats.totalMinutes);
       setLastSoloAt(stats.lastCompletedAt);
+      setSoloRecent(recent.slice(0, 3));
     } catch {
       setSoloSessionsWeek(0);
       setSoloMinutesWeek(0);
       setLastSoloAt(null);
+      setSoloRecent([]);
     }
   }, []);
 
@@ -242,10 +253,11 @@ export default function HomeScreen() {
   }, [impactDeltaPct]);
 
   const soloLines = useMemo(() => buildSoloPrayer(soloIntent, preferredLanguage), [soloIntent, preferredLanguage]);
+  const selectedDurationSeconds = useMemo(() => soloDurationMin * 60, [soloDurationMin]);
   const breathGuide = useMemo(() => {
-    const elapsed = Math.max(0, 180 - soloSecondsLeft);
+    const elapsed = Math.max(0, selectedDurationSeconds - soloSecondsLeft);
     return resolveBreathPhase(elapsed, breathMode);
-  }, [soloSecondsLeft, breathMode]);
+  }, [soloSecondsLeft, breathMode, selectedDurationSeconds]);
 
   const ui = useMemo(() => {
     if (preferredLanguage === "Spanish") {
@@ -501,6 +513,7 @@ export default function HomeScreen() {
       setSoloSecondsLeft((prev) => {
         if (prev <= 1) {
           setSoloRunning(false);
+          setSoloCompletedMinutes(soloDurationMin);
           setSoloCompletionTick(Date.now());
           return 0;
         }
@@ -509,7 +522,7 @@ export default function HomeScreen() {
     }, 1000);
 
     return () => clearInterval(id);
-  }, [soloOpen, soloRunning]);
+  }, [soloOpen, soloRunning, soloDurationMin]);
 
   React.useEffect(() => {
     if (!soloCompletionTick) return;
@@ -522,7 +535,7 @@ export default function HomeScreen() {
           language: preferredLanguage,
           ambientPreset,
           breathMode,
-          minutes: 3,
+          minutes: soloCompletedMinutes,
         });
         if (!cancelled) await refreshSoloStats();
       } catch {
@@ -533,7 +546,15 @@ export default function HomeScreen() {
     return () => {
       cancelled = true;
     };
-  }, [ambientPreset, breathMode, preferredLanguage, refreshSoloStats, soloCompletionTick, soloIntent]);
+  }, [
+    ambientPreset,
+    breathMode,
+    preferredLanguage,
+    refreshSoloStats,
+    soloCompletedMinutes,
+    soloCompletionTick,
+    soloIntent,
+  ]);
 
   const renderEvent = ({ item }: { item: EventRow }) => {
     const startMs = safeTimeMs((item as any).start_time_utc);
@@ -670,7 +691,32 @@ export default function HomeScreen() {
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border }]}>
             <Text style={[styles.modalTitle, { color: c.text }]}>Solo Guided Prayer</Text>
-            <Text style={[styles.modalMeta, { color: c.textMuted }]}>3-minute rhythm. Keep breathing steady and stay with one intention.</Text>
+            <Text style={[styles.modalMeta, { color: c.textMuted }]}>
+              {soloDurationMin}-minute rhythm. Keep breathing steady and stay with one intention.
+            </Text>
+
+            <View style={styles.row}>
+              {([3, 5, 10] as SoloDurationMin[]).map((minutes) => {
+                const on = soloDurationMin === minutes;
+                return (
+                  <Pressable
+                    key={`dur-${minutes}`}
+                    onPress={() => {
+                      setSoloRunning(false);
+                      setSoloDurationMin(minutes);
+                      setSoloSecondsLeft(minutes * 60);
+                    }}
+                    style={[
+                      styles.ambientChip,
+                      { borderColor: c.border, backgroundColor: c.cardAlt },
+                      on && { borderColor: c.primary, backgroundColor: c.card },
+                    ]}
+                  >
+                    <Text style={[styles.ambientChipText, { color: c.text }]}>{minutes} min</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
 
             <View style={styles.row}>
               {(["Silence", "Rain", "Singing Bowls", "Binaural"] as AmbientPreset[]).map((preset) => {
@@ -723,7 +769,7 @@ export default function HomeScreen() {
               <Text style={[styles.timerValue, { color: c.text }]}>{formatClock(soloSecondsLeft)}</Text>
             </View>
             <Text style={[styles.modalMeta, { color: c.textMuted }]}>
-              {soloRunning ? `${breathGuide.phase} for ${breathGuide.secondsRemaining}s` : "Press Start to begin guided breathing"} • Ambient: {ambientPreset}
+              {soloRunning ? `${breathGuide.phase} for ${breathGuide.secondsRemaining}s` : "Press Start to begin guided breathing"} - Ambient: {ambientPreset}
             </Text>
 
             <View style={{ gap: 6, marginTop: 10 }}>
@@ -739,7 +785,7 @@ export default function HomeScreen() {
                 style={[styles.primaryBtn, { backgroundColor: c.primary }]}
                 onPress={() => {
                   if (!soloRunning && soloSecondsLeft <= 0) {
-                    setSoloSecondsLeft(180);
+                    setSoloSecondsLeft(selectedDurationSeconds);
                   }
                   setSoloRunning((v) => !v);
                 }}
@@ -752,7 +798,7 @@ export default function HomeScreen() {
                 style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
                 onPress={() => {
                   setSoloRunning(false);
-                  setSoloSecondsLeft(180);
+                  setSoloSecondsLeft(selectedDurationSeconds);
                 }}
               >
                 <Text style={[styles.secondaryBtnText, { color: c.text }]}>Reset</Text>
@@ -771,6 +817,17 @@ export default function HomeScreen() {
             <Text style={[styles.modalMeta, { color: c.textMuted }]}>
               Last completed: {lastSoloAt ? new Date(lastSoloAt).toLocaleString() : "No completed session yet"}
             </Text>
+            {soloRecent.length > 0 ? (
+              <View style={{ gap: 6, marginTop: 4 }}>
+                <Text style={[styles.modalMeta, { color: c.textMuted, marginBottom: 0 }]}>Recent sessions</Text>
+                {soloRecent.map((entry) => (
+                  <Text key={entry.id} style={[styles.modalLine, { color: c.textMuted }]}>
+                    {new Date(entry.completedAt).toLocaleString()} - {entry.minutes} min - {entry.ambientPreset} /{" "}
+                    {entry.breathMode}
+                  </Text>
+                ))}
+              </View>
+            ) : null}
           </View>
         </View>
       </Modal>
