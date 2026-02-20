@@ -1549,7 +1549,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     const intentionText = String((event as any).intention_statement ?? "").trim();
     const startLabel = (event as any).start_time_utc
       ? new Date((event as any).start_time_utc).toLocaleString()
-      : "TBD";
+      : "Unknown time";
     const tz = String((event as any).timezone ?? "UTC");
 
     const lines = [

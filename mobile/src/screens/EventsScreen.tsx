@@ -763,7 +763,7 @@ export default function EventsScreen() {
     const intentionText = String((event as any).intention_statement ?? (event as any).intention ?? "").trim();
     const startLabel = (event as any).start_time_utc
       ? new Date((event as any).start_time_utc).toLocaleString()
-      : "TBD";
+      : "Unknown time";
     const tz = String((event as any).timezone ?? "UTC");
     const eventId = String((event as any).id ?? "");
 
