@@ -617,7 +617,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       .from("event_messages")
       .select("id,event_id,user_id,body,created_at")
       .eq("event_id", eventId)
-      .order("created_at", { ascending: true })
+      .order("created_at", { ascending: false })
       .limit(200);
 
     if (error) {
