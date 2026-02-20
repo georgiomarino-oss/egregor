@@ -51,6 +51,46 @@ function removeEventRow(rows: EventRow[], eventId: string): EventRow[] {
   return rows.filter((r) => r.id !== eventId);
 }
 
+function buildDefaultSections(durationMinutes: number, intentionText: string) {
+  const mins = Math.max(1, Math.round(durationMinutes));
+
+  if (mins <= 3) {
+    return [{ name: "Guided Intention", minutes: mins, text: intentionText.trim() }];
+  }
+
+  let arrival = Math.max(1, Math.round(mins * 0.15));
+  let intention = Math.max(1, Math.round(mins * 0.25));
+  let closing = Math.max(1, Math.round(mins * 0.15));
+  let silence = mins - arrival - intention - closing;
+
+  while (silence < 1) {
+    if (arrival > 1) {
+      arrival -= 1;
+      silence += 1;
+      continue;
+    }
+    if (intention > 1) {
+      intention -= 1;
+      silence += 1;
+      continue;
+    }
+    if (closing > 1) {
+      closing -= 1;
+      silence += 1;
+      continue;
+    }
+    silence = 1;
+    break;
+  }
+
+  return [
+    { name: "Arrival", minutes: arrival, text: "Take a breath and arrive." },
+    { name: "Intention", minutes: intention, text: intentionText.trim() },
+    { name: "Silence", minutes: silence, text: "Hold the intention in silence." },
+    { name: "Closing", minutes: closing, text: "Gently return and close." },
+  ];
+}
+
 export default function ScriptsScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(false);
   const [myUserId, setMyUserId] = useState("");
@@ -261,12 +301,7 @@ export default function ScriptsScreen({ navigation }: Props) {
           title: title.trim(),
           durationMinutes: mins,
           tone,
-          sections: [
-            { name: "Arrival", minutes: 2, text: "Take a breath and arrive." },
-            { name: "Intention", minutes: 6, text: intention.trim() },
-            { name: "Silence", minutes: 10, text: "Hold the intention in silence." },
-            { name: "Closing", minutes: 2, text: "Gently return and close." },
-          ],
+          sections: buildDefaultSections(mins, intention),
         } as any,
       };
 
