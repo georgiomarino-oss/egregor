@@ -25,12 +25,30 @@ type Props = {
 
 const RESYNC_MS = 60_000;
 
+function safeTimeMs(iso: string | null | undefined): number {
+  if (!iso) return 0;
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+function sortScripts(rows: ScriptRow[]): ScriptRow[] {
+  const copy = [...rows];
+  copy.sort((a, b) => safeTimeMs(b.created_at) - safeTimeMs(a.created_at));
+  return copy;
+}
+
+function sortEvents(rows: EventRow[]): EventRow[] {
+  const copy = [...rows];
+  copy.sort((a, b) => safeTimeMs(b.start_time_utc) - safeTimeMs(a.start_time_utc));
+  return copy;
+}
+
 function upsertScriptRow(rows: ScriptRow[], next: ScriptRow): ScriptRow[] {
   const idx = rows.findIndex((r) => r.id === next.id);
-  if (idx < 0) return [...rows, next];
+  if (idx < 0) return sortScripts([...rows, next]);
   const copy = [...rows];
   copy[idx] = next;
-  return copy;
+  return sortScripts(copy);
 }
 
 function removeScriptRow(rows: ScriptRow[], scriptId: string): ScriptRow[] {
@@ -40,10 +58,10 @@ function removeScriptRow(rows: ScriptRow[], scriptId: string): ScriptRow[] {
 
 function upsertEventRow(rows: EventRow[], next: EventRow): EventRow[] {
   const idx = rows.findIndex((r) => r.id === next.id);
-  if (idx < 0) return [...rows, next];
+  if (idx < 0) return sortEvents([...rows, next]);
   const copy = [...rows];
   copy[idx] = next;
-  return copy;
+  return sortEvents(copy);
 }
 
 function removeEventRow(rows: EventRow[], eventId: string): EventRow[] {
@@ -144,7 +162,7 @@ export default function ScriptsScreen({ navigation }: Props) {
       Alert.alert("Load scripts failed", error.message);
       return;
     }
-    setScripts((data ?? []) as ScriptRow[]);
+    setScripts(sortScripts((data ?? []) as ScriptRow[]));
   }, []);
 
   const loadMyUserId = useCallback(async () => {
@@ -178,7 +196,7 @@ export default function ScriptsScreen({ navigation }: Props) {
       Alert.alert("Load events failed", error.message);
       return;
     }
-    setMyEvents((data ?? []) as EventRow[]);
+    setMyEvents(sortEvents((data ?? []) as EventRow[]));
   }, []);
 
   const refreshAll = useCallback(async () => {
