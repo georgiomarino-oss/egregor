@@ -85,12 +85,33 @@ export default function ProfileScreen() {
       return;
     }
 
+    const nextDisplayName = displayName.trim();
+    if (nextDisplayName.length > 80) {
+      Alert.alert("Validation", "Display name must be 80 characters or fewer.");
+      return;
+    }
+
+    const nextAvatarUrl = avatarUrl.trim();
+    if (nextAvatarUrl) {
+      let validUrl = false;
+      try {
+        const parsed = new URL(nextAvatarUrl);
+        validUrl = parsed.protocol === "http:" || parsed.protocol === "https:";
+      } catch {
+        validUrl = false;
+      }
+      if (!validUrl) {
+        Alert.alert("Validation", "Avatar URL must be a valid http(s) URL.");
+        return;
+      }
+    }
+
     setSavingProfile(true);
     try {
       const payload = {
         id: userId,
-        display_name: displayName.trim() || null,
-        avatar_url: avatarUrl.trim() || null,
+        display_name: nextDisplayName || null,
+        avatar_url: nextAvatarUrl || null,
       };
 
       const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
