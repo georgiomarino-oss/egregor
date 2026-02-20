@@ -24,7 +24,7 @@ export default function AuthScreen() {
   }, [email, password, confirmPassword, mode, loading]);
 
   const submit = async () => {
-    const e = email.trim();
+    const e = email.trim().toLowerCase();
     if (!e) return Alert.alert("Missing email", "Please enter your email.");
     if (password.length < 6) {
       return Alert.alert("Password too short", "Password must be at least 6 characters.");
@@ -101,7 +101,10 @@ export default function AuthScreen() {
               <View style={styles.row}>
                 <Pressable
                   style={[styles.pill, mode === "signin" ? styles.pillActive : styles.pillInactive]}
-                  onPress={() => setMode("signin")}
+                  onPress={() => {
+                    setMode("signin");
+                    setConfirmPassword("");
+                  }}
                   disabled={loading}
                 >
                   <Text style={styles.pillText}>Sign in</Text>
@@ -109,7 +112,10 @@ export default function AuthScreen() {
 
                 <Pressable
                   style={[styles.pill, mode === "signup" ? styles.pillActive : styles.pillInactive]}
-                  onPress={() => setMode("signup")}
+                  onPress={() => {
+                    setMode("signup");
+                    setConfirmPassword("");
+                  }}
                   disabled={loading}
                 >
                   <Text style={styles.pillText}>Sign up</Text>
