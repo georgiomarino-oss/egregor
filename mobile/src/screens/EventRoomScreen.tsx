@@ -308,6 +308,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   // Presence
   const [presenceRows, setPresenceRows] = useState<PresenceRow[]>([]);
   const [isJoined, setIsJoined] = useState(false);
+  const [isLeavingLive, setIsLeavingLive] = useState(false);
   const [presenceMsg, setPresenceMsg] = useState("");
   const [presenceErr, setPresenceErr] = useState("");
   const telemetryCountsRef = useRef<Record<string, number>>({});
@@ -1146,6 +1147,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     if (!autoJoinGlobalLoaded || !joinPrefLoaded) return;
     if (!autoJoinGlobalEnabled) return;
     if (!shouldAutoJoinForEvent) return;
+    if (isLeavingLive) return;
     if (isJoined) return;
 
     (async () => {
@@ -1178,6 +1180,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     joinPrefLoaded,
     autoJoinGlobalEnabled,
     shouldAutoJoinForEvent,
+    isLeavingLive,
     isJoined,
     loadPresence,
     upsertPresencePreserveJoinedAt,
@@ -1187,6 +1190,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   // Heartbeat while joined - only when app is active
   useEffect(() => {
     if (!isJoined) return;
+    if (isLeavingLive) return;
     if (!hasValidEventId) return;
     if (appState !== "active") return;
     if (!userId) return;
@@ -1218,7 +1222,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [isJoined, eventId, hasValidEventId, appState, userId, logTelemetry]);
+  }, [isJoined, isLeavingLive, eventId, hasValidEventId, appState, userId, logTelemetry]);
 
   // Presence computed
   const presenceSortedByLastSeen = useMemo(() => {
@@ -1314,10 +1318,13 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   const handleLeaveLive = useCallback(async () => {
     if (!hasValidEventId) return;
+    const wasJoined = isJoined;
 
     try {
       setPresenceErr("");
-      setPresenceMsg("");
+      setPresenceMsg("Leaving live...");
+      setIsLeavingLive(true);
+      setIsJoined(false);
 
       const {
         data: { user },
@@ -1325,6 +1332,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       const uid = user?.id ?? (await ensureUserId());
 
       if (!uid) {
+        setIsJoined(wasJoined);
         setPresenceErr("Not signed in.");
         return;
       }
@@ -1336,19 +1344,22 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         .eq("user_id", uid);
 
       if (error) {
+        setIsJoined(wasJoined);
         setPresenceErr(error.message);
         return;
       }
 
-      setIsJoined(false);
       setPresenceMsg("You left live.");
       await writeJoinPref(eventId, false);
       setShouldAutoJoinForEvent(false);
       await loadPresence();
     } catch (e: any) {
+      setIsJoined(wasJoined);
       setPresenceErr(e?.message ?? "Failed to leave.");
+    } finally {
+      setIsLeavingLive(false);
     }
-  }, [eventId, hasValidEventId, loadPresence, ensureUserId]);
+  }, [eventId, hasValidEventId, loadPresence, ensureUserId, isJoined]);
 
   const handleToggleAutoJoinGlobal = useCallback(async (next: boolean) => {
     setAutoJoinGlobalEnabled(next);
