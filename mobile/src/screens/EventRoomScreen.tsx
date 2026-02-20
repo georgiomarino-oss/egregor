@@ -463,6 +463,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const [messages, setMessages] = useState<EventMessageRow[]>([]);
   const [chatText, setChatText] = useState("");
   const [sending, setSending] = useState(false);
+  const [pendingMessageCount, setPendingMessageCount] = useState(0);
   const chatListRef = useRef<FlatList<EventMessageRow>>(null);
 
   // “Should we autoscroll?” tracking
@@ -479,7 +480,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const onChatScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
     const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
-    shouldAutoScrollRef.current = distanceFromBottom <= CHAT_BOTTOM_THRESHOLD_PX;
+    const nearBottom = distanceFromBottom <= CHAT_BOTTOM_THRESHOLD_PX;
+    shouldAutoScrollRef.current = nearBottom;
+
+    if (nearBottom) {
+      setPendingMessageCount(0);
+    }
   }, []);
 
   const loadMessages = useCallback(async () => {
@@ -499,6 +505,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
     const rows = (data ?? []) as EventMessageRow[];
     setMessages(sortMessagesByCreatedAt(rows));
+    setPendingMessageCount(0);
     void loadProfiles(rows.map((m) => String((m as any).user_id ?? "")));
   }, [eventId, hasValidEventId, loadProfiles]);
 
@@ -785,7 +792,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           void loadProfiles([String((row as any).user_id ?? "")]);
 
           setTimeout(() => {
-            if (shouldAutoScrollRef.current) scrollChatToEnd(true);
+            if (shouldAutoScrollRef.current) {
+              scrollChatToEnd(true);
+              setPendingMessageCount(0);
+            } else {
+              setPendingMessageCount((count) => count + 1);
+            }
           }, 30);
         }
       )
@@ -795,6 +807,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       supabase.removeChannel(ch);
     };
   }, [eventId, hasValidEventId, loadProfiles, scrollChatToEnd]);
+
+  const jumpToLatestMessages = useCallback(() => {
+    setPendingMessageCount(0);
+    shouldAutoScrollRef.current = true;
+    scrollChatToEnd(true);
+  }, [scrollChatToEnd]);
 
   useEffect(() => {
     if (!userId) {
@@ -1520,6 +1538,16 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         />
 
         <View style={styles.chatComposerDock}>
+          {pendingMessageCount > 0 ? (
+            <Pressable style={styles.newMessagesBadge} onPress={jumpToLatestMessages}>
+              <Text style={styles.newMessagesBadgeText}>
+                {pendingMessageCount === 1
+                  ? "1 new message"
+                  : `${pendingMessageCount} new messages`}
+              </Text>
+            </Pressable>
+          ) : null}
+
           <TextInput
             value={chatText}
             onChangeText={setChatText}
@@ -1696,6 +1724,22 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 10,
     alignItems: "flex-end",
+  },
+  newMessagesBadge: {
+    position: "absolute",
+    top: -44,
+    alignSelf: "center",
+    backgroundColor: "#5B8CFF",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: "#6EA1FF",
+  },
+  newMessagesBadgeText: {
+    color: "white",
+    fontWeight: "800",
+    fontSize: 12,
   },
   chatInput: {
     flex: 1,
