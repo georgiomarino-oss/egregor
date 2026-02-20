@@ -1,6 +1,6 @@
 // mobile/src/screens/ProfileScreen.tsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../supabase/client";
@@ -10,6 +10,7 @@ const KEY_AUTO_JOIN_GLOBAL = "prefs:autoJoinLive";
 export default function ProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
 
   const [userId, setUserId] = useState("");
   const [email, setEmail] = useState("");
@@ -36,7 +37,6 @@ export default function ProfileScreen() {
       setUserId(user.id);
       setEmail(user.email ?? "");
 
-      // Try to fetch profile row (safe if profiles table exists + RLS select enabled)
       const { data: prof, error: profErr } = await supabase
         .from("profiles")
         .select("display_name,avatar_url")
@@ -79,6 +79,33 @@ export default function ProfileScreen() {
     }
   }, []);
 
+  const handleSaveProfile = useCallback(async () => {
+    if (!userId) {
+      Alert.alert("Not signed in", "Sign in again and retry.");
+      return;
+    }
+
+    setSavingProfile(true);
+    try {
+      const payload = {
+        id: userId,
+        display_name: displayName.trim() || null,
+        avatar_url: avatarUrl.trim() || null,
+      };
+
+      const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
+      if (error) {
+        Alert.alert("Save failed", error.message);
+        return;
+      }
+
+      Alert.alert("Saved", "Profile updated.");
+      await load();
+    } finally {
+      setSavingProfile(false);
+    }
+  }, [avatarUrl, displayName, load, userId]);
+
   const handleSignOut = useCallback(async () => {
     Alert.alert("Sign out", "Are you sure you want to sign out?", [
       { text: "Cancel", style: "cancel" },
@@ -93,7 +120,6 @@ export default function ProfileScreen() {
               Alert.alert("Sign out failed", error.message);
               return;
             }
-            // Your app should route back to AuthScreen based on session state
           } finally {
             setSigningOut(false);
           }
@@ -113,15 +139,13 @@ export default function ProfileScreen() {
           </View>
 
           <View style={{ flex: 1 }}>
-            <Text style={styles.name}>
-              {displayName?.trim() ? displayName.trim() : "Unnamed user"}
-            </Text>
+            <Text style={styles.name}>{displayName?.trim() ? displayName.trim() : "Unnamed user"}</Text>
 
             {!!email && <Text style={styles.meta}>{email}</Text>}
 
             {!!userId && (
               <Text style={styles.meta}>
-                User ID: <Text style={{ color: "#C8D3FF" }}>{userId.slice(0, 8)}…{userId.slice(-6)}</Text>
+                User ID: <Text style={{ color: "#C8D3FF" }}>{userId.slice(0, 8)}...{userId.slice(-6)}</Text>
               </Text>
             )}
 
@@ -132,8 +156,38 @@ export default function ProfileScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
 
+          <Text style={styles.fieldLabel}>Display name</Text>
+          <TextInput
+            style={styles.input}
+            value={displayName}
+            onChangeText={setDisplayName}
+            placeholder="Your display name"
+            placeholderTextColor="#6B7BB2"
+            editable={!loading && !savingProfile}
+          />
+
+          <Text style={styles.fieldLabel}>Avatar URL</Text>
+          <TextInput
+            style={styles.input}
+            value={avatarUrl}
+            onChangeText={setAvatarUrl}
+            placeholder="https://..."
+            placeholderTextColor="#6B7BB2"
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!loading && !savingProfile}
+          />
+
+          <Pressable
+            style={[styles.btn, styles.btnPrimary, (loading || savingProfile) && styles.disabled]}
+            onPress={handleSaveProfile}
+            disabled={loading || savingProfile}
+          >
+            <Text style={styles.btnText}>{savingProfile ? "Saving..." : "Save profile"}</Text>
+          </Pressable>
+
           <Pressable style={[styles.btn, styles.btnGhost]} onPress={load} disabled={loading}>
-            <Text style={styles.btnGhostText}>{loading ? "Refreshing…" : "Refresh profile"}</Text>
+            <Text style={styles.btnGhostText}>{loading ? "Refreshing..." : "Refresh profile"}</Text>
           </Pressable>
 
           <Pressable style={[styles.btn, styles.btnGhost]} onPress={clearAutoJoinPrefs}>
@@ -145,12 +199,14 @@ export default function ProfileScreen() {
             onPress={handleSignOut}
             disabled={signingOut || loading}
           >
-            <Text style={styles.btnText}>{signingOut ? "Signing out…" : "Sign out"}</Text>
+            <Text style={styles.btnText}>{signingOut ? "Signing out..." : "Sign out"}</Text>
           </Pressable>
 
           <Text style={styles.tip}>
-            Tip: if you ever get “stuck signed in”, use Sign out here and relaunch the app.
+            Tip: if you ever get stuck signed in, use Sign out here and relaunch the app.
           </Text>
+
+          {loading ? <ActivityIndicator /> : null}
         </View>
       </View>
     </SafeAreaView>
@@ -199,6 +255,17 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   sectionTitle: { color: "#DCE4FF", fontSize: 16, fontWeight: "700" },
+  fieldLabel: { color: "#B9C3E6", fontSize: 12, marginBottom: 4, marginTop: 2 },
+
+  input: {
+    backgroundColor: "#0E1428",
+    borderColor: "#2A365E",
+    borderWidth: 1,
+    color: "white",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
 
   btn: {
     borderRadius: 10,
@@ -212,6 +279,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#3E4C78",
   },
+  btnPrimary: { backgroundColor: "#5B8CFF" },
   btnDanger: { backgroundColor: "#FB7185" },
 
   btnText: { color: "white", fontWeight: "800" },
