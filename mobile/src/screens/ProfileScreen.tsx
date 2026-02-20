@@ -11,6 +11,7 @@ import type { Database } from "../types/db";
 const KEY_AUTO_JOIN_GLOBAL = "prefs:autoJoinLive";
 const KEY_JOURNAL = "journal:entries";
 const KEY_PROFILE_PREFS = "profile:prefs:v1";
+const KEY_SUPPORT_TOTAL = "support:total:v1";
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
@@ -118,6 +119,7 @@ export default function ProfileScreen() {
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
   const [prefs, setPrefs] = useState<ProfilePrefs>(DEFAULT_PROFILE_PREFS);
   const [collectiveImpact, setCollectiveImpact] = useState<CollectiveImpact>(DEFAULT_COLLECTIVE_IMPACT);
+  const [supportTotalUsd, setSupportTotalUsd] = useState(0);
 
   const loadJournal = useCallback(async () => {
     try {
@@ -173,6 +175,16 @@ export default function ProfileScreen() {
       void setHighContrast(DEFAULT_PROFILE_PREFS.highContrast);
     }
   }, [setHighContrast]);
+
+  const loadSupportTotal = useCallback(async () => {
+    try {
+      const raw = await AsyncStorage.getItem(KEY_SUPPORT_TOTAL);
+      const parsed = Number(raw ?? 0);
+      setSupportTotalUsd(Number.isFinite(parsed) && parsed > 0 ? parsed : 0);
+    } catch {
+      setSupportTotalUsd(0);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -284,7 +296,8 @@ export default function ProfileScreen() {
     load();
     void loadJournal();
     void loadPrefs();
-  }, [load, loadJournal, loadPrefs]);
+    void loadSupportTotal();
+  }, [load, loadJournal, loadPrefs, loadSupportTotal]);
 
   const initials = useMemo(() => {
     const name = (displayName || email || "").trim();
@@ -426,6 +439,18 @@ export default function ProfileScreen() {
       setSavingPrefs(false);
     }
   }, [prefs, setHighContrast]);
+
+  const sendDonation = useCallback(async (amount: number) => {
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    try {
+      const next = supportTotalUsd + amount;
+      setSupportTotalUsd(next);
+      await AsyncStorage.setItem(KEY_SUPPORT_TOTAL, String(next));
+      Alert.alert("Thank you", `Your $${amount} support has been recorded.`);
+    } catch (e: any) {
+      Alert.alert("Could not record support", e?.message ?? "Please try again.");
+    }
+  }, [supportTotalUsd]);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
@@ -625,6 +650,25 @@ export default function ProfileScreen() {
           <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }]}>
             <Text style={styles.btnText}>Join waitlist</Text>
           </Pressable>
+        </View>
+
+        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={[styles.sectionTitle, { color: c.text }]}>Circle Support</Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            One-time support gifts help sustain live infrastructure and AI guidance.
+          </Text>
+          <View style={styles.themeRow}>
+            {[5, 15, 33].map((amount) => (
+              <Pressable
+                key={amount}
+                style={[styles.themeBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+                onPress={() => sendDonation(amount)}
+              >
+                <Text style={[styles.themeBtnText, { color: c.text }]}>Donate ${amount}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <Text style={[styles.tip, { color: c.textMuted }]}>Total supported: ${supportTotalUsd}</Text>
         </View>
 
         <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
