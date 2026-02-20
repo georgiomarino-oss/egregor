@@ -431,6 +431,39 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     hostSectionIdx,
   ]);
 
+  const totalScriptSeconds = useMemo(() => {
+    if (!script?.sections?.length) return 0;
+    return script.sections.reduce((sum, s) => sum + Math.max(1, Math.floor(s.minutes * 60)), 0);
+  }, [script]);
+
+  const elapsedWithinSectionSeconds = useMemo(() => {
+    if (sectionTotalSeconds <= 0) return 0;
+    return Math.max(0, Math.min(sectionTotalSeconds, sectionTotalSeconds - secondsLeft));
+  }, [sectionTotalSeconds, secondsLeft]);
+
+  const elapsedBeforeSectionSeconds = useMemo(() => {
+    if (!script?.sections?.length) return 0;
+    const clampedIdx = Math.min(Math.max(0, viewingSectionIdx), script.sections.length - 1);
+    let sum = 0;
+    for (let i = 0; i < clampedIdx; i += 1) {
+      sum += Math.max(1, Math.floor((script.sections[i]?.minutes ?? 1) * 60));
+    }
+    return sum;
+  }, [script, viewingSectionIdx]);
+
+  const sectionProgressPct = useMemo(() => {
+    if (runState.mode === "ended") return 1;
+    if (sectionTotalSeconds <= 0) return 0;
+    return Math.max(0, Math.min(1, elapsedWithinSectionSeconds / sectionTotalSeconds));
+  }, [runState.mode, elapsedWithinSectionSeconds, sectionTotalSeconds]);
+
+  const totalProgressPct = useMemo(() => {
+    if (runState.mode === "ended") return 1;
+    if (totalScriptSeconds <= 0) return 0;
+    const elapsed = elapsedBeforeSectionSeconds + elapsedWithinSectionSeconds;
+    return Math.max(0, Math.min(1, elapsed / totalScriptSeconds));
+  }, [runState.mode, totalScriptSeconds, elapsedBeforeSectionSeconds, elapsedWithinSectionSeconds]);
+
   const runStatusLabel = useMemo(() => {
     if (!runReady) return "...";
     if (runState.mode === "idle") return "Idle";
@@ -1691,6 +1724,26 @@ export default function EventRoomScreen({ route, navigation }: Props) {
               </Text>
               <Text style={[styles.timerValue, { color: c.text }]}>{formatSeconds(secondsLeft)}</Text>
               <Text style={[styles.timerSub, { color: c.text }]}>{currentSection?.name ?? "Section"}</Text>
+
+              <View style={styles.progressWrap}>
+                <View style={styles.progressMetaRow}>
+                  <Text style={[styles.progressLabel, { color: c.textMuted }]}>Section progress</Text>
+                  <Text style={[styles.progressLabel, { color: c.textMuted }]}>{Math.round(sectionProgressPct * 100)}%</Text>
+                </View>
+                <View style={[styles.progressTrack, { backgroundColor: c.background, borderColor: c.border }]}>
+                  <View style={[styles.progressFill, { backgroundColor: c.primary, width: `${Math.max(0, Math.min(100, Math.round(sectionProgressPct * 100)))}%` }]} />
+                </View>
+              </View>
+
+              <View style={styles.progressWrap}>
+                <View style={styles.progressMetaRow}>
+                  <Text style={[styles.progressLabel, { color: c.textMuted }]}>Overall flow</Text>
+                  <Text style={[styles.progressLabel, { color: c.textMuted }]}>{Math.round(totalProgressPct * 100)}%</Text>
+                </View>
+                <View style={[styles.progressTrack, { backgroundColor: c.background, borderColor: c.border }]}>
+                  <View style={[styles.progressFill, { backgroundColor: c.primary, width: `${Math.max(0, Math.min(100, Math.round(totalProgressPct * 100)))}%` }]} />
+                </View>
+              </View>
             </View>
 
             {runState.mode === "ended" ? (
@@ -1944,6 +1997,27 @@ const styles = StyleSheet.create({
     fontVariant: ["tabular-nums"],
   },
   timerSub: { color: "#D7E0FF", fontSize: 14, fontWeight: "600" },
+  progressWrap: { width: "100%", marginTop: 8 },
+  progressMetaRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 5,
+  },
+  progressLabel: { fontSize: 11, fontWeight: "700" },
+  progressTrack: {
+    height: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#2A365E",
+    overflow: "hidden",
+    backgroundColor: "#0B1020",
+  },
+  progressFill: {
+    height: "100%",
+    borderRadius: 999,
+    backgroundColor: "#5B8CFF",
+  },
 
   sectionCard: {
     marginTop: 10,
