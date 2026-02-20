@@ -3,6 +3,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -1144,6 +1146,37 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   const activeCount = activePresence.length;
   const totalAttendees = presenceRows.length;
+  const heartScale = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const intensity = Math.max(0, Math.min(1, activeCount / 40));
+    const expandTo = 1.02 + intensity * 0.18;
+    const duration = Math.max(700, 1500 - Math.round(intensity * 650));
+
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(heartScale, {
+          toValue: expandTo,
+          duration,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+        Animated.timing(heartScale, {
+          toValue: 1,
+          duration,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    loop.start();
+    return () => {
+      loop.stop();
+      heartScale.stopAnimation();
+      heartScale.setValue(1);
+    };
+  }, [activeCount, heartScale]);
 
   const hostName = hostId ? displayNameForUserId(hostId) : "(unknown)";
 
@@ -1540,6 +1573,15 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         <Text style={[styles.meta, { color: c.textMuted }]}>{new Date((event as any).start_time_utc).toLocaleString()}{" -> "}{new Date((event as any).end_time_utc).toLocaleString()} (
           {(event as any).timezone ?? "UTC"})
         </Text>
+
+        <View style={[styles.heartPulseWrap, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+          <Animated.View style={[styles.heartPulseBubble, { transform: [{ scale: heartScale }] }]}>
+            <Text style={styles.heartPulseIcon}>♥</Text>
+          </Animated.View>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            Collective pulse intensity follows active participants in real time.
+          </Text>
+        </View>
 
         <View style={[styles.settingsRow, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
           <View style={{ flex: 1 }}>
@@ -1957,6 +1999,33 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   settingsTitle: { color: "#E4EBFF", fontWeight: "800", marginBottom: 2 },
+  heartPulseWrap: {
+    marginTop: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: "#27345C",
+    borderRadius: 12,
+    backgroundColor: "#121A31",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  heartPulseBubble: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#2A1220",
+    borderWidth: 1,
+    borderColor: "#FB7185",
+  },
+  heartPulseIcon: {
+    color: "#FB7185",
+    fontSize: 15,
+    fontWeight: "900",
+    lineHeight: 17,
+  },
 
   // Chat bubbles
   msgRow: {
