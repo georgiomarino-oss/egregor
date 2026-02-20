@@ -3,8 +3,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   Alert,
-  AppState,
-  AppStateStatus,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -14,6 +12,10 @@ import {
   Text,
   TextInput,
   View,
+  AppState,
+  AppStateStatus,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -31,20 +33,15 @@ import {
   type EventRunMode,
 } from "../features/events/runStateRepo";
 
-import {
-  listMessages,
-  sendMessage as sendMessageRepo,
-  subscribeMessages,
-  makeClientId,
-  type EventMessageRow as ChatRow,
-} from "../features/events/chatRepo";
-
 type Props = NativeStackScreenProps<RootStackParamList, "EventRoom">;
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type ScriptDbRow = Database["public"]["Tables"]["scripts"]["Row"];
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
+
+type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
+type EventMessageInsert = Database["public"]["Tables"]["event_messages"]["Insert"];
 
 type ScriptSection = {
   name: string;
@@ -196,11 +193,16 @@ async function writeJoinPref(eventId: string, joined: boolean): Promise<void> {
 
 type ProfileMini = Pick<ProfileRow, "id" | "display_name" | "avatar_url">;
 
-// Local pending message type (for optimistic UI)
-type LocalPendingMessage = ChatRow & {
-  __pending?: boolean;
-  __failed?: boolean;
-};
+// Tuneables
+const ACTIVE_WINDOW_MS = 90_000;
+const HEARTBEAT_MS = 10_000;
+
+// If you want: automatically leave live when app backgrounds.
+// I’m defaulting to false (less surprising).
+const AUTO_LEAVE_ON_BACKGROUND = false;
+
+// Chat: how close to bottom counts as “near bottom”
+const CHAT_BOTTOM_THRESHOLD_PX = 120;
 
 export default function EventRoomScreen({ route, navigation }: Props) {
   const eventId = route.params?.eventId ?? "";
@@ -223,8 +225,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const [presenceMsg, setPresenceMsg] = useState("");
   const [presenceErr, setPresenceErr] = useState("");
 
-  // AppState (pause heartbeat in background)
-  const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
+  // App state tracking (for heartbeat/presence correctness)
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
   // Profiles cache
   const [profilesById, setProfilesById] = useState<Record<string, ProfileMini>>({});
@@ -370,42 +372,22 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     });
   }, []);
 
-  // ---- Presence loading (throttled) ----
-  const presenceLoadInFlightRef = useRef(false);
-  const presenceLoadQueuedRef = useRef(false);
-
   const loadPresence = useCallback(async () => {
     if (!hasValidEventId) {
       setPresenceRows([]);
       return;
     }
 
-    // Throttle concurrent reload storms (realtime + manual + join)
-    if (presenceLoadInFlightRef.current) {
-      presenceLoadQueuedRef.current = true;
-      return;
-    }
-    presenceLoadInFlightRef.current = true;
+    const { data, error } = await supabase
+      .from("event_presence")
+      .select("event_id,user_id,joined_at,last_seen_at,created_at")
+      .eq("event_id", eventId);
 
-    try {
-      const { data, error } = await supabase
-        .from("event_presence")
-        .select("event_id,user_id,joined_at,last_seen_at,created_at")
-        .eq("event_id", eventId);
+    if (error) return;
 
-      if (!error) {
-        const rows = (data ?? []) as PresenceRow[];
-        setPresenceRows(rows);
-        void loadProfiles(rows.map((r) => r.user_id));
-      }
-    } finally {
-      presenceLoadInFlightRef.current = false;
-      if (presenceLoadQueuedRef.current) {
-        presenceLoadQueuedRef.current = false;
-        // run one more time after the current one
-        void loadPresence();
-      }
-    }
+    const rows = (data ?? []) as PresenceRow[];
+    setPresenceRows(rows);
+    void loadProfiles(rows.map((r) => r.user_id));
   }, [eventId, hasValidEventId, loadProfiles]);
 
   const loadScriptById = useCallback(async (scriptId: string | null) => {
@@ -433,14 +415,14 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     setPreviewSectionIdx(null);
   }, []);
 
-  // ---- Chat (FlatList data) ----
-  const [messages, setMessages] = useState<LocalPendingMessage[]>([]);
+  // ---- Chat ----
+  const [messages, setMessages] = useState<EventMessageRow[]>([]);
   const [chatText, setChatText] = useState("");
   const [sending, setSending] = useState(false);
-  const chatListRef = useRef<FlatList<LocalPendingMessage>>(null);
+  const chatListRef = useRef<FlatList<EventMessageRow>>(null);
 
-  // Track pending client_ids so we can reconcile optimistic UI
-  const pendingClientIdsRef = useRef<Set<string>>(new Set());
+  // “Should we autoscroll?” tracking
+  const shouldAutoScrollRef = useRef(true);
 
   const scrollChatToEnd = useCallback((animated = true) => {
     try {
@@ -450,80 +432,35 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }
   }, []);
 
-  const loadMessagesInitial = useCallback(async () => {
+  const onChatScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
+    const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
+    shouldAutoScrollRef.current = distanceFromBottom <= CHAT_BOTTOM_THRESHOLD_PX;
+  }, []);
+
+  const loadMessages = useCallback(async () => {
     if (!hasValidEventId) {
       setMessages([]);
       return;
     }
 
-    try {
-      const rows = await listMessages(eventId, 200);
+    const { data, error } = await supabase
+      .from("event_messages")
+      .select("id,event_id,user_id,body,created_at")
+      .eq("event_id", eventId)
+      .order("created_at", { ascending: true })
+      .limit(200);
 
-      // If we had pending items, keep them but avoid duplicates
-      setMessages((prev) => {
-        const pending = prev.filter((m) => m.__pending);
-        const byKey = new Set<string>();
+    if (error) return;
 
-        const merged: LocalPendingMessage[] = [];
-
-        for (const r of rows) {
-          const key = String((r as any).id ?? "") || `cid:${String((r as any).client_id ?? "")}`;
-          if (!key) continue;
-          if (byKey.has(key)) continue;
-          byKey.add(key);
-          merged.push(r as LocalPendingMessage);
-        }
-
-        // re-add pending messages that aren’t confirmed yet
-        for (const p of pending) {
-          const cid = String((p as any).client_id ?? "");
-          if (cid && rows.some((r: any) => String(r.client_id ?? "") === cid)) continue;
-          merged.push(p);
-        }
-
-        merged.sort((a, b) => safeTimeMs((a as any).created_at) - safeTimeMs((b as any).created_at));
-        return merged;
-      });
-
-      void loadProfiles(rows.map((m: any) => String(m.user_id ?? "")));
-    } catch {
-      // ignore
-    }
+    const rows = (data ?? []) as EventMessageRow[];
+    setMessages(rows);
+    void loadProfiles(rows.map((m) => String((m as any).user_id ?? "")));
   }, [eventId, hasValidEventId, loadProfiles]);
-
-  const onRealtimeInsert = useCallback(
-    (row: ChatRow) => {
-      const rowId = String((row as any).id ?? "");
-      const rowCid = String((row as any).client_id ?? "");
-
-      setMessages((prev) => {
-        // Already have this exact row?
-        if (rowId && prev.some((m: any) => String(m.id) === rowId)) return prev;
-
-        // If this matches a pending message by client_id, replace it
-        if (rowCid) {
-          const idx = prev.findIndex((m: any) => String(m.client_id ?? "") === rowCid);
-          if (idx >= 0) {
-            const next = [...prev];
-            next[idx] = row as LocalPendingMessage;
-            return next;
-          }
-        }
-
-        return [...prev, row as LocalPendingMessage];
-      });
-
-      if (rowCid) pendingClientIdsRef.current.delete(rowCid);
-      void loadProfiles([String((row as any).user_id ?? "")]);
-      setTimeout(() => scrollChatToEnd(true), 30);
-    },
-    [loadProfiles, scrollChatToEnd]
-  );
 
   const sendMessage = useCallback(async () => {
     const text = chatText.trim();
     if (!text) return;
-    if (!hasValidEventId) return;
 
     const {
       data: { user },
@@ -535,36 +472,27 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       return;
     }
 
-    const cid = makeClientId();
-    pendingClientIdsRef.current.add(cid);
-
-    // optimistic bubble
-    const optimistic: LocalPendingMessage = {
-      id: `local:${cid}`,
-      event_id: eventId,
-      user_id: user.id,
-      body: text,
-      created_at: new Date().toISOString(),
-      client_id: cid,
-      __pending: true,
-    };
-
-    setMessages((prev) => [...prev, optimistic]);
-    setChatText("");
-    setTimeout(() => scrollChatToEnd(true), 30);
+    if (!hasValidEventId) return;
 
     setSending(true);
     try {
-      await sendMessageRepo(eventId, text, cid);
-      // realtime will replace the pending bubble
-    } catch (e: any) {
-      pendingClientIdsRef.current.delete(cid);
-      setMessages((prev) =>
-        prev.map((m) =>
-          String((m as any).client_id ?? "") === cid ? { ...m, __pending: false, __failed: true } : m
-        )
-      );
-      Alert.alert("Send failed", e?.message ?? "Unknown error");
+      const payload: EventMessageInsert = {
+        event_id: eventId,
+        user_id: user.id,
+        body: text,
+      };
+
+      const { error } = await supabase.from("event_messages").insert(payload);
+      if (error) {
+        Alert.alert("Send failed", error.message);
+        return;
+      }
+
+      setChatText("");
+      // only scroll if user is already near bottom
+      setTimeout(() => {
+        if (shouldAutoScrollRef.current) scrollChatToEnd(true);
+      }, 30);
     } finally {
       setSending(false);
     }
@@ -594,10 +522,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         .from("events")
         .select(
           `
-          id,title,description,intention_statement,script_id,
-          start_time_utc,end_time_utc,timezone,status,
-          active_count_snapshot,total_join_count,host_user_id
-        `
+        id,title,description,intention_statement,script_id,
+        start_time_utc,end_time_utc,timezone,status,
+        active_count_snapshot,total_join_count,host_user_id
+      `
         )
         .eq("id", eventId)
         .single();
@@ -619,7 +547,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
       await Promise.all([
         loadPresence(),
-        loadMessagesInitial(),
+        loadMessages(),
         loadScriptById((eventRow as any).script_id ?? null),
         (async () => {
           const row = await ensureRunState(eventId);
@@ -629,6 +557,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       ]);
 
       setLoading(false);
+      // initial scroll only once; assume user wants latest
       setTimeout(() => scrollChatToEnd(false), 50);
     } catch (e: any) {
       setLoading(false);
@@ -638,7 +567,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     eventId,
     hasValidEventId,
     loadPresence,
-    loadMessagesInitial,
+    loadMessages,
     loadScriptById,
     loadProfiles,
     scrollChatToEnd,
@@ -647,12 +576,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   useEffect(() => {
     loadEventRoom();
   }, [loadEventRoom]);
-
-  // Track app state (pause heartbeat when backgrounded)
-  useEffect(() => {
-    const sub = AppState.addEventListener("change", (next) => setAppState(next));
-    return () => sub.remove();
-  }, []);
 
   // Load global auto-join setting (default true)
   useEffect(() => {
@@ -740,7 +663,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return () => sub.unsubscribe();
   }, [eventId, hasValidEventId]);
 
-  // Presence realtime (reload presence, throttled)
+  // Presence realtime
   useEffect(() => {
     if (!hasValidEventId) return;
 
@@ -749,9 +672,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "event_presence", filter: `event_id=eq.${eventId}` },
-        () => {
-          void loadPresence();
-        }
+        () => loadPresence()
       )
       .subscribe();
 
@@ -760,13 +681,42 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [eventId, hasValidEventId, loadPresence]);
 
-  // Chat realtime (no refetch; just append/replace)
+  // Chat realtime (only append if new, and only autoscroll if near bottom)
   useEffect(() => {
     if (!hasValidEventId) return;
 
-    const sub = subscribeMessages(eventId, onRealtimeInsert);
-    return () => sub.unsubscribe();
-  }, [eventId, hasValidEventId, onRealtimeInsert]);
+    const ch = supabase
+      .channel(`chat:${eventId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "event_messages",
+          filter: `event_id=eq.${eventId}`,
+        },
+        (payload) => {
+          const row = payload.new as EventMessageRow;
+
+          setMessages((prev) => {
+            const id = String((row as any).id ?? "");
+            if (id && prev.some((m: any) => String(m.id) === id)) return prev;
+            return [...prev, row];
+          });
+
+          void loadProfiles([String((row as any).user_id ?? "")]);
+
+          setTimeout(() => {
+            if (shouldAutoScrollRef.current) scrollChatToEnd(true);
+          }, 30);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [eventId, hasValidEventId, loadProfiles, scrollChatToEnd]);
 
   // Helper: upsert presence, preserving joined_at if it already exists
   const upsertPresencePreserveJoinedAt = useCallback(
@@ -838,13 +788,13 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     upsertPresencePreserveJoinedAt,
   ]);
 
-  // Heartbeat while joined (only when app is active)
+  // Heartbeat while joined — only when app is active
   useEffect(() => {
     if (!isJoined) return;
     if (!hasValidEventId) return;
-    if (appState !== "active") return;
 
     let cancelled = false;
+    let intervalId: any = null;
 
     const beat = async () => {
       const {
@@ -862,18 +812,65 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       if (error && !cancelled) setPresenceErr(error.message);
     };
 
-    void beat();
-    const id = setInterval(() => void beat(), 10_000);
+    const startBeating = () => {
+      if (intervalId) return;
+      beat();
+      intervalId = setInterval(beat, HEARTBEAT_MS);
+    };
+
+    const stopBeating = () => {
+      if (intervalId) clearInterval(intervalId);
+      intervalId = null;
+    };
+
+    // Start immediately if active
+    if (appStateRef.current === "active") startBeating();
+
+    const sub = AppState.addEventListener("change", async (next) => {
+      appStateRef.current = next;
+
+      if (next === "active") {
+        startBeating();
+        return;
+      }
+
+      // background/inactive: stop heartbeat
+      stopBeating();
+
+      // one last “seen” update when leaving foreground
+      try {
+        await beat();
+      } catch {
+        // ignore
+      }
+
+      if (AUTO_LEAVE_ON_BACKGROUND) {
+        try {
+          const {
+            data: { user },
+          } = await supabase.auth.getUser();
+          if (user) {
+            await supabase
+              .from("event_presence")
+              .delete()
+              .eq("event_id", eventId)
+              .eq("user_id", user.id);
+          }
+          if (!cancelled) setIsJoined(false);
+        } catch {
+          // ignore
+        }
+      }
+    });
 
     return () => {
       cancelled = true;
-      clearInterval(id);
+      stopBeating();
+      sub.remove();
     };
-  }, [isJoined, eventId, hasValidEventId, appState]);
+  }, [isJoined, eventId, hasValidEventId]);
 
   // Presence computed
-  const activeWindowMs = 90_000;
-
   const presenceSortedByLastSeen = useMemo(() => {
     const rows = [...presenceRows];
     rows.sort((a, b) => safeTimeMs(b.last_seen_at) - safeTimeMs(a.last_seen_at));
@@ -884,7 +881,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     const now = Date.now();
     return presenceSortedByLastSeen.filter((r) => {
       const t = safeTimeMs(r.last_seen_at);
-      return t > 0 && now - t <= activeWindowMs;
+      return t > 0 && now - t <= ACTIVE_WINDOW_MS;
     });
   }, [presenceSortedByLastSeen]);
 
@@ -892,11 +889,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     const now = Date.now();
     return presenceSortedByLastSeen.filter((r) => {
       const t = safeTimeMs(r.last_seen_at);
-      return t > 0 && now - t > activeWindowMs;
+      return t > 0 && now - t > ACTIVE_WINDOW_MS;
     });
   }, [presenceSortedByLastSeen]);
 
   const activeCount = activePresence.length;
+  const totalAttendees = presenceRows.length;
 
   const hostName = hostId ? displayNameForUserId(hostId) : "(unknown)";
 
@@ -1194,7 +1192,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     );
   };
 
-  const renderMsg = ({ item }: { item: LocalPendingMessage }) => {
+  const renderMsg = ({ item }: { item: EventMessageRow }) => {
     const uid = String((item as any).user_id ?? "");
     const mine = !!userId && uid === userId;
     const name = uid ? displayNameForUserId(uid) : "Unknown";
@@ -1205,8 +1203,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         <Text style={styles.msgMeta}>
           <Text style={{ color: "#DCE4FF", fontWeight: "800" }}>{mine ? "You" : name}</Text>
           <Text style={{ color: "#6F83C6" }}> · {ts}</Text>
-          {item.__pending ? <Text style={{ color: "#93A3D9" }}> · sending…</Text> : null}
-          {item.__failed ? <Text style={{ color: "#FB7185" }}> · failed</Text> : null}
         </Text>
         <Text style={styles.msgText}>{String((item as any).body ?? "")}</Text>
       </View>
@@ -1277,7 +1273,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
               <Text style={styles.meta}>…and {recentPresence.length - 10} more</Text>
             ) : null}
           </View>
-        ) : presenceRows.length > 0 ? (
+        ) : totalAttendees > 0 ? (
           <Text style={[styles.meta, { marginTop: 12 }]}>Everyone here is currently active (or attendance is empty).</Text>
         ) : null}
 
@@ -1431,7 +1427,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                 return (
                   <Pressable
                     key={`${s.name}-${i}`}
-                    onPress={() => void handleSelectSection(i)}
+                    onPress={() => handleSelectSection(i)}
                     style={[styles.listItem, isActive ? styles.listItemActive : undefined]}
                   >
                     <Text style={styles.listTitle}>
@@ -1475,7 +1471,11 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           renderItem={renderMsg}
           ListHeaderComponent={Header}
           contentContainerStyle={styles.content}
-          onContentSizeChange={() => scrollChatToEnd(false)}
+          onContentSizeChange={() => {
+            if (shouldAutoScrollRef.current) scrollChatToEnd(false);
+          }}
+          onScroll={onChatScroll}
+          scrollEventThrottle={16}
           keyboardShouldPersistTaps="handled"
         />
 
