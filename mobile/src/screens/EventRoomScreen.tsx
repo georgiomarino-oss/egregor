@@ -1353,6 +1353,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const heartScale = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
+    if (appState !== "active" || activeCount <= 0) {
+      heartScale.stopAnimation();
+      heartScale.setValue(1);
+      return;
+    }
+
     const intensity = Math.max(0, Math.min(1, activeCount / 40));
     const expandTo = 1.02 + intensity * 0.18;
     const duration = Math.max(700, 1500 - Math.round(intensity * 650));
@@ -1380,7 +1386,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       heartScale.stopAnimation();
       heartScale.setValue(1);
     };
-  }, [activeCount, heartScale]);
+  }, [activeCount, heartScale, appState]);
 
   const hostName = hostId ? displayNameForUserId(hostId) : "(unknown)";
 
