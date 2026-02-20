@@ -20,6 +20,7 @@ type ProfilePrefs = {
   notifyNewsEvents: boolean;
   notifyFriendInvites: boolean;
   notifyStreakReminders: boolean;
+  showCommunityFeed: boolean;
 };
 
 const KEY_PROFILE_PREFS = "profile:prefs:v1";
@@ -30,6 +31,7 @@ const DEFAULT_PREFS: ProfilePrefs = {
   notifyNewsEvents: true,
   notifyFriendInvites: true,
   notifyStreakReminders: true,
+  showCommunityFeed: true,
 };
 
 function safeTimeMs(iso: string | null | undefined): number {
@@ -45,6 +47,7 @@ function normalizePrefs(raw: any): ProfilePrefs {
     notifyNewsEvents: !!raw.notifyNewsEvents,
     notifyFriendInvites: !!raw.notifyFriendInvites,
     notifyStreakReminders: !!raw.notifyStreakReminders,
+    showCommunityFeed: raw.showCommunityFeed !== false,
   };
 }
 
@@ -174,18 +177,20 @@ export async function listNotifications(): Promise<NotificationItem[]> {
     }
   }
 
-  const community = msgs
-    .filter((m) => String((m as any).body ?? "").trim().length > 0)
-    .slice(0, 4);
-  for (const m of community) {
-    next.push({
-      id: `community:${String((m as any).id ?? "")}`,
-      kind: "community",
-      title: "New community intention shared",
-      body: String((m as any).body ?? ""),
-      atIso: String((m as any).created_at ?? new Date().toISOString()),
-      eventId: String((m as any).event_id ?? ""),
-    });
+  if (prefs.showCommunityFeed) {
+    const community = msgs
+      .filter((m) => String((m as any).body ?? "").trim().length > 0)
+      .slice(0, 4);
+    for (const m of community) {
+      next.push({
+        id: `community:${String((m as any).id ?? "")}`,
+        kind: "community",
+        title: "New community intention shared",
+        body: String((m as any).body ?? ""),
+        atIso: String((m as any).created_at ?? new Date().toISOString()),
+        eventId: String((m as any).event_id ?? ""),
+      });
+    }
   }
 
   if (prefs.notifyFriendInvites) {
@@ -240,4 +245,3 @@ export async function getUnreadNotificationCount(): Promise<number> {
   }
   return unread;
 }
-

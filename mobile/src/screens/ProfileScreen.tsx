@@ -39,6 +39,7 @@ type ProfilePrefs = {
   notifyNewsEvents: boolean;
   notifyFriendInvites: boolean;
   notifyStreakReminders: boolean;
+  showCommunityFeed: boolean;
   voiceMode: boolean;
   highContrast: boolean;
   language: ProfileLanguage;
@@ -48,6 +49,7 @@ const DEFAULT_PROFILE_PREFS: ProfilePrefs = {
   notifyNewsEvents: true,
   notifyFriendInvites: true,
   notifyStreakReminders: true,
+  showCommunityFeed: true,
   voiceMode: false,
   highContrast: false,
   language: "English",
@@ -186,6 +188,7 @@ export default function ProfileScreen() {
         notifyNewsEvents: !!parsed?.notifyNewsEvents,
         notifyFriendInvites: !!parsed?.notifyFriendInvites,
         notifyStreakReminders: !!parsed?.notifyStreakReminders,
+        showCommunityFeed: parsed?.showCommunityFeed !== false,
         voiceMode: !!parsed?.voiceMode,
         highContrast: !!parsed?.highContrast,
         language: normalizeProfileLanguage(String(parsed?.language ?? DEFAULT_PROFILE_PREFS.language)),
@@ -863,6 +866,10 @@ export default function ProfileScreen() {
           <View style={[styles.prefRow, { borderColor: c.border, backgroundColor: c.cardAlt }]}>
             <Text style={[styles.prefLabel, { color: c.text }]}>Streak reminders</Text>
             <Switch value={prefs.notifyStreakReminders} onValueChange={(v) => setPrefs((p) => ({ ...p, notifyStreakReminders: v }))} />
+          </View>
+          <View style={[styles.prefRow, { borderColor: c.border, backgroundColor: c.cardAlt }]}>
+            <Text style={[styles.prefLabel, { color: c.text }]}>Community feed shares</Text>
+            <Switch value={prefs.showCommunityFeed} onValueChange={(v) => setPrefs((p) => ({ ...p, showCommunityFeed: v }))} />
           </View>
 
           <Text style={[styles.fieldLabel, { color: c.textMuted }]}>Accessibility</Text>

@@ -169,6 +169,7 @@ export default function HomeScreen() {
   const [activeGlobalEvents, setActiveGlobalEvents] = useState(0);
   const [feedItems, setFeedItems] = useState<CommunityFeedItem[]>([]);
   const [preferredLanguage, setPreferredLanguage] = useState<HomeLanguage>("English");
+  const [showCommunityFeed, setShowCommunityFeed] = useState(true);
   const [dailyIntention, setDailyIntention] = useState("peace and clarity");
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [soloOpen, setSoloOpen] = useState(false);
@@ -442,11 +443,14 @@ export default function HomeScreen() {
           try {
             const parsed = JSON.parse(raw);
             setPreferredLanguage(normalizeLanguage(String(parsed?.language ?? "English")));
+            setShowCommunityFeed(parsed?.showCommunityFeed !== false);
           } catch {
             setPreferredLanguage("English");
+            setShowCommunityFeed(true);
           }
         } else {
           setPreferredLanguage("English");
+          setShowCommunityFeed(true);
         }
         if (!disposed) await refreshHomeBundle();
       };
@@ -645,25 +649,35 @@ export default function HomeScreen() {
 
             <View style={[styles.sectionCard, { backgroundColor: c.card, borderColor: c.border }]}>
               <Text style={[styles.sectionTitle, { color: c.text }]}>{ui.communityFeed}</Text>
-              <Text style={[styles.sectionMeta, { color: c.textMuted }]}>Recent shared intentions from live circles.</Text>
-              {feedItems.length === 0 ? (
-                <Text style={[styles.sectionMeta, { color: c.textMuted, marginTop: 8 }]}>{ui.noShares}</Text>
+              {!showCommunityFeed ? (
+                <Text style={[styles.sectionMeta, { color: c.textMuted }]}>
+                  Community feed is hidden by your privacy preference. You can re-enable it in Profile.
+                </Text>
               ) : (
-                <View style={{ gap: 8, marginTop: 8 }}>
-                  {feedItems.map((item) => (
-                    <Pressable
-                      key={item.id}
-                      style={[styles.feedCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}
-                      onPress={() => openEventRoom(item.eventId)}
-                    >
-                      <Text style={[styles.feedMeta, { color: c.textMuted }]}>
-                        {item.displayName} in {item.eventTitle} -{" "}
-                        {item.createdAt ? new Date(item.createdAt).toLocaleTimeString() : "now"}
-                      </Text>
-                      <Text style={[styles.feedBody, { color: c.text }]}>{truncate(item.body, 160)}</Text>
-                    </Pressable>
-                  ))}
-                </View>
+                <>
+                  <Text style={[styles.sectionMeta, { color: c.textMuted }]}>
+                    Recent shared intentions from live circles.
+                  </Text>
+                  {feedItems.length === 0 ? (
+                    <Text style={[styles.sectionMeta, { color: c.textMuted, marginTop: 8 }]}>{ui.noShares}</Text>
+                  ) : (
+                    <View style={{ gap: 8, marginTop: 8 }}>
+                      {feedItems.map((item) => (
+                        <Pressable
+                          key={item.id}
+                          style={[styles.feedCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}
+                          onPress={() => openEventRoom(item.eventId)}
+                        >
+                          <Text style={[styles.feedMeta, { color: c.textMuted }]}>
+                            {item.displayName} in {item.eventTitle} -{" "}
+                            {item.createdAt ? new Date(item.createdAt).toLocaleTimeString() : "now"}
+                          </Text>
+                          <Text style={[styles.feedBody, { color: c.text }]}>{truncate(item.body, 160)}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
+                </>
               )}
             </View>
 
