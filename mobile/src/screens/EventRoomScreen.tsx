@@ -635,6 +635,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const chatContentHeightRef = useRef(0);
   const chatScrollOffsetYRef = useRef(0);
   const messageIdsRef = useRef<Set<string>>(new Set());
+  const pendingScrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // "Should we autoscroll?" tracking
   const shouldAutoScrollRef = useRef(true);
@@ -648,11 +649,25 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   }, []);
 
   const scheduleScrollToEnd = useCallback((targetEventId: string, animated = true) => {
-    setTimeout(() => {
+    if (pendingScrollTimeoutRef.current) {
+      clearTimeout(pendingScrollTimeoutRef.current);
+      pendingScrollTimeoutRef.current = null;
+    }
+    pendingScrollTimeoutRef.current = setTimeout(() => {
+      pendingScrollTimeoutRef.current = null;
       if (activeEventIdRef.current !== targetEventId) return;
       scrollChatToEnd(animated);
     }, 30);
   }, [scrollChatToEnd]);
+
+  useEffect(() => {
+    return () => {
+      if (pendingScrollTimeoutRef.current) {
+        clearTimeout(pendingScrollTimeoutRef.current);
+        pendingScrollTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const onChatScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
