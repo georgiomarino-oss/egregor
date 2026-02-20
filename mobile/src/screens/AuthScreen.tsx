@@ -14,16 +14,23 @@ export default function AuthScreen() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   const canSubmit = useMemo(() => {
-    return !!email.trim() && password.length >= 6 && !loading;
-  }, [email, password, loading]);
+    if (!email.trim()) return false;
+    if (password.length < 6) return false;
+    if (mode === "signup" && password !== confirmPassword) return false;
+    return !loading;
+  }, [email, password, confirmPassword, mode, loading]);
 
   const submit = async () => {
     const e = email.trim();
     if (!e) return Alert.alert("Missing email", "Please enter your email.");
     if (password.length < 6) {
       return Alert.alert("Password too short", "Password must be at least 6 characters.");
+    }
+    if (mode === "signup" && password !== confirmPassword) {
+      return Alert.alert("Password mismatch", "Password and confirmation must match.");
     }
 
     setLoading(true);
@@ -46,7 +53,6 @@ export default function AuthScreen() {
           "If email confirmation is enabled in Supabase, check your inbox. If not, you should be signed in immediately."
         );
       }
-      // No navigation: App.tsx swaps screens when session changes.
     } finally {
       setLoading(false);
     }
@@ -75,10 +81,7 @@ export default function AuthScreen() {
           <Text style={styles.sectionTitle}>Account</Text>
 
           <Text style={styles.meta}>
-            Status:{" "}
-            <Text style={user ? styles.ok : styles.warn}>
-              {user ? "Signed in" : "Signed out"}
-            </Text>
+            Status: <Text style={user ? styles.ok : styles.warn}>{user ? "Signed in" : "Signed out"}</Text>
           </Text>
 
           {user ? (
@@ -97,10 +100,7 @@ export default function AuthScreen() {
             <>
               <View style={styles.row}>
                 <Pressable
-                  style={[
-                    styles.pill,
-                    mode === "signin" ? styles.pillActive : styles.pillInactive,
-                  ]}
+                  style={[styles.pill, mode === "signin" ? styles.pillActive : styles.pillInactive]}
                   onPress={() => setMode("signin")}
                   disabled={loading}
                 >
@@ -108,10 +108,7 @@ export default function AuthScreen() {
                 </Pressable>
 
                 <Pressable
-                  style={[
-                    styles.pill,
-                    mode === "signup" ? styles.pillActive : styles.pillInactive,
-                  ]}
+                  style={[styles.pill, mode === "signup" ? styles.pillActive : styles.pillInactive]}
                   onPress={() => setMode("signup")}
                   disabled={loading}
                 >
@@ -137,9 +134,23 @@ export default function AuthScreen() {
                 value={password}
                 onChangeText={setPassword}
                 secureTextEntry
-                placeholder="••••••••"
+                placeholder="********"
                 placeholderTextColor="#6F7FB2"
               />
+
+              {mode === "signup" ? (
+                <>
+                  <Text style={styles.label}>Confirm password</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={confirmPassword}
+                    onChangeText={setConfirmPassword}
+                    secureTextEntry
+                    placeholder="********"
+                    placeholderTextColor="#6F7FB2"
+                  />
+                </>
+              ) : null}
 
               <Pressable
                 style={[styles.btn, styles.btnPrimary, !canSubmit && styles.disabled]}
