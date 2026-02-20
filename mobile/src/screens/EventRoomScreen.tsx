@@ -1898,8 +1898,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
                 </Text>
                 <Text style={[styles.meta, { color: c.textMuted }]}>Join live to appear in the room and be counted as active.</Text>
                 <View style={[styles.row, { marginTop: 8 }]}>
-                  <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }]} onPress={handleJoinLive}>
-                    <Text style={styles.btnText}>Join live</Text>
+                  <Pressable
+                    style={[
+                      styles.btn,
+                      styles.btnPrimary,
+                      { backgroundColor: c.primary },
+                      (isJoiningLive || isLeavingLive) && styles.disabled,
+                    ]}
+                    onPress={handleJoinLive}
+                    disabled={isJoiningLive || isLeavingLive}
+                  >
+                    <Text style={styles.btnText}>{isJoiningLive ? "Joining..." : "Join live"}</Text>
                   </Pressable>
                 </View>
               </View>
