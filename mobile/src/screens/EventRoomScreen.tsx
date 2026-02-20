@@ -26,20 +26,14 @@ import type { Database } from "../types/db";
 import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
 
-import {
-  ensureRunState,
-  normalizeRunState,
-  subscribeRunState,
-  setRunStateServerTime,
-  type EventRunStateV1,
-  type EventRunMode,
-} from "../features/events/runStateRepo";
+import type { EventRunMode } from "../features/events/runStateRepo";
 import {
   CHAT_MAX_CHARS,
   ENERGY_GIFT_VALUES,
   useEventRoomChat,
 } from "../features/events/useEventRoomChat";
 import { useEventRoomPresence } from "../features/events/useEventRoomPresence";
+import { useEventRoomRunState } from "../features/events/useEventRoomRunState";
 
 type Props = NativeStackScreenProps<RootStackParamList, "EventRoom">;
 
@@ -163,9 +157,6 @@ function safeTimeMs(iso: string | null | undefined): number {
 
 type ProfileMini = Pick<ProfileRow, "id" | "display_name" | "avatar_url">;
 
-// Tuneables
-const RUN_STATE_RESYNC_MS = 60_000;
-
 export default function EventRoomScreen({ route, navigation }: Props) {
   const { theme, highContrast } = useAppState();
   const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
@@ -220,20 +211,32 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     profilesByIdRef.current = profilesById;
   }, [profilesById]);
 
-  // Run state (synced)
-  const [runState, setRunState] = useState<EventRunStateV1>({
-    version: 1,
-    mode: "idle",
-    sectionIndex: 0,
-  });
-  const [runReady, setRunReady] = useState(false);
-  const [runErr, setRunErr] = useState("");
-
   // Local ticker for UI countdown/presence "ago" labels
   const [tick, setTick] = useState(0);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const hasScript = !!script && !!script.sections?.length;
+
+  const {
+    runState,
+    runReady,
+    runErr,
+    setRunErr,
+    clampSectionIndex: clampIndex,
+    loadRunState,
+    hostStart,
+    hostRestart,
+    hostPause,
+    hostResume,
+    hostEnd,
+    hostGoTo,
+  } = useEventRoomRunState({
+    eventId,
+    hasValidEventId,
+    sectionCount: script?.sections?.length ?? 0,
+    activeEventIdRef,
+    logTelemetry,
+  });
 
   // Attendee preview
   const [previewSectionIdx, setPreviewSectionIdx] = useState<number | null>(null);
@@ -543,12 +546,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         loadPresence("room_load"),
         loadMessages("room_load"),
         loadScriptById((eventRow as any).script_id ?? null, expectedEventId),
-        (async () => {
-          const row = await ensureRunState(eventId);
-          if (isStale()) return;
-          setRunState(normalizeRunState(row.state));
-          setRunReady(true);
-        })(),
+        loadRunState("room_load"),
       ]);
 
       if (isStale()) return;
@@ -566,6 +564,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     loadPresence,
     loadMessages,
     loadScriptById,
+    loadRunState,
     loadProfiles,
     jumpToLatestMessages,
   ]);
@@ -638,45 +637,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [eventId, hasValidEventId, loadScriptById, loadProfiles, logTelemetry]);
 
-  // Run state realtime
-  useEffect(() => {
-    if (!hasValidEventId) return;
-
-    let disposed = false;
-    const resync = async () => {
-      if (disposed) return;
-      try {
-        logTelemetry("run_state_resync_attempt");
-        const row = await ensureRunState(eventId);
-        if (disposed || activeEventIdRef.current !== eventId) return;
-        setRunState(normalizeRunState(row.state));
-        setRunReady(true);
-        logTelemetry("run_state_resync_success");
-      } catch (e: any) {
-        logTelemetry("run_state_resync_error", { message: e?.message ?? "Unknown error" });
-        // keep realtime subscription as primary source
-      }
-    };
-
-    void resync();
-    const intervalId = setInterval(() => {
-      void resync();
-    }, RUN_STATE_RESYNC_MS);
-
-    const sub = subscribeRunState(eventId, (row) => {
-      if (activeEventIdRef.current !== eventId) return;
-      setRunState(normalizeRunState(row.state));
-      setRunReady(true);
-    });
-
-    return () => {
-      disposed = true;
-      clearInterval(intervalId);
-      logTelemetry("run_state_resync_stop");
-      sub.unsubscribe();
-    };
-  }, [eventId, hasValidEventId, logTelemetry]);
-
   // Attached script realtime (script edits while room is open)
   useEffect(() => {
     if (!hasValidEventId) return;
@@ -747,120 +707,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   }, [activeCount, heartScale, appState]);
 
   const hostName = hostId ? displayNameForUserId(hostId) : "(unknown)";
-
-  const clampIndex = useCallback(
-    (idx: number) => {
-      const len = script?.sections?.length ?? 0;
-      if (len <= 0) return 0;
-      return Math.min(Math.max(0, idx), len - 1);
-    },
-    [script?.sections?.length]
-  );
-
-  const hostSetViaServer = useCallback(
-    async (
-      mode: EventRunMode,
-      sectionIndex: number,
-      elapsedBeforePauseSec: number,
-      resetTimer: boolean
-    ) => {
-      const targetEventId = eventId;
-      if (!hasValidEventId) return;
-
-      const row = await setRunStateServerTime({
-        eventId: targetEventId,
-        mode,
-        sectionIndex,
-        elapsedBeforePauseSec,
-        resetTimer,
-      });
-      if (activeEventIdRef.current !== targetEventId) return;
-
-      setRunState(normalizeRunState(row.state));
-      setRunReady(true);
-    },
-    [eventId, hasValidEventId]
-  );
-
-  const hostStart = useCallback(async () => {
-    try {
-      setRunErr("");
-      const idx = clampIndex(runState.sectionIndex ?? 0);
-      await hostSetViaServer("running", idx, 0, true);
-    } catch (e: any) {
-      setRunErr(e?.message ?? "Failed to start.");
-    }
-  }, [clampIndex, hostSetViaServer, runState.sectionIndex]);
-
-  const hostRestart = useCallback(async () => {
-    try {
-      setRunErr("");
-      const idx = clampIndex(runState.sectionIndex ?? 0);
-      await hostSetViaServer("running", idx, 0, true);
-    } catch (e: any) {
-      setRunErr(e?.message ?? "Failed to restart.");
-    }
-  }, [clampIndex, hostSetViaServer, runState.sectionIndex]);
-
-  const hostPause = useCallback(async () => {
-    if (runState.mode !== "running" || !runState.startedAt) return;
-
-    try {
-      setRunErr("");
-      const elapsedThisRun = secondsBetweenIso(runState.startedAt, nowIso());
-      const accumulated = (runState.elapsedBeforePauseSec ?? 0) + elapsedThisRun;
-
-      await hostSetViaServer("paused", clampIndex(runState.sectionIndex), accumulated, false);
-    } catch (e: any) {
-      setRunErr(e?.message ?? "Failed to pause.");
-    }
-  }, [clampIndex, hostSetViaServer, runState]);
-
-  const hostResume = useCallback(async () => {
-    if (runState.mode !== "paused") return;
-    try {
-      setRunErr("");
-      await hostSetViaServer(
-        "running",
-        clampIndex(runState.sectionIndex),
-        runState.elapsedBeforePauseSec ?? 0,
-        false
-      );
-    } catch (e: any) {
-      setRunErr(e?.message ?? "Failed to resume.");
-    }
-  }, [clampIndex, hostSetViaServer, runState]);
-
-  const hostEnd = useCallback(async () => {
-    try {
-      setRunErr("");
-      await hostSetViaServer(
-        "ended",
-        clampIndex(runState.sectionIndex),
-        runState.elapsedBeforePauseSec ?? 0,
-        false
-      );
-    } catch (e: any) {
-      setRunErr(e?.message ?? "Failed to end session.");
-    }
-  }, [clampIndex, hostSetViaServer, runState]);
-
-  const hostGoTo = useCallback(
-    async (idx: number) => {
-      const nextIndex = clampIndex(idx);
-
-      if (runState.mode === "running") {
-        await hostSetViaServer("running", nextIndex, 0, true);
-        return;
-      }
-      if (runState.mode === "paused") {
-        await hostSetViaServer("paused", nextIndex, 0, true);
-        return;
-      }
-      await hostSetViaServer(runState.mode, nextIndex, 0, true);
-    },
-    [clampIndex, hostSetViaServer, runState.mode]
-  );
 
   const autoAdvanceGuardRef = useRef(false);
   useEffect(() => {
