@@ -19,6 +19,7 @@ import type { Database } from "../types/db";
 import type { RootStackParamList } from "../types";
 import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
+import { getUnreadNotificationCount } from "../features/notifications/notificationsRepo";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
@@ -161,6 +162,7 @@ export default function HomeScreen() {
   const [feedItems, setFeedItems] = useState<CommunityFeedItem[]>([]);
   const [preferredLanguage, setPreferredLanguage] = useState<HomeLanguage>("English");
   const [dailyIntention, setDailyIntention] = useState("peace and clarity");
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [soloOpen, setSoloOpen] = useState(false);
   const [soloIntent, setSoloIntent] = useState("peace, healing, and grounded courage");
   const [soloSecondsLeft, setSoloSecondsLeft] = useState(180);
@@ -187,6 +189,15 @@ export default function HomeScreen() {
     }).length;
     return liveCount + soonCount;
   }, [events, liveEvents]);
+
+  const refreshUnreadNotifications = useCallback(async () => {
+    try {
+      const count = await getUnreadNotificationCount();
+      setUnreadNotifications(count);
+    } catch {
+      setUnreadNotifications(0);
+    }
+  }, []);
 
   const recommendedEvents = useMemo(() => {
     const now = Date.now();
@@ -363,16 +374,18 @@ export default function HomeScreen() {
           setPreferredLanguage("English");
         }
         if (!disposed) await loadHome();
+        if (!disposed) await refreshUnreadNotifications();
       };
       void run();
       const id = setInterval(() => {
         void loadHome();
+        void refreshUnreadNotifications();
       }, HOME_RESYNC_MS);
       return () => {
         disposed = true;
         clearInterval(id);
       };
-    }, [loadHome])
+    }, [loadHome, refreshUnreadNotifications])
   );
 
   const openEventRoom = useCallback(
@@ -453,7 +466,7 @@ export default function HomeScreen() {
                 onPress={openNotifications}
               >
                 <Text style={[styles.notifyBtnText, { color: c.text }]}>
-                  Notifications {alertCount > 0 ? `(${alertCount})` : ""}
+                  Notifications {(unreadNotifications || alertCount) > 0 ? `(${unreadNotifications || alertCount})` : ""}
                 </Text>
               </Pressable>
             </View>

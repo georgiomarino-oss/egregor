@@ -1,41 +1,27 @@
 import React, { useCallback, useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, Share, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  Share,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { supabase } from "../supabase/client";
 import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
-import type { Database } from "../types/db";
 import type { RootStackParamList } from "../types";
-
-type EventRow = Database["public"]["Tables"]["events"]["Row"];
-type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
-type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
-
-type NotificationItem = {
-  id: string;
-  kind: "live" | "soon" | "streak" | "community" | "news" | "invite";
-  title: string;
-  body: string;
-  atIso: string;
-  eventId?: string;
-};
-
-type ProfilePrefs = {
-  notifyLiveStart: boolean;
-  notifyNewsEvents: boolean;
-  notifyFriendInvites: boolean;
-  notifyStreakReminders: boolean;
-};
-
-const KEY_PROFILE_PREFS = "profile:prefs:v1";
-const DEFAULT_PREFS: ProfilePrefs = {
-  notifyLiveStart: true,
-  notifyNewsEvents: true,
-  notifyFriendInvites: true,
-  notifyStreakReminders: true,
-};
+import {
+  getUnreadNotificationCount,
+  listNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+  readNotificationIds,
+  type NotificationItem,
+} from "../features/notifications/notificationsRepo";
 
 function safeTimeMs(iso: string | null | undefined): number {
   if (!iso) return 0;
@@ -62,25 +48,26 @@ function timeAgo(iso: string) {
   return `${d}d ago`;
 }
 
-function normalizePrefs(raw: any): ProfilePrefs {
-  if (!raw || typeof raw !== "object") return DEFAULT_PREFS;
-  return {
-    notifyLiveStart: !!raw.notifyLiveStart,
-    notifyNewsEvents: !!raw.notifyNewsEvents,
-    notifyFriendInvites: !!raw.notifyFriendInvites,
-    notifyStreakReminders: !!raw.notifyStreakReminders,
-  };
-}
-
 export default function NotificationsScreen() {
   const navigation = useNavigation<any>();
   const { theme, highContrast } = useAppState();
   const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<NotificationItem[]>([]);
+  const [readIds, setReadIds] = useState<string[]>([]);
+
+  const readSet = useMemo(() => new Set(readIds), [readIds]);
+  const unreadCount = useMemo(
+    () => items.reduce((sum, n) => sum + (readSet.has(n.id) ? 0 : 1), 0),
+    [items, readSet]
+  );
 
   const openEvent = useCallback(
-    (eventId: string) => {
+    async (eventId: string, notificationId?: string) => {
+      if (notificationId) {
+        await markNotificationRead(notificationId);
+        setReadIds((prev) => (prev.includes(notificationId) ? prev : [notificationId, ...prev]));
+      }
       if (!eventId || !isLikelyUuid(eventId)) return;
       const parent = navigation.getParent?.() ?? navigation;
       (parent as any).navigate("EventRoom" as keyof RootStackParamList, { eventId });
@@ -102,153 +89,21 @@ export default function NotificationsScreen() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const prefsRaw = await AsyncStorage.getItem(KEY_PROFILE_PREFS);
-      const prefs = normalizePrefs(prefsRaw ? JSON.parse(prefsRaw) : null);
-      const nowMs = Date.now();
-      const soonWindowMs = 60 * 60 * 1000;
-      const crisisKeywords = ["earthquake", "flood", "wildfire", "hurricane", "war", "crisis"];
-
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const uid = user?.id ?? "";
-
-      const [{ data: eventsRows }, { data: latestMessages }, { data: myPresenceRows }] = await Promise.all([
-        supabase
-          .from("events")
-          .select("id,title,intention_statement,start_time_utc,end_time_utc,timezone")
-          .order("start_time_utc", { ascending: true })
-          .limit(120),
-        supabase
-          .from("event_messages")
-          .select("id,event_id,body,created_at")
-          .order("created_at", { ascending: false })
-          .limit(25),
-        uid
-          ? supabase
-              .from("event_presence")
-              .select("last_seen_at")
-              .eq("user_id", uid)
-              .order("last_seen_at", { ascending: false })
-              .limit(50)
-          : Promise.resolve({ data: [] as Pick<PresenceRow, "last_seen_at">[] }),
-      ]);
-
-      const events = (eventsRows ?? []) as Pick<
-        EventRow,
-        "id" | "title" | "intention_statement" | "start_time_utc" | "end_time_utc" | "timezone"
-      >[];
-      const msgs = (latestMessages ?? []) as Pick<EventMessageRow, "id" | "event_id" | "body" | "created_at">[];
-      const myPresence = (myPresenceRows ?? []) as Pick<PresenceRow, "last_seen_at">[];
-
-      const next: NotificationItem[] = [];
-
-      if (prefs.notifyLiveStart) {
-        for (const e of events) {
-          const startMs = safeTimeMs((e as any).start_time_utc);
-          const endMs = safeTimeMs((e as any).end_time_utc);
-          if (!startMs) continue;
-
-          const isLive = startMs <= nowMs && (endMs <= 0 || nowMs <= endMs);
-          if (isLive) {
-            next.push({
-              id: `live:${e.id}`,
-              kind: "live",
-              title: `${String((e as any).title ?? "Event")} is live now`,
-              body: "Join now to sync with the active circle.",
-              atIso: String((e as any).start_time_utc ?? new Date().toISOString()),
-              eventId: String((e as any).id ?? ""),
-            });
-            continue;
-          }
-
-          const msUntil = startMs - nowMs;
-          if (msUntil > 0 && msUntil <= soonWindowMs) {
-            const mins = Math.max(1, Math.round(msUntil / 60_000));
-            next.push({
-              id: `soon:${e.id}`,
-              kind: "soon",
-              title: `${String((e as any).title ?? "Event")} starts in ${mins}m`,
-              body: "Tap to open the room before the session begins.",
-              atIso: String((e as any).start_time_utc ?? new Date().toISOString()),
-              eventId: String((e as any).id ?? ""),
-            });
-          }
-        }
-      }
-
-      if (prefs.notifyNewsEvents) {
-        for (const e of events) {
-          const title = String((e as any).title ?? "").toLowerCase();
-          const intention = String((e as any).intention_statement ?? "").toLowerCase();
-          const looksLikeCrisis = crisisKeywords.some(
-            (kw) => title.includes(kw) || intention.includes(kw)
-          );
-          if (!looksLikeCrisis) continue;
-          next.push({
-            id: `news:${e.id}`,
-            kind: "news",
-            title: "Compassion alert event available",
-            body: String((e as any).title ?? "Crisis support circle"),
-            atIso: String((e as any).start_time_utc ?? new Date().toISOString()),
-            eventId: String((e as any).id ?? ""),
-          });
-        }
-      }
-
-      if (prefs.notifyStreakReminders && uid) {
-        const hasPresenceToday = myPresence.some((r) => {
-          const t = safeTimeMs((r as any).last_seen_at);
-          if (!t) return false;
-          const d = new Date(t);
-          const now = new Date();
-          return (
-            d.getUTCFullYear() === now.getUTCFullYear() &&
-            d.getUTCMonth() === now.getUTCMonth() &&
-            d.getUTCDate() === now.getUTCDate()
-          );
-        });
-        if (!hasPresenceToday) {
-          next.push({
-            id: "streak:today",
-            kind: "streak",
-            title: "Keep your streak alive",
-            body: "Join one live circle today to keep your momentum.",
-            atIso: new Date().toISOString(),
-          });
-        }
-      }
-
-      const community = msgs
-        .filter((m) => String((m as any).body ?? "").trim().length > 0)
-        .slice(0, 4);
-      for (const m of community) {
-        next.push({
-          id: `community:${String((m as any).id ?? "")}`,
-          kind: "community",
-          title: "New community intention shared",
-          body: String((m as any).body ?? ""),
-          atIso: String((m as any).created_at ?? new Date().toISOString()),
-          eventId: String((m as any).event_id ?? ""),
-        });
-      }
-
-      if (prefs.notifyFriendInvites) {
-        next.push({
-          id: "invite:share",
-          kind: "invite",
-          title: "Invite friends to your circle",
-          body: "Share Egregor and build your own intention group.",
-          atIso: new Date().toISOString(),
-        });
-      }
-
-      next.sort((a, b) => safeTimeMs(b.atIso) - safeTimeMs(a.atIso));
-      setItems(next.slice(0, 40));
+      const [nextItems, nextRead] = await Promise.all([listNotifications(), readNotificationIds()]);
+      setItems(nextItems);
+      setReadIds(nextRead);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const handleMarkAllRead = useCallback(async () => {
+    await markAllNotificationsRead();
+    const [nextRead, nextUnread] = await Promise.all([readNotificationIds(), getUnreadNotificationCount()]);
+    setReadIds(nextRead);
+    if (nextUnread === 0) return;
+    await load();
+  }, [load]);
 
   useFocusEffect(
     useCallback(() => {
@@ -264,38 +119,72 @@ export default function NotificationsScreen() {
         refreshControl={<RefreshControl refreshing={loading} onRefresh={load} tintColor={c.primary} />}
         ListHeaderComponent={
           <View style={styles.headerWrap}>
-            <Text style={[styles.h1, { color: c.text }]}>Notifications</Text>
+            <View style={styles.headerRow}>
+              <Text style={[styles.h1, { color: c.text }]}>Notifications</Text>
+              <Pressable
+                style={[styles.btnGhost, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+                onPress={handleMarkAllRead}
+                disabled={unreadCount === 0}
+              >
+                <Text style={[styles.btnGhostText, { color: c.text }, unreadCount === 0 && styles.dimmed]}>
+                  Mark all read
+                </Text>
+              </Pressable>
+            </View>
             <Text style={[styles.meta, { color: c.textMuted }]}>
-              Live circles, reminders, and community updates.
+              {unreadCount} unread • live circles, reminders, and community updates.
             </Text>
           </View>
         }
-        renderItem={({ item }) => (
-          <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
-            <Text style={[styles.title, { color: c.text }]}>{item.title}</Text>
-            <Text style={[styles.body, { color: c.textMuted }]}>{item.body}</Text>
-            <Text style={[styles.meta, { color: c.textMuted }]}>{timeAgo(item.atIso)}</Text>
+        renderItem={({ item }) => {
+          const isRead = readSet.has(item.id);
+          return (
+            <View
+              style={[
+                styles.card,
+                { backgroundColor: c.card, borderColor: c.border },
+                !isRead && { borderColor: c.primary },
+              ]}
+            >
+              <View style={styles.headerRow}>
+                <Text style={[styles.title, { color: c.text }]}>{item.title}</Text>
+                {!isRead ? <View style={[styles.unreadDot, { backgroundColor: c.primary }]} /> : null}
+              </View>
+              <Text style={[styles.body, { color: c.textMuted }]}>{item.body}</Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>{timeAgo(item.atIso)}</Text>
 
-            <View style={styles.row}>
-              {item.eventId && isLikelyUuid(item.eventId) ? (
-                <Pressable
-                  style={[styles.btn, { backgroundColor: c.primary }]}
-                  onPress={() => openEvent(item.eventId!)}
-                >
-                  <Text style={styles.btnText}>Open event</Text>
-                </Pressable>
-              ) : null}
-              {item.kind === "invite" ? (
-                <Pressable
-                  style={[styles.btnGhost, { borderColor: c.border, backgroundColor: c.cardAlt }]}
-                  onPress={shareInvite}
-                >
-                  <Text style={[styles.btnGhostText, { color: c.text }]}>Share invite</Text>
-                </Pressable>
-              ) : null}
+              <View style={styles.row}>
+                {item.eventId && isLikelyUuid(item.eventId) ? (
+                  <Pressable
+                    style={[styles.btn, { backgroundColor: c.primary }]}
+                    onPress={() => void openEvent(item.eventId!, item.id)}
+                  >
+                    <Text style={styles.btnText}>Open event</Text>
+                  </Pressable>
+                ) : null}
+                {item.kind === "invite" ? (
+                  <Pressable
+                    style={[styles.btnGhost, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+                    onPress={shareInvite}
+                  >
+                    <Text style={[styles.btnGhostText, { color: c.text }]}>Share invite</Text>
+                  </Pressable>
+                ) : null}
+                {!isRead ? (
+                  <Pressable
+                    style={[styles.btnGhost, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+                    onPress={async () => {
+                      await markNotificationRead(item.id);
+                      setReadIds((prev) => (prev.includes(item.id) ? prev : [item.id, ...prev]));
+                    }}
+                  >
+                    <Text style={[styles.btnGhostText, { color: c.text }]}>Mark read</Text>
+                  </Pressable>
+                ) : null}
+              </View>
             </View>
-          </View>
-        )}
+          );
+        }}
         ListEmptyComponent={
           loading ? (
             <View style={styles.empty}>
@@ -316,6 +205,7 @@ export default function NotificationsScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   headerWrap: { marginBottom: 10, gap: 6 },
+  headerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   h1: { fontSize: 28, fontWeight: "900" },
   card: {
     borderRadius: 14,
@@ -324,9 +214,10 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     gap: 4,
   },
-  title: { fontSize: 15, fontWeight: "800" },
+  title: { fontSize: 15, fontWeight: "800", flex: 1 },
   body: { fontSize: 13, lineHeight: 18 },
   meta: { fontSize: 12 },
+  unreadDot: { width: 9, height: 9, borderRadius: 999 },
   row: { flexDirection: "row", gap: 8, flexWrap: "wrap", marginTop: 6 },
   btn: {
     borderRadius: 10,
@@ -345,5 +236,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   btnGhostText: { fontWeight: "800" },
+  dimmed: { opacity: 0.5 },
   empty: { paddingVertical: 24, alignItems: "center", justifyContent: "center" },
 });
+
