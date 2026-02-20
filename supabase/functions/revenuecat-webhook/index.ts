@@ -328,21 +328,110 @@ Deno.serve(async (req) => {
     webhook_event_id: eventId,
   };
 
-  const rows = entitlementIds.map((entitlementId) => ({
-    user_id: userId,
-    provider: "revenuecat",
-    entitlement_id: entitlementId,
-    is_active: isActive,
-    product_id: safeText(event.product_id) || null,
-    store: safeText(event.store) || null,
-    environment: safeText(event.environment) || null,
-    expires_at: expiresAt,
-    original_transaction_id: safeText(event.original_transaction_id) || null,
-    last_event_type: eventType,
-    last_event_id: eventId,
-    metadata,
-    updated_at: new Date().toISOString(),
-  }));
+  const { data: existingRows, error: existingRowsError } = await supabase
+    .from("user_subscription_state")
+    .select("entitlement_id,last_event_timestamp,last_event_id,last_event_type")
+    .eq("user_id", userId)
+    .eq("provider", "revenuecat")
+    .in("entitlement_id", entitlementIds);
+
+  if (existingRowsError) {
+    await updateWebhookLog(supabase, eventId, {
+      process_status: "failed",
+      error_message: clip(existingRowsError.message, 400),
+      processed_at: new Date().toISOString(),
+    });
+    return jsonResponse(500, {
+      error: `Could not read current subscription state: ${clip(
+        existingRowsError.message,
+        400
+      )}`,
+      eventId,
+    });
+  }
+
+  const existingByEntitlement: Record<
+    string,
+    { lastEventTimestamp: string | null; lastEventId: string | null; lastEventType: string | null }
+  > = {};
+  for (const row of (existingRows ?? []) as any[]) {
+    const entitlementId = safeText(row?.entitlement_id);
+    if (!entitlementId) continue;
+    existingByEntitlement[entitlementId] = {
+      lastEventTimestamp: safeText(row?.last_event_timestamp) || null,
+      lastEventId: safeText(row?.last_event_id) || null,
+      lastEventType: safeText(row?.last_event_type) || null,
+    };
+  }
+
+  const incomingEventMs = eventTimestamp ? new Date(eventTimestamp).getTime() : 0;
+  const staleSkippedEntitlementIds: string[] = [];
+  const missingTimestampSkippedEntitlementIds: string[] = [];
+
+  const rows = entitlementIds
+    .filter((entitlementId) => {
+      const existing = existingByEntitlement[entitlementId];
+      if (!existing) return true;
+
+      const existingMs = existing.lastEventTimestamp
+        ? new Date(existing.lastEventTimestamp).getTime()
+        : 0;
+      if (!Number.isFinite(existingMs) || existingMs <= 0) return true;
+
+      if (!Number.isFinite(incomingEventMs) || incomingEventMs <= 0) {
+        missingTimestampSkippedEntitlementIds.push(entitlementId);
+        return false;
+      }
+
+      if (incomingEventMs < existingMs) {
+        staleSkippedEntitlementIds.push(entitlementId);
+        return false;
+      }
+
+      return true;
+    })
+    .map((entitlementId) => ({
+      user_id: userId,
+      provider: "revenuecat",
+      entitlement_id: entitlementId,
+      is_active: isActive,
+      product_id: safeText(event.product_id) || null,
+      store: safeText(event.store) || null,
+      environment: safeText(event.environment) || null,
+      expires_at: expiresAt,
+      original_transaction_id: safeText(event.original_transaction_id) || null,
+      last_event_type: eventType,
+      last_event_id: eventId,
+      last_event_timestamp: eventTimestamp,
+      metadata,
+      updated_at: new Date().toISOString(),
+    }));
+
+  if (rows.length === 0) {
+    const reason =
+      staleSkippedEntitlementIds.length > 0
+        ? "Event is older than latest entitlement state."
+        : "Event timestamp missing while newer entitlement state already exists.";
+    await updateWebhookLog(supabase, eventId, {
+      process_status: "ignored",
+      error_message: reason,
+      processed_at: new Date().toISOString(),
+      metadata: {
+        source: "revenuecat_webhook",
+        stale_skipped_entitlement_ids: staleSkippedEntitlementIds,
+        missing_timestamp_skipped_entitlement_ids:
+          missingTimestampSkippedEntitlementIds,
+      },
+    });
+    return jsonResponse(200, {
+      ok: true,
+      ignored: true,
+      eventId,
+      reason,
+      staleSkippedEntitlementIds,
+      missingTimestampSkippedEntitlementIds,
+    });
+  }
 
   const { error } = await supabase.from("user_subscription_state").upsert(rows, {
     onConflict: "user_id,provider,entitlement_id",
@@ -370,6 +459,9 @@ Deno.serve(async (req) => {
       source: "revenuecat_webhook",
       entitlement_count: rows.length,
       is_active: isActive,
+      stale_skipped_entitlement_ids: staleSkippedEntitlementIds,
+      missing_timestamp_skipped_entitlement_ids:
+        missingTimestampSkippedEntitlementIds,
     },
   });
 
@@ -382,5 +474,7 @@ Deno.serve(async (req) => {
     isActive,
     expiresAt,
     updated: rows.length,
+    staleSkippedEntitlementIds,
+    missingTimestampSkippedEntitlementIds,
   });
 });

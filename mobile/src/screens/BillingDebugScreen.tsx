@@ -23,6 +23,7 @@ type SubscriptionRow = {
   expires_at: string | null;
   last_event_type: string | null;
   last_event_id: string | null;
+  last_event_timestamp: string | null;
   updated_at: string | null;
 };
 
@@ -219,7 +220,7 @@ export default function BillingDebugScreen() {
         (supabase as any)
           .from("user_subscription_state")
           .select(
-            "provider,entitlement_id,is_active,product_id,store,environment,expires_at,last_event_type,last_event_id,updated_at"
+            "provider,entitlement_id,is_active,product_id,store,environment,expires_at,last_event_type,last_event_id,last_event_timestamp,updated_at"
           )
           .eq("user_id", uid)
           .order("updated_at", { ascending: false })
@@ -591,6 +592,9 @@ export default function BillingDebugScreen() {
                   </Text>
                   <Text style={[styles.meta, { color: c.textMuted }]}>
                     last event={safeText(row.last_event_type)} / {safeText(row.last_event_id)}
+                  </Text>
+                  <Text style={[styles.meta, { color: c.textMuted }]}>
+                    last event ts={row.last_event_timestamp ? safeIso(row.last_event_timestamp) : "-"}
                   </Text>
                   <Text style={[styles.meta, { color: c.textMuted }]}>
                     updated={row.updated_at ? safeIso(row.updated_at) : "-"}

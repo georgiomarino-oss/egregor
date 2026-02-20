@@ -31,6 +31,7 @@ Supabase Edge Function to sync RevenueCat webhook events into
 - Writes each webhook to `public.revenuecat_webhook_events`.
 - Deduplicates by webhook event id (duplicate deliveries are acknowledged and skipped).
 - Applies replay window guards using event timestamp.
+- Guards entitlement updates against out-of-order events (older events are ignored).
 - Upserts entitlement rows into `public.user_subscription_state`.
 - Sets active state by event type and expiration time.
 - Stores raw event payload in `metadata`.
