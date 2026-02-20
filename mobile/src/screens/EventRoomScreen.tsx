@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  Share,
   StyleSheet,
   Switch,
   Text,
@@ -1483,6 +1484,30 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     else navigation.navigate("RootTabs");
   }, [navigation]);
 
+  const handleShareEvent = useCallback(async () => {
+    if (!event) return;
+
+    const eventTitle = String((event as any).title ?? "Egregor Event");
+    const intentionText = String((event as any).intention_statement ?? "").trim();
+    const startLabel = (event as any).start_time_utc
+      ? new Date((event as any).start_time_utc).toLocaleString()
+      : "TBD";
+    const tz = String((event as any).timezone ?? "UTC");
+
+    const lines = [
+      `Join me on Egregor: ${eventTitle}`,
+      intentionText ? `Intention: ${intentionText}` : "",
+      `Start: ${startLabel} (${tz})`,
+      eventId ? `Event ID: ${eventId}` : "",
+    ].filter(Boolean);
+
+    try {
+      await Share.share({ message: lines.join("\n") });
+    } catch (e: any) {
+      Alert.alert("Share failed", e?.message ?? "Could not open share sheet.");
+    }
+  }, [event, eventId]);
+
   if (!hasValidEventId) {
     return (
       <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
@@ -1609,7 +1634,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
         <View style={[styles.heartPulseWrap, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
           <Animated.View style={[styles.heartPulseBubble, { transform: [{ scale: heartScale }] }]}>
-            <Text style={styles.heartPulseIcon}>♥</Text>
+            <Text style={styles.heartPulseIcon}>Pulse</Text>
           </Animated.View>
           <Text style={[styles.meta, { color: c.textMuted }]}>
             Collective pulse intensity follows active participants in real time.
@@ -1659,6 +1684,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
           <Pressable style={[styles.btn, styles.btnGhost, { borderColor: c.border }]} onPress={loadEventRoom}>
             <Text style={[styles.btnGhostText, { color: c.text }]}>Refresh</Text>
+          </Pressable>
+
+          <Pressable style={[styles.btn, styles.btnGhost, { borderColor: c.border }]} onPress={handleShareEvent}>
+            <Text style={[styles.btnGhostText, { color: c.text }]}>Share</Text>
           </Pressable>
         </View>
 
@@ -2085,9 +2114,9 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   heartPulseBubble: {
-    width: 30,
+    width: 48,
     height: 30,
-    borderRadius: 15,
+    borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#2A1220",
@@ -2096,9 +2125,9 @@ const styles = StyleSheet.create({
   },
   heartPulseIcon: {
     color: "#FB7185",
-    fontSize: 15,
+    fontSize: 10,
     fontWeight: "900",
-    lineHeight: 17,
+    lineHeight: 12,
   },
 
   // Chat bubbles

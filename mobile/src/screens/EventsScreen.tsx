@@ -8,6 +8,7 @@ import {
   FlatList,
   Modal,
   Pressable,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -747,6 +748,31 @@ export default function EventsScreen() {
     [navigation]
   );
 
+  const shareEvent = useCallback(async (event: EventRow) => {
+    const title = String((event as any).title ?? "Egregor Event");
+    const intentionText = String((event as any).intention_statement ?? (event as any).intention ?? "").trim();
+    const startLabel = (event as any).start_time_utc
+      ? new Date((event as any).start_time_utc).toLocaleString()
+      : "TBD";
+    const tz = String((event as any).timezone ?? "UTC");
+    const eventId = String((event as any).id ?? "");
+
+    const lines = [
+      `Join me on Egregor: ${title}`,
+      intentionText ? `Intention: ${intentionText}` : "",
+      `Start: ${startLabel} (${tz})`,
+      eventId ? `Event ID: ${eventId}` : "",
+    ].filter(Boolean);
+
+    try {
+      await Share.share({
+        message: lines.join("\n"),
+      });
+    } catch (e: any) {
+      Alert.alert("Share failed", e?.message ?? "Could not open share sheet.");
+    }
+  }, []);
+
   const getScriptLabel = (scriptId: string | null) => {
     if (!scriptId) return "(none)";
     const t = scriptsById[scriptId]?.title;
@@ -1174,6 +1200,13 @@ export default function EventsScreen() {
               style={[styles.smallBtn, styles.smallBtnPrimary, { backgroundColor: c.primary }]}
             >
               <Text style={styles.smallBtnText}>Open</Text>
+            </Pressable>
+
+            <Pressable
+              onPress={() => shareEvent(item)}
+              style={[styles.smallBtn, styles.smallBtnGhost]}
+            >
+              <Text style={styles.smallBtnGhostText}>Share</Text>
             </Pressable>
 
             {isHost ? (
