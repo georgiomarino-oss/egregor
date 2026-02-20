@@ -148,6 +148,15 @@ export default function ScriptsScreen() {
     () => scripts.find((s) => s.id === attachScriptId) ?? null,
     [scripts, attachScriptId]
   );
+  const hostedUsageByScriptId = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const e of myEvents) {
+      const sid = e.script_id ?? "";
+      if (!sid) continue;
+      map[sid] = (map[sid] ?? 0) + 1;
+    }
+    return map;
+  }, [myEvents]);
   const editingScript = useMemo(
     () => scripts.find((s) => s.id === editScriptId) ?? null,
     [scripts, editScriptId]
@@ -615,6 +624,10 @@ export default function ScriptsScreen() {
           Intention: {(item as any).intention}
         </Text>
       ) : null}
+
+      <Text style={styles.meta}>
+        Used by hosted events: {hostedUsageByScriptId[item.id] ?? 0}
+      </Text>
 
       <View style={styles.row}>
         <Pressable
