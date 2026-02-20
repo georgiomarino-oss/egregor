@@ -205,6 +205,11 @@ function upsertAndSortMessage(rows: EventMessageRow[], next: EventMessageRow): E
   return sortMessagesByCreatedAt(copy);
 }
 
+function removeMessageById(rows: EventMessageRow[], id: string): EventMessageRow[] {
+  if (!id) return rows;
+  return rows.filter((m: any) => String((m as any).id ?? "") !== id);
+}
+
 /**
  * Local preferences:
  * - Global: prefs:autoJoinLive (default true)
@@ -951,7 +956,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [eventId, hasValidEventId, loadPresence, loadProfiles, logTelemetry]);
 
-  // Chat realtime (only append if new, and only autoscroll if near bottom)
+  // Chat realtime incremental updates with periodic resync fallback
   useEffect(() => {
     if (!hasValidEventId) return;
 
@@ -969,42 +974,56 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       .on(
         "postgres_changes",
         {
-          event: "INSERT",
+          event: "*",
           schema: "public",
           table: "event_messages",
           filter: `event_id=eq.${eventId}`,
         },
         (payload) => {
-          const row = payload.new as EventMessageRow;
-          const rowUserId = String((row as any).user_id ?? "");
+          const eventType = String((payload as any).eventType ?? "");
+          const nextRow = (payload.new ?? null) as EventMessageRow | null;
+          const prevRow = (payload.old ?? null) as EventMessageRow | null;
+          const nextId = String((nextRow as any)?.id ?? "");
+          const prevId = String((prevRow as any)?.id ?? "");
+          const targetId = nextId || prevId;
+
+          if (eventType === "DELETE") {
+            if (!targetId) return;
+            setMessages((prev) => removeMessageById(prev, targetId));
+            setPendingMessageCount((count) => Math.max(0, count - 1));
+            setUnreadMarkerMessageId((cur) => (cur === targetId ? null : cur));
+            return;
+          }
+
+          if (!nextRow) return;
+
+          const rowUserId = String((nextRow as any).user_id ?? "");
           const isMine = !!userId && rowUserId === userId;
-          const messageId = String((row as any).id ?? "");
           let insertedNew = false;
 
           setMessages((prev) => {
-            const hadMessage =
-              !!messageId && prev.some((m: any) => String((m as any).id ?? "") === messageId);
+            const hadMessage = !!nextId && prev.some((m: any) => String((m as any).id ?? "") === nextId);
             insertedNew = !hadMessage;
-            const merged = upsertAndSortMessage(prev, row);
-            const insertedIdx = merged.findIndex(
-              (m: any) => String((m as any).id ?? "") === messageId
-            );
+            const merged = upsertAndSortMessage(prev, nextRow);
+            const insertedIdx = merged.findIndex((m: any) => String((m as any).id ?? "") === nextId);
             const expectedTailIdx = Math.max(0, merged.length - 1);
 
             if (!hadMessage && insertedIdx >= 0 && insertedIdx < expectedTailIdx) {
               logTelemetry("chat_reorder_correction", {
                 insertedIdx,
                 expectedTailIdx,
-                createdAt: row.created_at ?? null,
+                createdAt: nextRow.created_at ?? null,
               });
             } else if (hadMessage) {
-              logTelemetry("chat_dedupe_hit", { id: messageId });
+              logTelemetry("chat_dedupe_hit", { id: nextId });
             }
 
             return merged;
           });
 
           void loadProfiles([rowUserId]);
+
+          if (eventType !== "INSERT") return;
 
           setTimeout(() => {
             if (shouldAutoScrollRef.current) {
@@ -1013,7 +1032,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
               setUnreadMarkerMessageId(null);
             } else if (!isMine && insertedNew) {
               setPendingMessageCount((count) => {
-                if (count === 0 && messageId) setUnreadMarkerMessageId(messageId);
+                if (count === 0 && nextId) setUnreadMarkerMessageId(nextId);
                 return count + 1;
               });
             }
