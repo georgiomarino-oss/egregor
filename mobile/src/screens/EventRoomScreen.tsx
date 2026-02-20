@@ -715,6 +715,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     if (activeEventIdRef.current !== eventId) return;
 
     const rows = (data ?? []) as EventMessageRow[];
+    const knownIds = new Set(messageIdsRef.current);
+    const currentUserId = userIdRef.current;
+    const missedOtherMessages = rows
+      .filter((row: any) => {
+        const id = String((row as any)?.id ?? "");
+        if (!id || knownIds.has(id)) return false;
+        const rowUserId = String((row as any)?.user_id ?? "");
+        return !currentUserId || rowUserId !== currentUserId;
+      })
+      .sort((a, b) => safeTimeMs(a.created_at) - safeTimeMs(b.created_at));
+
     setMessages((prev) => {
       const merged = reconcileSnapshotMessages(prev, rows, 200);
       messageIdsRef.current = new Set(
@@ -727,6 +738,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     if (shouldAutoScrollRef.current) {
       setPendingMessageCount(0);
       setUnreadMarkerMessageId(null);
+    } else if (missedOtherMessages.length > 0) {
+      const oldestMissedId = String((missedOtherMessages[0] as any)?.id ?? "");
+      setPendingMessageCount((count) => count + missedOtherMessages.length);
+      if (oldestMissedId) {
+        setUnreadMarkerMessageId((cur) => cur ?? oldestMissedId);
+      }
     }
     void loadProfiles(rows.map((m) => String((m as any).user_id ?? "")));
     logTelemetry("chat_resync_success", { reason, count: rows.length });
