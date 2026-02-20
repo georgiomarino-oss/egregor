@@ -42,6 +42,19 @@ function localInputToIso(v: string) {
   return d.toISOString();
 }
 
+function isoToLocalInput(iso: string | null | undefined) {
+  if (!iso) return plusMinutesToLocalInput(10);
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return plusMinutesToLocalInput(10);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const mi = pad(d.getMinutes());
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+}
+
 function diffMinutes(startIso: string, endIso: string) {
   const start = new Date(startIso).getTime();
   const end = new Date(endIso).getTime();
@@ -182,6 +195,14 @@ export default function EventsScreen() {
   const [attachOpen, setAttachOpen] = useState(false);
   const [attachEventId, setAttachEventId] = useState<string>("");
   const [scriptQuery, setScriptQuery] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editEventId, setEditEventId] = useState<string>("");
+  const [editTitle, setEditTitle] = useState("");
+  const [editIntention, setEditIntention] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editStartLocal, setEditStartLocal] = useState("");
+  const [editEndLocal, setEditEndLocal] = useState("");
+  const [editTimezone, setEditTimezone] = useState(defaultTimezone());
 
   // Ticker: refresh LIVE/Soon/Today labels + sorting while screen is open
   const [nowTick, setNowTick] = useState(0);
@@ -219,6 +240,10 @@ export default function EventsScreen() {
   const attachEvent = useMemo(
     () => events.find((e) => e.id === attachEventId) ?? null,
     [events, attachEventId]
+  );
+  const editEvent = useMemo(
+    () => events.find((e) => e.id === editEventId) ?? null,
+    [events, editEventId]
   );
 
   const filteredScripts = useMemo(() => {
@@ -389,7 +414,11 @@ export default function EventsScreen() {
       setAttachOpen(false);
       setAttachEventId("");
     }
-  }, [events, selectedEventId, attachOpen, attachEventId]);
+    if (editOpen && editEventId && !events.some((r) => r.id === editEventId)) {
+      setEditOpen(false);
+      setEditEventId("");
+    }
+  }, [events, selectedEventId, attachOpen, attachEventId, editOpen, editEventId]);
 
   useEffect(() => {
     if (!selectedEventId || !myUserId) {
@@ -804,6 +833,117 @@ export default function EventsScreen() {
     ]);
   }, [attachEvent, updateEventScript]);
 
+  const openEditForEvent = useCallback((event: EventRow) => {
+    setEditEventId(event.id);
+    setEditTitle(String(event.title ?? ""));
+    setEditIntention(String((event as any).intention_statement ?? (event as any).intention ?? ""));
+    setEditDescription(String(event.description ?? ""));
+    setEditStartLocal(isoToLocalInput((event as any).start_time_utc));
+    setEditEndLocal(isoToLocalInput((event as any).end_time_utc));
+    setEditTimezone(String((event as any).timezone ?? defaultTimezone()));
+    setEditOpen(true);
+  }, []);
+
+  const saveEventEdits = useCallback(async () => {
+    if (!editEvent) return;
+
+    const titleText = editTitle.trim();
+    const intentionText = editIntention.trim();
+    const descriptionText = editDescription.trim();
+    const startIso = localInputToIso(editStartLocal);
+    const endIso = localInputToIso(editEndLocal);
+    const normalizedTz = editTimezone.trim() || defaultTimezone();
+
+    if (!titleText) {
+      Alert.alert("Validation", "Title is required.");
+      return;
+    }
+    if (titleText.length > EVENT_TITLE_MAX) {
+      Alert.alert("Validation", `Title must be ${EVENT_TITLE_MAX} characters or fewer.`);
+      return;
+    }
+    if (!intentionText) {
+      Alert.alert("Validation", "Intention is required.");
+      return;
+    }
+    if (intentionText.length > EVENT_INTENTION_MAX) {
+      Alert.alert("Validation", `Intention must be ${EVENT_INTENTION_MAX} characters or fewer.`);
+      return;
+    }
+    if (descriptionText.length > EVENT_DESCRIPTION_MAX) {
+      Alert.alert("Validation", `Description must be ${EVENT_DESCRIPTION_MAX} characters or fewer.`);
+      return;
+    }
+    if (!startIso || !endIso) {
+      Alert.alert("Validation", "Start and end must be valid date-times.");
+      return;
+    }
+    if (new Date(endIso) <= new Date(startIso)) {
+      Alert.alert("Validation", "End time must be after start time.");
+      return;
+    }
+    const mins = diffMinutes(startIso, endIso);
+    if (!mins || mins <= 0) {
+      Alert.alert("Validation", "Duration must be positive.");
+      return;
+    }
+    if (!isValidTimezone(normalizedTz)) {
+      Alert.alert("Validation", "Timezone must be a valid IANA name (for example: America/New_York).");
+      return;
+    }
+
+    const {
+      data: { user },
+      error: userErr,
+    } = await supabase.auth.getUser();
+
+    if (userErr || !user) {
+      Alert.alert("Not signed in", "Please sign in first.");
+      return;
+    }
+    if (editEvent.host_user_id !== user.id) {
+      Alert.alert("Not allowed", "Only the host can edit this event.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const payload = {
+        title: titleText,
+        description: descriptionText || null,
+        intention: intentionText,
+        intention_statement: intentionText,
+        starts_at: startIso,
+        start_time_utc: startIso,
+        end_time_utc: endIso,
+        duration_minutes: mins,
+        timezone: normalizedTz,
+      };
+
+      const { error } = await supabase.from("events").update(payload).eq("id", editEvent.id);
+      if (error) {
+        Alert.alert("Update failed", error.message);
+        return;
+      }
+
+      setEditOpen(false);
+      setEditEventId("");
+      await loadEvents();
+      Alert.alert("Updated", "Event saved.");
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    editDescription,
+    editEndLocal,
+    editEvent,
+    editIntention,
+    editStartLocal,
+    editTimezone,
+    editTitle,
+    loadEvents,
+  ]);
+
   const deleteEvent = useCallback(
     async (event: EventRow) => {
       const {
@@ -992,6 +1132,16 @@ export default function EventsScreen() {
             >
               <Text style={styles.smallBtnText}>Open</Text>
             </Pressable>
+
+            {isHost ? (
+              <Pressable
+                onPress={() => openEditForEvent(item)}
+                style={[styles.smallBtn, styles.smallBtnGhost, loading && styles.disabled]}
+                disabled={loading}
+              >
+                <Text style={styles.smallBtnGhostText}>Edit</Text>
+              </Pressable>
+            ) : null}
 
             {isHost ? (
               <Pressable
@@ -1206,6 +1356,71 @@ export default function EventsScreen() {
           <Text style={styles.empty}>{loading ? "Loading..." : "No events yet."}</Text>
         }
       />
+
+      {/* Edit Event Modal */}
+      <Modal visible={editOpen} transparent animationType="slide" onRequestClose={() => setEditOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Edit Event</Text>
+              <Pressable onPress={() => setEditOpen(false)} style={styles.modalClose} disabled={loading}>
+                <Text style={styles.btnText}>Close</Text>
+              </Pressable>
+            </View>
+
+            <Text style={styles.label}>Title</Text>
+            <TextInput
+              style={styles.input}
+              value={editTitle}
+              onChangeText={setEditTitle}
+              maxLength={EVENT_TITLE_MAX}
+              placeholder="Event title"
+              placeholderTextColor="#6B7BB2"
+            />
+
+            <Text style={styles.label}>Intention</Text>
+            <TextInput
+              style={[styles.input, styles.multi]}
+              value={editIntention}
+              onChangeText={setEditIntention}
+              multiline
+              maxLength={EVENT_INTENTION_MAX}
+              placeholder="Intention statement"
+              placeholderTextColor="#6B7BB2"
+            />
+
+            <Text style={styles.label}>Description</Text>
+            <TextInput
+              style={[styles.input, styles.multi]}
+              value={editDescription}
+              onChangeText={setEditDescription}
+              multiline
+              maxLength={EVENT_DESCRIPTION_MAX}
+              placeholder="Description"
+              placeholderTextColor="#6B7BB2"
+            />
+
+            <Text style={styles.label}>Start local (YYYY-MM-DDTHH:mm)</Text>
+            <TextInput style={styles.input} value={editStartLocal} onChangeText={setEditStartLocal} />
+
+            <Text style={styles.label}>End local (YYYY-MM-DDTHH:mm)</Text>
+            <TextInput style={styles.input} value={editEndLocal} onChangeText={setEditEndLocal} />
+
+            <Text style={styles.label}>Timezone</Text>
+            <TextInput style={styles.input} value={editTimezone} onChangeText={setEditTimezone} />
+
+            <View style={styles.row}>
+              <Pressable
+                style={[styles.btn, styles.btnPrimary, loading && styles.disabled]}
+                onPress={saveEventEdits}
+                disabled={loading || !editEvent}
+              >
+                <Text style={styles.btnText}>{loading ? "Working..." : "Save changes"}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Attach Script Modal */}
       <Modal
