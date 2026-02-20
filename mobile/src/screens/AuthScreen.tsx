@@ -23,6 +23,10 @@ export default function AuthScreen() {
     return !loading;
   }, [email, password, confirmPassword, mode, loading]);
 
+  const onChangeEmail = (value: string) => {
+    setEmail(value.replace(/\s+/g, "").toLowerCase());
+  };
+
   const submit = async () => {
     const e = email.trim().toLowerCase();
     if (!e) return Alert.alert("Missing email", "Please enter your email.");
@@ -126,7 +130,7 @@ export default function AuthScreen() {
               <TextInput
                 style={styles.input}
                 value={email}
-                onChangeText={setEmail}
+                onChangeText={onChangeEmail}
                 autoCapitalize="none"
                 autoCorrect={false}
                 keyboardType="email-address"
