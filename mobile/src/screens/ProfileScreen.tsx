@@ -1,8 +1,9 @@
 // mobile/src/screens/ProfileScreen.tsx
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useFocusEffect } from "@react-navigation/native";
 import { supabase } from "../supabase/client";
 import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
@@ -69,6 +70,11 @@ const DEFAULT_COLLECTIVE_IMPACT: CollectiveImpact = {
   sharedIntentionsWeek: 0,
 };
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+const PROFILE_STATS_RESYNC_MS = 30_000;
+
+function emptyRhythmDays(): RhythmDay[] {
+  return WEEKDAY_LABELS.map((label) => ({ label, value: 0 }));
+}
 
 function safeTimeMs(iso: string | null | undefined): number {
   if (!iso) return 0;
@@ -141,9 +147,9 @@ export default function ProfileScreen() {
   const [soloSessionsWeek, setSoloSessionsWeek] = useState(0);
   const [soloMinutesWeek, setSoloMinutesWeek] = useState(0);
   const [soloRecent, setSoloRecent] = useState<SoloHistoryEntry[]>([]);
-  const [rhythmByDay, setRhythmByDay] = useState<RhythmDay[]>(
-    WEEKDAY_LABELS.map((label) => ({ label, value: 0 }))
-  );
+  const [rhythmByDay, setRhythmByDay] = useState<RhythmDay[]>(emptyRhythmDays());
+  const statsRefreshInFlightRef = useRef(false);
+  const statsRefreshQueuedRef = useRef(false);
 
   const loadJournal = useCallback(async () => {
     try {
@@ -283,6 +289,122 @@ export default function ProfileScreen() {
     }
   }, []);
 
+  const refreshLiveProfileStats = useCallback(
+    async (targetUserId?: string) => {
+      const resolveUserId = async () => {
+        if (targetUserId) return targetUserId;
+        if (userId) return userId;
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        return user?.id ?? "";
+      };
+
+      const uid = await resolveUserId();
+      if (!uid) {
+        setStreakDays(0);
+        setActiveDays30(0);
+        setIntentionEnergy(0);
+        setCollectiveImpact(DEFAULT_COLLECTIVE_IMPACT);
+        setRhythmByDay(emptyRhythmDays());
+        return;
+      }
+
+      if (statsRefreshInFlightRef.current) {
+        statsRefreshQueuedRef.current = true;
+        return;
+      }
+
+      statsRefreshInFlightRef.current = true;
+      try {
+        const nowMs = Date.now();
+        const weekAgoIso = new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString();
+        const activeCutoffIso = new Date(nowMs - 90_000).toISOString();
+
+        const [{ data: presenceRows }, { data: allEvents }, { count: prayersWeekCount }, { data: activePresenceRows }, { count: sharedIntentionsCount }] =
+          await Promise.all([
+            supabase
+              .from("event_presence")
+              .select("event_id,joined_at,last_seen_at")
+              .eq("user_id", uid)
+              .order("last_seen_at", { ascending: false })
+              .limit(5000),
+            supabase
+              .from("events")
+              .select("id,start_time_utc,end_time_utc")
+              .limit(300),
+            supabase
+              .from("event_presence")
+              .select("*", { count: "exact", head: true })
+              .gte("last_seen_at", weekAgoIso),
+            supabase
+              .from("event_presence")
+              .select("event_id,user_id,last_seen_at")
+              .gte("last_seen_at", activeCutoffIso)
+              .limit(5000),
+            supabase
+              .from("event_messages")
+              .select("*", { count: "exact", head: true })
+              .gte("created_at", weekAgoIso),
+          ]);
+
+        const rows = (presenceRows ?? []) as Pick<PresenceRow, "event_id" | "joined_at" | "last_seen_at">[];
+        const dayKeys = rows
+          .map((r) => toDayKey(String((r as any).last_seen_at ?? (r as any).joined_at ?? "")))
+          .filter(Boolean);
+        const distinctDayKeys = Array.from(new Set(dayKeys));
+        const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+        const recentDays = distinctDayKeys.filter((k) => safeTimeMs(`${k}T00:00:00.000Z`) >= cutoff).length;
+        const distinctEventCount = new Set(rows.map((r) => String((r as any).event_id ?? ""))).size;
+
+        setStreakDays(computeStreakDays(distinctDayKeys));
+        setActiveDays30(recentDays);
+        setIntentionEnergy(distinctEventCount);
+
+        const cadenceCutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+        const counts = new Map<string, number>();
+        for (const label of WEEKDAY_LABELS) counts.set(label, 0);
+        for (const r of rows) {
+          const iso = String((r as any).last_seen_at ?? (r as any).joined_at ?? "");
+          const ms = safeTimeMs(iso);
+          if (!ms || ms < cadenceCutoff) continue;
+          const label = WEEKDAY_LABELS[new Date(ms).getDay()];
+          counts.set(label, (counts.get(label) ?? 0) + 1);
+        }
+        setRhythmByDay(WEEKDAY_LABELS.map((label) => ({ label, value: counts.get(label) ?? 0 })));
+
+        const eventsRows = (allEvents ?? []) as Pick<EventRow, "id" | "start_time_utc" | "end_time_utc">[];
+        const liveEventsNow = eventsRows.filter((e) => {
+          const startMs = safeTimeMs(String((e as any).start_time_utc ?? ""));
+          const endMs = safeTimeMs(String((e as any).end_time_utc ?? ""));
+          return startMs > 0 && startMs <= nowMs && (endMs <= 0 || nowMs <= endMs);
+        }).length;
+
+        const activeRows = (activePresenceRows ?? []) as Pick<PresenceRow, "event_id" | "user_id" | "last_seen_at">[];
+        const activeParticipantsNow = activeRows.filter((r) => {
+          const ts = safeTimeMs(String((r as any).last_seen_at ?? ""));
+          return ts > 0 && nowMs - ts <= 90_000;
+        }).length;
+
+        setCollectiveImpact({
+          liveEventsNow,
+          activeParticipantsNow,
+          prayersWeek: prayersWeekCount ?? 0,
+          sharedIntentionsWeek: sharedIntentionsCount ?? 0,
+        });
+      } catch {
+        // keep previous values on refresh failure
+      } finally {
+        statsRefreshInFlightRef.current = false;
+        if (statsRefreshQueuedRef.current) {
+          statsRefreshQueuedRef.current = false;
+          void refreshLiveProfileStats(uid);
+        }
+      }
+    },
+    [userId]
+  );
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -320,85 +442,11 @@ export default function ProfileScreen() {
         setAvatarUrl("");
       }
 
-      const { data: presenceRows } = await supabase
-        .from("event_presence")
-        .select("event_id,joined_at,last_seen_at")
-        .eq("user_id", user.id)
-        .order("last_seen_at", { ascending: false })
-        .limit(5000);
-
-      const rows = (presenceRows ?? []) as Pick<PresenceRow, "event_id" | "joined_at" | "last_seen_at">[];
-      const dayKeys = rows
-        .map((r) => toDayKey(String((r as any).last_seen_at ?? (r as any).joined_at ?? "")))
-        .filter(Boolean);
-      const distinctDayKeys = Array.from(new Set(dayKeys));
-      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      const recentDays = distinctDayKeys.filter((k) => safeTimeMs(`${k}T00:00:00.000Z`) >= cutoff).length;
-      const distinctEventCount = new Set(rows.map((r) => String((r as any).event_id ?? ""))).size;
-
-      setStreakDays(computeStreakDays(distinctDayKeys));
-      setActiveDays30(recentDays);
-      setIntentionEnergy(distinctEventCount);
-      const cadenceCutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
-      const counts = new Map<string, number>();
-      for (const label of WEEKDAY_LABELS) counts.set(label, 0);
-      for (const r of rows) {
-        const iso = String((r as any).last_seen_at ?? (r as any).joined_at ?? "");
-        const ms = safeTimeMs(iso);
-        if (!ms || ms < cadenceCutoff) continue;
-        const label = WEEKDAY_LABELS[new Date(ms).getDay()];
-        counts.set(label, (counts.get(label) ?? 0) + 1);
-      }
-      setRhythmByDay(WEEKDAY_LABELS.map((label) => ({ label, value: counts.get(label) ?? 0 })));
-
-      const nowMs = Date.now();
-      const weekAgoIso = new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString();
-      const activeCutoffIso = new Date(nowMs - 90_000).toISOString();
-
-      const [{ data: allEvents }, { count: prayersWeekCount }, { data: activePresenceRows }, { count: sharedIntentionsCount }] =
-        await Promise.all([
-          supabase
-            .from("events")
-            .select("id,start_time_utc,end_time_utc")
-            .limit(300),
-          supabase
-            .from("event_presence")
-            .select("*", { count: "exact", head: true })
-            .gte("last_seen_at", weekAgoIso),
-          supabase
-            .from("event_presence")
-            .select("event_id,user_id,last_seen_at")
-            .gte("last_seen_at", activeCutoffIso)
-            .limit(5000),
-          supabase
-            .from("event_messages")
-            .select("*", { count: "exact", head: true })
-            .gte("created_at", weekAgoIso),
-        ]);
-
-      const eventsRows = (allEvents ?? []) as Pick<EventRow, "id" | "start_time_utc" | "end_time_utc">[];
-      const liveEventsNow = eventsRows.filter((e) => {
-        const startMs = safeTimeMs(String((e as any).start_time_utc ?? ""));
-        const endMs = safeTimeMs(String((e as any).end_time_utc ?? ""));
-        return startMs > 0 && startMs <= nowMs && (endMs <= 0 || nowMs <= endMs);
-      }).length;
-
-      const activeRows = (activePresenceRows ?? []) as Pick<PresenceRow, "event_id" | "user_id" | "last_seen_at">[];
-      const activeParticipantsNow = activeRows.filter((r) => {
-        const ts = safeTimeMs(String((r as any).last_seen_at ?? ""));
-        return ts > 0 && nowMs - ts <= 90_000;
-      }).length;
-
-      setCollectiveImpact({
-        liveEventsNow,
-        activeParticipantsNow,
-        prayersWeek: prayersWeekCount ?? 0,
-        sharedIntentionsWeek: sharedIntentionsCount ?? 0,
-      });
+      await refreshLiveProfileStats(user.id);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [refreshLiveProfileStats]);
 
   useEffect(() => {
     load();
@@ -410,6 +458,54 @@ export default function ProfileScreen() {
     void loadCircles();
     void loadSoloPractice();
   }, [load, loadJournal, loadPrefs, loadSupportTotal, loadDailyIntention, loadWaitlistDraft, loadCircles, loadSoloPractice]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let disposed = false;
+      let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
+
+      const refresh = () => {
+        if (disposed) return;
+        void refreshLiveProfileStats();
+      };
+
+      const scheduleRefresh = () => {
+        if (disposed || refreshTimeout) return;
+        refreshTimeout = setTimeout(() => {
+          refreshTimeout = null;
+          refresh();
+        }, 1200);
+      };
+
+      refresh();
+      const intervalId = setInterval(refresh, PROFILE_STATS_RESYNC_MS);
+      const realtime = supabase
+        .channel(`profile:live:${userId || "anon"}`)
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "event_presence" },
+          scheduleRefresh
+        )
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "events" },
+          scheduleRefresh
+        )
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "event_messages" },
+          scheduleRefresh
+        )
+        .subscribe();
+
+      return () => {
+        disposed = true;
+        clearInterval(intervalId);
+        if (refreshTimeout) clearTimeout(refreshTimeout);
+        supabase.removeChannel(realtime);
+      };
+    }, [refreshLiveProfileStats, userId])
+  );
 
   useEffect(() => {
     if (!waitlistEmail.trim() && email.trim()) {
