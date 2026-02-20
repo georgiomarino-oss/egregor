@@ -52,6 +52,7 @@ Scope: `mobile/src/screens/EventRoomScreen.tsx`
   - No duplicate messages by id.
   - Messages remain sorted by created_at.
   - Reconnected inserts land in correct order.
+  - Messages over 1000 chars are rejected with validation feedback.
 
 ## Chat Autoscroll Behavior
 - While near bottom, receive new messages.
@@ -65,6 +66,8 @@ Scope: `mobile/src/screens/EventRoomScreen.tsx`
 - Enter EventRoom from Events screen.
 - Use Back behavior from EventRoom.
 - Expected: no navigation crash; route params still use `eventId`.
+- Delete a hosted event from Events tab.
+- Expected: confirmation prompt appears and host-only delete succeeds.
 
 ## Quick Pass/Fail Log
 - Date:
