@@ -608,18 +608,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   const chatChars = chatText.length;
 
-  useEffect(() => {
-    const ids = new Set<string>();
-    for (const m of messages as any[]) {
-      const id = String((m as any)?.id ?? "");
-      if (id) ids.add(id);
-    }
-    messageIdsRef.current = ids;
-  }, [messages]);
-
   const loadMessages = useCallback(async (reason = "manual") => {
     if (!hasValidEventId) {
       setMessages([]);
+      messageIdsRef.current = new Set();
       return;
     }
 
@@ -638,6 +630,11 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
     const rows = (data ?? []) as EventMessageRow[];
     setMessages(sortMessagesByCreatedAt(rows));
+    messageIdsRef.current = new Set(
+      rows
+        .map((m: any) => String((m as any)?.id ?? ""))
+        .filter((id: string) => !!id)
+    );
     if (shouldAutoScrollRef.current) {
       setPendingMessageCount(0);
       setUnreadMarkerMessageId(null);
@@ -733,6 +730,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setScriptDbRow(null);
       setPresenceRows([]);
       setMessages([]);
+      messageIdsRef.current = new Set();
       return;
     }
 
@@ -1039,6 +1037,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
           if (eventType === "DELETE") {
             if (!targetId) return;
+            messageIdsRef.current.delete(targetId);
             setMessages((prev) => removeMessageById(prev, targetId));
             setPendingMessageCount((count) => Math.max(0, count - 1));
             setUnreadMarkerMessageId((cur) => (cur === targetId ? null : cur));
@@ -1050,6 +1049,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           const rowUserId = String((nextRow as any).user_id ?? "");
           const isMine = !!userId && rowUserId === userId;
           const insertedNew = !!nextId && !messageIdsRef.current.has(nextId);
+          if (nextId) messageIdsRef.current.add(nextId);
 
           setMessages((prev) => {
             const merged = upsertAndSortMessage(prev, nextRow);
