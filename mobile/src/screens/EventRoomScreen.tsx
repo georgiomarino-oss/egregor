@@ -385,6 +385,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   // App state tracking (for heartbeat/presence correctness)
   const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+  useEffect(() => {
+    appStateRef.current = appState;
+  }, [appState]);
 
   // Profiles cache
   const [profilesById, setProfilesById] = useState<Record<string, ProfileMini>>({});
@@ -660,6 +664,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     pendingScrollTimeoutRef.current = setTimeout(() => {
       pendingScrollTimeoutRef.current = null;
       if (activeEventIdRef.current !== targetEventId) return;
+      if (appStateRef.current !== "active") return;
       scrollChatToEnd(animated);
     }, 30);
   }, [scrollChatToEnd]);
