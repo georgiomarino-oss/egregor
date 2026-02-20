@@ -154,6 +154,52 @@ function safeTimeMs(iso: string | null | undefined): number {
   return Number.isFinite(t) ? t : 0;
 }
 
+function presenceRowKey(eventId: string, userId: string) {
+  return `${eventId}:${userId}`;
+}
+
+function upsertPresenceRow(rows: PresenceRow[], next: PresenceRow): PresenceRow[] {
+  const key = presenceRowKey(next.event_id, next.user_id);
+  const idx = rows.findIndex((r) => presenceRowKey(r.event_id, r.user_id) === key);
+  if (idx < 0) return [...rows, next];
+
+  const copy = [...rows];
+  copy[idx] = next;
+  return copy;
+}
+
+function removePresenceRow(rows: PresenceRow[], eventId: string, userId: string): PresenceRow[] {
+  if (!eventId || !userId) return rows;
+  const key = presenceRowKey(eventId, userId);
+  return rows.filter((r) => presenceRowKey(r.event_id, r.user_id) !== key);
+}
+
+function sortMessagesByCreatedAt(rows: EventMessageRow[]): EventMessageRow[] {
+  const copy = [...rows];
+  copy.sort((a, b) => {
+    const ta = safeTimeMs(a.created_at);
+    const tb = safeTimeMs(b.created_at);
+    if (ta !== tb) return ta - tb;
+
+    const aid = String((a as any).id ?? "");
+    const bid = String((b as any).id ?? "");
+    return aid.localeCompare(bid);
+  });
+  return copy;
+}
+
+function upsertAndSortMessage(rows: EventMessageRow[], next: EventMessageRow): EventMessageRow[] {
+  const id = String((next as any).id ?? "");
+  if (!id) return sortMessagesByCreatedAt([...rows, next]);
+
+  const idx = rows.findIndex((m: any) => String(m.id ?? "") === id);
+  if (idx < 0) return sortMessagesByCreatedAt([...rows, next]);
+
+  const copy = [...rows];
+  copy[idx] = next;
+  return sortMessagesByCreatedAt(copy);
+}
+
 /**
  * Local preferences:
  * - Global: prefs:autoJoinLive (default true)
@@ -196,10 +242,8 @@ type ProfileMini = Pick<ProfileRow, "id" | "display_name" | "avatar_url">;
 // Tuneables
 const ACTIVE_WINDOW_MS = 90_000;
 const HEARTBEAT_MS = 10_000;
+const PRESENCE_RESYNC_MS = 60_000;
 
-// If you want: automatically leave live when app backgrounds.
-// I’m defaulting to false (less surprising).
-const AUTO_LEAVE_ON_BACKGROUND = false;
 
 // Chat: how close to bottom counts as “near bottom”
 const CHAT_BOTTOM_THRESHOLD_PX = 120;
@@ -226,7 +270,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const [presenceErr, setPresenceErr] = useState("");
 
   // App state tracking (for heartbeat/presence correctness)
-  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+  const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
 
   // Profiles cache
   const [profilesById, setProfilesById] = useState<Record<string, ProfileMini>>({});
@@ -454,7 +498,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     if (error) return;
 
     const rows = (data ?? []) as EventMessageRow[];
-    setMessages(rows);
+    setMessages(sortMessagesByCreatedAt(rows));
     void loadProfiles(rows.map((m) => String((m as any).user_id ?? "")));
   }, [eventId, hasValidEventId, loadProfiles]);
 
@@ -591,6 +635,15 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, []);
 
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (next) => {
+      setAppState(next);
+    });
+    return () => {
+      sub.remove();
+    };
+  }, []);
+
   // Load per-event sticky join pref
   useEffect(() => {
     let cancelled = false;
@@ -667,19 +720,48 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!hasValidEventId) return;
 
+    let disposed = false;
+    const resync = () => {
+      if (disposed) return;
+      void loadPresence();
+    };
+
+    resync();
+    const intervalId = setInterval(resync, PRESENCE_RESYNC_MS);
+
     const channel = supabase
       .channel(`presence:${eventId}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "event_presence", filter: `event_id=eq.${eventId}` },
-        () => loadPresence()
+        (payload) => {
+          const eventType = String((payload as any).eventType ?? "");
+          const next = ((payload as any).new ?? null) as PresenceRow | null;
+          const prev = ((payload as any).old ?? null) as PresenceRow | null;
+
+          setPresenceRows((rows) => {
+            if (eventType === "DELETE") {
+              const eventIdToDrop = String((prev as any)?.event_id ?? eventId);
+              const userIdToDrop = String((prev as any)?.user_id ?? "");
+              return removePresenceRow(rows, eventIdToDrop, userIdToDrop);
+            }
+
+            if (!next) return rows;
+            return upsertPresenceRow(rows, next);
+          });
+
+          const changedUserId = String((next as any)?.user_id ?? (prev as any)?.user_id ?? "");
+          if (changedUserId) void loadProfiles([changedUserId]);
+        }
       )
       .subscribe();
 
     return () => {
+      disposed = true;
+      clearInterval(intervalId);
       supabase.removeChannel(channel);
     };
-  }, [eventId, hasValidEventId, loadPresence]);
+  }, [eventId, hasValidEventId, loadPresence, loadProfiles]);
 
   // Chat realtime (only append if new, and only autoscroll if near bottom)
   useEffect(() => {
@@ -698,11 +780,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         (payload) => {
           const row = payload.new as EventMessageRow;
 
-          setMessages((prev) => {
-            const id = String((row as any).id ?? "");
-            if (id && prev.some((m: any) => String(m.id) === id)) return prev;
-            return [...prev, row];
-          });
+          setMessages((prev) => upsertAndSortMessage(prev, row));
 
           void loadProfiles([String((row as any).user_id ?? "")]);
 
@@ -717,6 +795,15 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       supabase.removeChannel(ch);
     };
   }, [eventId, hasValidEventId, loadProfiles, scrollChatToEnd]);
+
+  useEffect(() => {
+    if (!userId) {
+      setIsJoined(false);
+      return;
+    }
+    const joined = presenceRows.some((r) => r.user_id === userId);
+    setIsJoined((prev) => (prev === joined ? prev : joined));
+  }, [presenceRows, userId]);
 
   // Helper: upsert presence, preserving joined_at if it already exists
   const upsertPresencePreserveJoinedAt = useCallback(
@@ -792,9 +879,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!isJoined) return;
     if (!hasValidEventId) return;
+    if (appState !== "active") return;
 
     let cancelled = false;
-    let intervalId: any = null;
 
     const beat = async () => {
       const {
@@ -812,63 +899,16 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       if (error && !cancelled) setPresenceErr(error.message);
     };
 
-    const startBeating = () => {
-      if (intervalId) return;
-      beat();
-      intervalId = setInterval(beat, HEARTBEAT_MS);
-    };
-
-    const stopBeating = () => {
-      if (intervalId) clearInterval(intervalId);
-      intervalId = null;
-    };
-
-    // Start immediately if active
-    if (appStateRef.current === "active") startBeating();
-
-    const sub = AppState.addEventListener("change", async (next) => {
-      appStateRef.current = next;
-
-      if (next === "active") {
-        startBeating();
-        return;
-      }
-
-      // background/inactive: stop heartbeat
-      stopBeating();
-
-      // one last “seen” update when leaving foreground
-      try {
-        await beat();
-      } catch {
-        // ignore
-      }
-
-      if (AUTO_LEAVE_ON_BACKGROUND) {
-        try {
-          const {
-            data: { user },
-          } = await supabase.auth.getUser();
-          if (user) {
-            await supabase
-              .from("event_presence")
-              .delete()
-              .eq("event_id", eventId)
-              .eq("user_id", user.id);
-          }
-          if (!cancelled) setIsJoined(false);
-        } catch {
-          // ignore
-        }
-      }
-    });
+    void beat();
+    const intervalId = setInterval(() => {
+      void beat();
+    }, HEARTBEAT_MS);
 
     return () => {
       cancelled = true;
-      stopBeating();
-      sub.remove();
+      clearInterval(intervalId);
     };
-  }, [isJoined, eventId, hasValidEventId]);
+  }, [isJoined, eventId, hasValidEventId, appState]);
 
   // Presence computed
   const presenceSortedByLastSeen = useMemo(() => {
