@@ -579,6 +579,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const chatListRef = useRef<FlatList<EventMessageRow>>(null);
   const chatContentHeightRef = useRef(0);
   const chatScrollOffsetYRef = useRef(0);
+  const messageIdsRef = useRef<Set<string>>(new Set());
 
   // "Should we autoscroll?" tracking
   const shouldAutoScrollRef = useRef(true);
@@ -605,6 +606,15 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   }, []);
 
   const chatChars = chatText.length;
+
+  useEffect(() => {
+    const ids = new Set<string>();
+    for (const m of messages as any[]) {
+      const id = String((m as any)?.id ?? "");
+      if (id) ids.add(id);
+    }
+    messageIdsRef.current = ids;
+  }, [messages]);
 
   const loadMessages = useCallback(async (reason = "manual") => {
     if (!hasValidEventId) {
@@ -1038,22 +1048,20 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
           const rowUserId = String((nextRow as any).user_id ?? "");
           const isMine = !!userId && rowUserId === userId;
-          let insertedNew = false;
+          const insertedNew = !!nextId && !messageIdsRef.current.has(nextId);
 
           setMessages((prev) => {
-            const hadMessage = !!nextId && prev.some((m: any) => String((m as any).id ?? "") === nextId);
-            insertedNew = !hadMessage;
             const merged = upsertAndSortMessage(prev, nextRow);
             const insertedIdx = merged.findIndex((m: any) => String((m as any).id ?? "") === nextId);
             const expectedTailIdx = Math.max(0, merged.length - 1);
 
-            if (!hadMessage && insertedIdx >= 0 && insertedIdx < expectedTailIdx) {
+            if (insertedNew && insertedIdx >= 0 && insertedIdx < expectedTailIdx) {
               logTelemetry("chat_reorder_correction", {
                 insertedIdx,
                 expectedTailIdx,
                 createdAt: nextRow.created_at ?? null,
               });
-            } else if (hadMessage) {
+            } else if (!insertedNew) {
               logTelemetry("chat_dedupe_hit", { id: nextId });
             }
 
