@@ -22,6 +22,7 @@ import ScriptsScreen from "./src/screens/ScriptsScreen";
 import EventRoomScreen from "./src/screens/EventRoomScreen";
 import ProfileScreen from "./src/screens/ProfileScreen";
 import NotificationsScreen from "./src/screens/NotificationsScreen";
+import BillingDebugScreen from "./src/screens/BillingDebugScreen";
 
 import { AppStateProvider, useAppState } from "./src/state";
 import type { RootStackParamList, RootTabParamList } from "./src/types";
@@ -262,6 +263,16 @@ function RootNav() {
               options={{
                 headerShown: true,
                 title: "Notifications",
+                headerStyle: { backgroundColor: c.card },
+                headerTintColor: c.text,
+              }}
+            />
+            <Stack.Screen
+              name="BillingDebug"
+              component={BillingDebugScreen}
+              options={{
+                headerShown: true,
+                title: "Billing Debug",
                 headerStyle: { backgroundColor: c.card },
                 headerTintColor: c.text,
               }}

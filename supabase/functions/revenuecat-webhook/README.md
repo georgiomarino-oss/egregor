@@ -15,6 +15,8 @@ Supabase Edge Function to sync RevenueCat webhook events into
     - `Authorization: Bearer <token>`
     - or `x-egregor-webhook-token: <token>`
 - `RC_DEFAULT_ENTITLEMENT_ID` (default: `egregor_circle`)
+- `RC_REPLAY_MAX_AGE_HOURS` (default: `720`)
+- `RC_REPLAY_MAX_FUTURE_MINUTES` (default: `15`)
 
 ## Request
 
@@ -25,6 +27,10 @@ Supabase Edge Function to sync RevenueCat webhook events into
 ## Behavior
 
 - Finds user id from `event.app_user_id` or first UUID in `event.aliases`.
+- Assigns a deterministic webhook event id (uses `event.id` when present).
+- Writes each webhook to `public.revenuecat_webhook_events`.
+- Deduplicates by webhook event id (duplicate deliveries are acknowledged and skipped).
+- Applies replay window guards using event timestamp.
 - Upserts entitlement rows into `public.user_subscription_state`.
 - Sets active state by event type and expiration time.
 - Stores raw event payload in `metadata`.

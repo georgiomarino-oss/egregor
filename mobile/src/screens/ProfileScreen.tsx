@@ -3,10 +3,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { supabase } from "../supabase/client";
 import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
+import type { RootStackParamList } from "../types";
 import type { Database } from "../types/db";
 import { getSoloHistoryStats, listSoloHistory, type SoloHistoryEntry } from "../features/solo/soloHistoryRepo";
 
@@ -116,6 +117,7 @@ function computeStreakDays(dayKeys: string[]): number {
 }
 
 export default function ProfileScreen() {
+  const navigation = useNavigation<any>();
   const {
     theme,
     highContrast,
@@ -736,6 +738,11 @@ export default function ProfileScreen() {
     }
   }, [refreshBilling, restoreCircle]);
 
+  const openBillingDebug = useCallback(() => {
+    const navToUse = navigation.getParent?.() ?? navigation;
+    (navToUse as any).navigate("BillingDebug" as keyof RootStackParamList);
+  }, [navigation]);
+
   const submitWaitlist = useCallback(async () => {
     const nextEmail = waitlistEmail.trim().toLowerCase();
     const nextNote = waitlistNote.trim();
@@ -1150,6 +1157,13 @@ export default function ProfileScreen() {
                   <Text style={[styles.btnGhostText, { color: c.text }]}>
                     {billingActionBusy ? "Working..." : "Refresh status"}
                   </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.btn, styles.btnGhost, { borderColor: c.border }, billingActionBusy && styles.disabled]}
+                  onPress={openBillingDebug}
+                  disabled={billingActionBusy}
+                >
+                  <Text style={[styles.btnGhostText, { color: c.text }]}>Open billing debug</Text>
                 </Pressable>
               </View>
             </>

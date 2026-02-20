@@ -26,6 +26,19 @@ const DEFAULT_ENTITLEMENT_ID =
   String(Deno.env.get("RC_DEFAULT_ENTITLEMENT_ID") ?? "").trim() ||
   "egregor_circle";
 
+const REPLAY_MAX_AGE_HOURS = Math.max(
+  1,
+  Number(
+    String(Deno.env.get("RC_REPLAY_MAX_AGE_HOURS") ?? "").trim() || "720"
+  ) || 720
+);
+const REPLAY_MAX_FUTURE_MINUTES = Math.max(
+  1,
+  Number(
+    String(Deno.env.get("RC_REPLAY_MAX_FUTURE_MINUTES") ?? "").trim() || "15"
+  ) || 15
+);
+
 const ACTIVE_TYPES = new Set([
   "INITIAL_PURCHASE",
   "RENEWAL",
@@ -53,14 +66,26 @@ function clip(input: string, max: number) {
   return `${clean.slice(0, max - 1)}...`;
 }
 
+function safeText(v: unknown) {
+  return String(v ?? "").trim();
+}
+
+function asMs(value: unknown) {
+  const ms = Number(value ?? 0);
+  if (!Number.isFinite(ms) || ms <= 0) return 0;
+  return Math.floor(ms);
+}
+
+function toIsoFromMs(value: unknown): string | null {
+  const ms = asMs(value);
+  if (!ms) return null;
+  return new Date(ms).toISOString();
+}
+
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     v
   );
-}
-
-function safeText(v: unknown) {
-  return String(v ?? "").trim();
 }
 
 function findBestUserId(event: RevenueCatEvent) {
@@ -77,9 +102,11 @@ function findBestUserId(event: RevenueCatEvent) {
 }
 
 function parseExpiresAt(event: RevenueCatEvent) {
-  const ms = Number(event.expiration_at_ms ?? 0);
-  if (!Number.isFinite(ms) || ms <= 0) return null;
-  return new Date(ms).toISOString();
+  return toIsoFromMs(event.expiration_at_ms);
+}
+
+function parseEventTimestamp(event: RevenueCatEvent) {
+  return toIsoFromMs(event.event_timestamp_ms);
 }
 
 function determineActive(eventTypeRaw: string, expiresAtIso: string | null) {
@@ -121,6 +148,69 @@ function requireWebhookAuth(req: Request) {
   return bearer === token || rawToken === token;
 }
 
+function checkReplayWindow(eventTimestampIso: string | null) {
+  if (!eventTimestampIso) {
+    return { blocked: false, reason: "" };
+  }
+
+  const eventMs = new Date(eventTimestampIso).getTime();
+  if (!Number.isFinite(eventMs)) {
+    return { blocked: false, reason: "" };
+  }
+
+  const nowMs = Date.now();
+  const maxAgeMs = REPLAY_MAX_AGE_HOURS * 60 * 60 * 1000;
+  const maxFutureMs = REPLAY_MAX_FUTURE_MINUTES * 60 * 1000;
+  if (eventMs > nowMs + maxFutureMs) {
+    return {
+      blocked: true,
+      reason: `event timestamp too far in future (> ${REPLAY_MAX_FUTURE_MINUTES}m)`,
+    };
+  }
+  if (nowMs - eventMs > maxAgeMs) {
+    return {
+      blocked: true,
+      reason: `event timestamp too old (> ${REPLAY_MAX_AGE_HOURS}h)`,
+    };
+  }
+
+  return { blocked: false, reason: "" };
+}
+
+async function sha256Hex(input: string) {
+  const encoded = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function buildWebhookEventId(event: RevenueCatEvent, payload: unknown) {
+  const direct = safeText(event.id);
+  if (direct) return `rc:${direct}`;
+
+  const asJson = JSON.stringify(payload ?? event ?? {});
+  const hash = await sha256Hex(asJson);
+  const eventMs = asMs(event.event_timestamp_ms);
+  if (eventMs > 0) return `hash:${eventMs}:${hash}`;
+  return `hash:${hash}`;
+}
+
+async function updateWebhookLog(
+  supabase: ReturnType<typeof createClient>,
+  eventId: string,
+  patch: Record<string, unknown>
+) {
+  const nowIso = new Date().toISOString();
+  await supabase
+    .from("revenuecat_webhook_events")
+    .update({
+      ...patch,
+      updated_at: nowIso,
+    })
+    .eq("event_id", eventId);
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: CORS_HEADERS });
@@ -142,29 +232,100 @@ Deno.serve(async (req) => {
     });
   }
 
-  const payload = (await req.json().catch(() => ({}))) as any;
+  const payload = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const event = (payload?.event ?? payload) as RevenueCatEvent;
   const eventType = safeText(event?.type).toUpperCase();
   if (!eventType) {
     return jsonResponse(400, { error: "Missing RevenueCat event type." });
   }
 
+  const eventId = await buildWebhookEventId(event, payload);
   const userId = findBestUserId(event);
-  if (!userId) {
+  const entitlementIds = extractEntitlementIds(event);
+  const eventTimestamp = parseEventTimestamp(event);
+  const receivedAt = new Date().toISOString();
+
+  const supabase = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
+  const { error: insertLogError } = await supabase
+    .from("revenuecat_webhook_events")
+    .insert({
+      event_id: eventId,
+      user_id: userId || null,
+      event_type: eventType,
+      app_user_id: safeText(event.app_user_id) || null,
+      entitlement_ids: entitlementIds,
+      product_id: safeText(event.product_id) || null,
+      store: safeText(event.store) || null,
+      environment: safeText(event.environment) || null,
+      event_timestamp: eventTimestamp,
+      process_status: "received",
+      raw_payload: payload,
+      metadata: {
+        source: "revenuecat_webhook",
+      },
+      received_at: receivedAt,
+      processed_at: null,
+      created_at: receivedAt,
+      updated_at: receivedAt,
+    });
+
+  if (insertLogError) {
+    if (safeText((insertLogError as any)?.code) === "23505") {
+      return jsonResponse(200, {
+        ok: true,
+        duplicate: true,
+        eventId,
+        eventType,
+      });
+    }
+    return jsonResponse(500, {
+      error: `Could not log webhook event: ${clip(
+        safeText((insertLogError as any)?.message || "unknown error"),
+        400
+      )}`,
+    });
+  }
+
+  const replayWindow = checkReplayWindow(eventTimestamp);
+  if (replayWindow.blocked) {
+    await updateWebhookLog(supabase, eventId, {
+      process_status: "ignored",
+      error_message: replayWindow.reason,
+      processed_at: new Date().toISOString(),
+    });
     return jsonResponse(200, {
       ok: true,
       ignored: true,
-      reason: "No UUID app_user_id/alias found.",
+      reason: replayWindow.reason,
+      eventId,
       eventType,
     });
   }
 
-  const entitlementIds = extractEntitlementIds(event);
+  if (!userId) {
+    await updateWebhookLog(supabase, eventId, {
+      process_status: "ignored",
+      error_message: "No UUID app_user_id/alias found.",
+      processed_at: new Date().toISOString(),
+    });
+    return jsonResponse(200, {
+      ok: true,
+      ignored: true,
+      reason: "No UUID app_user_id/alias found.",
+      eventId,
+      eventType,
+    });
+  }
+
   const expiresAt = parseExpiresAt(event);
   const isActive = determineActive(eventType, expiresAt);
   const metadata = {
     raw_event: payload,
-    received_at: new Date().toISOString(),
+    received_at: receivedAt,
+    webhook_event_id: eventId,
   };
 
   const rows = entitlementIds.map((entitlementId) => ({
@@ -178,14 +339,10 @@ Deno.serve(async (req) => {
     expires_at: expiresAt,
     original_transaction_id: safeText(event.original_transaction_id) || null,
     last_event_type: eventType,
-    last_event_id: safeText(event.id) || null,
+    last_event_id: eventId,
     metadata,
     updated_at: new Date().toISOString(),
   }));
-
-  const supabase = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
 
   const { error } = await supabase.from("user_subscription_state").upsert(rows, {
     onConflict: "user_id,provider,entitlement_id",
@@ -193,13 +350,32 @@ Deno.serve(async (req) => {
   });
 
   if (error) {
+    await updateWebhookLog(supabase, eventId, {
+      process_status: "failed",
+      error_message: clip(error.message, 400),
+      processed_at: new Date().toISOString(),
+    });
     return jsonResponse(500, {
       error: `Could not upsert subscription state: ${clip(error.message, 400)}`,
+      eventId,
     });
   }
 
+  await updateWebhookLog(supabase, eventId, {
+    user_id: userId,
+    process_status: "processed",
+    error_message: null,
+    processed_at: new Date().toISOString(),
+    metadata: {
+      source: "revenuecat_webhook",
+      entitlement_count: rows.length,
+      is_active: isActive,
+    },
+  });
+
   return jsonResponse(200, {
     ok: true,
+    eventId,
     userId,
     eventType,
     entitlementIds,

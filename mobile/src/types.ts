@@ -13,5 +13,6 @@ export type RootStackParamList = {
   Onboarding: undefined;
   RootTabs: undefined;
   Notifications: undefined;
+  BillingDebug: undefined;
   EventRoom: { eventId: string };
 };
