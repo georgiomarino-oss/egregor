@@ -1021,7 +1021,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       try {
         logTelemetry("run_state_resync_attempt");
         const row = await ensureRunState(eventId);
-        if (disposed) return;
+        if (disposed || activeEventIdRef.current !== eventId) return;
         setRunState(normalizeRunState(row.state));
         setRunReady(true);
         logTelemetry("run_state_resync_success");
@@ -1037,6 +1037,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }, RUN_STATE_RESYNC_MS);
 
     const sub = subscribeRunState(eventId, (row) => {
+      if (activeEventIdRef.current !== eventId) return;
       setRunState(normalizeRunState(row.state));
       setRunReady(true);
     });
