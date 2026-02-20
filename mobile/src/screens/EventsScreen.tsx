@@ -1224,6 +1224,7 @@ export default function EventsScreen() {
                 onChangeText={setTitle}
                 maxLength={EVENT_TITLE_MAX}
               />
+              <Text style={styles.meta}>{title.trim().length}/{EVENT_TITLE_MAX}</Text>
 
               <Text style={styles.label}>Intention</Text>
               <TextInput
@@ -1233,6 +1234,7 @@ export default function EventsScreen() {
                 multiline
                 maxLength={EVENT_INTENTION_MAX}
               />
+              <Text style={styles.meta}>{intention.trim().length}/{EVENT_INTENTION_MAX}</Text>
 
               <Text style={styles.label}>Description</Text>
               <TextInput
@@ -1242,6 +1244,7 @@ export default function EventsScreen() {
                 multiline
                 maxLength={EVENT_DESCRIPTION_MAX}
               />
+              <Text style={styles.meta}>{description.trim().length}/{EVENT_DESCRIPTION_MAX}</Text>
 
               <Text style={styles.label}>Start local (YYYY-MM-DDTHH:mm)</Text>
               <TextInput style={styles.input} value={startLocal} onChangeText={setStartLocal} />
@@ -1393,6 +1396,7 @@ export default function EventsScreen() {
               placeholder="Event title"
               placeholderTextColor="#6B7BB2"
             />
+            <Text style={styles.meta}>{editTitle.trim().length}/{EVENT_TITLE_MAX}</Text>
 
             <Text style={styles.label}>Intention</Text>
             <TextInput
@@ -1404,6 +1408,7 @@ export default function EventsScreen() {
               placeholder="Intention statement"
               placeholderTextColor="#6B7BB2"
             />
+            <Text style={styles.meta}>{editIntention.trim().length}/{EVENT_INTENTION_MAX}</Text>
 
             <Text style={styles.label}>Description</Text>
             <TextInput
@@ -1415,6 +1420,7 @@ export default function EventsScreen() {
               placeholder="Description"
               placeholderTextColor="#6B7BB2"
             />
+            <Text style={styles.meta}>{editDescription.trim().length}/{EVENT_DESCRIPTION_MAX}</Text>
 
             <Text style={styles.label}>Start local (YYYY-MM-DDTHH:mm)</Text>
             <TextInput style={styles.input} value={editStartLocal} onChangeText={setEditStartLocal} />
