@@ -145,6 +145,23 @@ export default function EventsScreen() {
     return () => clearInterval(id);
   }, []);
 
+  // Header button: Profile
+  useEffect(() => {
+    navigation.setOptions?.({
+      headerRight: () => (
+        <Pressable
+          onPress={() => {
+            // Profile is a hidden tab route; we can navigate to it reliably
+            navigation.navigate("Profile");
+          }}
+          style={styles.headerBtn}
+        >
+          <Text style={styles.headerBtnText}>Profile</Text>
+        </Pressable>
+      ),
+    });
+  }, [navigation]);
+
   const selectedEvent = useMemo(
     () => events.find((e) => e.id === selectedEventId) ?? null,
     [events, selectedEventId]
@@ -202,32 +219,30 @@ export default function EventsScreen() {
     setMyScripts(rows);
   }, []);
 
-  const loadProfiles = useCallback(
-    async (ids: string[]) => {
-      const uniq = Array.from(new Set(ids.filter(Boolean)));
-      if (uniq.length === 0) return;
+  const loadProfiles = useCallback(async (ids: string[]) => {
+    const uniq = Array.from(new Set(ids.filter(Boolean)));
+    if (uniq.length === 0) return;
 
-      const missing = uniq.filter((id) => !profilesById[id]);
-      if (missing.length === 0) return;
+    // Use functional update safety: read current state once
+    const missing = uniq.filter((id) => !profilesById[id]);
+    if (missing.length === 0) return;
 
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("id,display_name,avatar_url")
-        .in("id", missing);
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id,display_name,avatar_url")
+      .in("id", missing);
 
-      if (error) return;
+    if (error) return;
 
-      const rows = (data ?? []) as ProfileMini[];
-      if (rows.length === 0) return;
+    const rows = (data ?? []) as ProfileMini[];
+    if (rows.length === 0) return;
 
-      setProfilesById((prev) => {
-        const next = { ...prev };
-        for (const r of rows) next[r.id] = r;
-        return next;
-      });
-    },
-    [profilesById]
-  );
+    setProfilesById((prev) => {
+      const next = { ...prev };
+      for (const r of rows) next[r.id] = r;
+      return next;
+    });
+  }, [profilesById]);
 
   const displayNameForUserId = useCallback(
     (id: string) => {
@@ -325,7 +340,6 @@ export default function EventsScreen() {
         event_id: eventId,
         user_id: user.id,
         last_seen_at: now,
-        // IMPORTANT: do not send created_at here; let DB defaults preserve it
       },
       { onConflict: "event_id,user_id" }
     );
@@ -639,9 +653,7 @@ export default function EventsScreen() {
 
   // ---- Filtering + sorting ----
   const visibleEvents = useMemo(() => {
-    // nowTick is intentionally referenced to recompute periodically while screen is open
     void nowTick;
-
     const now = Date.now();
 
     let rows = [...events];
@@ -668,14 +680,9 @@ export default function EventsScreen() {
     };
 
     if (upcomingOnly) {
-      // Show live + upcoming (not past)
       rows = rows.filter((e) => !isPast(e) || isLive(e));
     }
 
-    // Sort:
-    // 1) LIVE first
-    // 2) then upcoming by start ascending
-    // 3) then past by start descending
     rows.sort((a, b) => {
       const aLive = isLive(a) ? 1 : 0;
       const bLive = isLive(b) ? 1 : 0;
@@ -683,20 +690,19 @@ export default function EventsScreen() {
 
       const aPast = isPast(a) ? 1 : 0;
       const bPast = isPast(b) ? 1 : 0;
-      if (aPast !== bPast) return aPast - bPast; // non-past first
+      if (aPast !== bPast) return aPast - bPast;
 
       const aStart = safeTimeMs((a as any).start_time_utc);
       const bStart = safeTimeMs((b as any).start_time_utc);
 
-      if (aPast && bPast) return bStart - aStart; // past descending
-      return aStart - bStart; // upcoming ascending
+      if (aPast && bPast) return bStart - aStart;
+      return aStart - bStart;
     });
 
     return rows;
   }, [events, hostedOnly, myUserId, upcomingOnly, nowTick]);
 
   const renderEvent = ({ item }: { item: EventRow }) => {
-    // use nowTick to refresh pill labels without changing props
     void nowTick;
     const nowMs = Date.now();
 
@@ -1033,6 +1039,17 @@ export default function EventsScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B1020" },
   content: { padding: 16, paddingBottom: 32 },
+
+  headerBtn: {
+    marginRight: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#3E4C78",
+    backgroundColor: "transparent",
+  },
+  headerBtnText: { color: "#C8D3FF", fontWeight: "800" },
 
   section: {
     backgroundColor: "#151C33",
