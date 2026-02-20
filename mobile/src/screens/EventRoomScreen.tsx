@@ -271,6 +271,24 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const [isJoined, setIsJoined] = useState(false);
   const [presenceMsg, setPresenceMsg] = useState("");
   const [presenceErr, setPresenceErr] = useState("");
+  const telemetryCountsRef = useRef<Record<string, number>>({});
+
+  const logTelemetry = useCallback(
+    (eventName: string, details?: Record<string, unknown>) => {
+      if (!__DEV__) return;
+      const key = eventName.trim();
+      if (!key) return;
+
+      const counts = telemetryCountsRef.current;
+      const nextCount = (counts[key] ?? 0) + 1;
+      counts[key] = nextCount;
+
+      if (nextCount <= 5 || nextCount % 10 === 0) {
+        console.log(`[EventRoom:${eventId || "no-event"}] ${key} #${nextCount}`, details ?? {});
+      }
+    },
+    [eventId]
+  );
 
   // App state tracking (for heartbeat/presence correctness)
   const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
@@ -431,23 +449,28 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     });
   }, []);
 
-  const loadPresence = useCallback(async () => {
+  const loadPresence = useCallback(async (reason = "manual") => {
     if (!hasValidEventId) {
       setPresenceRows([]);
       return;
     }
 
+    logTelemetry("presence_resync_attempt", { reason });
     const { data, error } = await supabase
       .from("event_presence")
       .select("event_id,user_id,joined_at,last_seen_at,created_at")
       .eq("event_id", eventId);
 
-    if (error) return;
+    if (error) {
+      logTelemetry("presence_resync_error", { reason, message: error.message });
+      return;
+    }
 
     const rows = (data ?? []) as PresenceRow[];
     setPresenceRows(rows);
     void loadProfiles(rows.map((r) => r.user_id));
-  }, [eventId, hasValidEventId, loadProfiles]);
+    logTelemetry("presence_resync_success", { reason, count: rows.length });
+  }, [eventId, hasValidEventId, loadProfiles, logTelemetry]);
 
   const loadScriptById = useCallback(async (scriptId: string | null) => {
     if (!scriptId) {
@@ -505,12 +528,13 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   const chatChars = chatText.length;
 
-  const loadMessages = useCallback(async () => {
+  const loadMessages = useCallback(async (reason = "manual") => {
     if (!hasValidEventId) {
       setMessages([]);
       return;
     }
 
+    logTelemetry("chat_resync_attempt", { reason });
     const { data, error } = await supabase
       .from("event_messages")
       .select("id,event_id,user_id,body,created_at")
@@ -518,13 +542,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       .order("created_at", { ascending: true })
       .limit(200);
 
-    if (error) return;
+    if (error) {
+      logTelemetry("chat_resync_error", { reason, message: error.message });
+      return;
+    }
 
     const rows = (data ?? []) as EventMessageRow[];
     setMessages(sortMessagesByCreatedAt(rows));
     setPendingMessageCount(0);
     void loadProfiles(rows.map((m) => String((m as any).user_id ?? "")));
-  }, [eventId, hasValidEventId, loadProfiles]);
+    logTelemetry("chat_resync_success", { reason, count: rows.length });
+  }, [eventId, hasValidEventId, loadProfiles, logTelemetry]);
 
   const sendMessage = useCallback(async () => {
     const text = chatText.trim();
@@ -613,8 +641,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       void loadProfiles([hostUserId]);
 
       await Promise.all([
-        loadPresence(),
-        loadMessages(),
+        loadPresence("room_load"),
+        loadMessages("room_load"),
         loadScriptById((eventRow as any).script_id ?? null),
         (async () => {
           const row = await ensureRunState(eventId);
@@ -720,12 +748,14 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           if (nextHostId && nextHostId !== prevHostId) void loadProfiles([nextHostId]);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        logTelemetry("event_channel_status", { status });
+      });
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [eventId, hasValidEventId, loadScriptById, loadProfiles]);
+  }, [eventId, hasValidEventId, loadScriptById, loadProfiles, logTelemetry]);
 
   // Run state realtime
   useEffect(() => {
@@ -735,11 +765,14 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     const resync = async () => {
       if (disposed) return;
       try {
+        logTelemetry("run_state_resync_attempt");
         const row = await ensureRunState(eventId);
         if (disposed) return;
         setRunState(normalizeRunState(row.state));
         setRunReady(true);
-      } catch {
+        logTelemetry("run_state_resync_success");
+      } catch (e: any) {
+        logTelemetry("run_state_resync_error", { message: e?.message ?? "Unknown error" });
         // keep realtime subscription as primary source
       }
     };
@@ -757,9 +790,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return () => {
       disposed = true;
       clearInterval(intervalId);
+      logTelemetry("run_state_resync_stop");
       sub.unsubscribe();
     };
-  }, [eventId, hasValidEventId]);
+  }, [eventId, hasValidEventId, logTelemetry]);
 
   // Attached script realtime (script edits while room is open)
   useEffect(() => {
@@ -782,12 +816,14 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           await loadScriptById(scriptId);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        logTelemetry("script_channel_status", { status, scriptId });
+      });
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [eventId, hasValidEventId, scriptDbRow?.id, loadScriptById]);
+  }, [eventId, hasValidEventId, scriptDbRow?.id, loadScriptById, logTelemetry]);
 
   // Presence realtime
   useEffect(() => {
@@ -796,10 +832,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     let disposed = false;
     const resync = () => {
       if (disposed) return;
-      void loadPresence();
+      void loadPresence("interval");
     };
 
-    resync();
+    void loadPresence("initial");
     const intervalId = setInterval(resync, PRESENCE_RESYNC_MS);
 
     const channel = supabase
@@ -809,6 +845,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         { event: "*", schema: "public", table: "event_presence", filter: `event_id=eq.${eventId}` },
         (payload) => {
           const eventType = String((payload as any).eventType ?? "");
+          logTelemetry("presence_realtime_event", { eventType });
           const next = ((payload as any).new ?? null) as PresenceRow | null;
           const prev = ((payload as any).old ?? null) as PresenceRow | null;
 
@@ -827,14 +864,16 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           if (changedUserId) void loadProfiles([changedUserId]);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        logTelemetry("presence_channel_status", { status });
+      });
 
     return () => {
       disposed = true;
       clearInterval(intervalId);
       supabase.removeChannel(channel);
     };
-  }, [eventId, hasValidEventId, loadPresence, loadProfiles]);
+  }, [eventId, hasValidEventId, loadPresence, loadProfiles, logTelemetry]);
 
   // Chat realtime (only append if new, and only autoscroll if near bottom)
   useEffect(() => {
@@ -843,10 +882,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     let disposed = false;
     const resync = () => {
       if (disposed) return;
-      void loadMessages();
+      void loadMessages("interval");
     };
 
-    resync();
+    void loadMessages("initial");
     const intervalId = setInterval(resync, CHAT_RESYNC_MS);
 
     const ch = supabase
@@ -863,8 +902,29 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           const row = payload.new as EventMessageRow;
           const rowUserId = String((row as any).user_id ?? "");
           const isMine = !!userId && rowUserId === userId;
+          const messageId = String((row as any).id ?? "");
 
-          setMessages((prev) => upsertAndSortMessage(prev, row));
+          setMessages((prev) => {
+            const hadMessage =
+              !!messageId && prev.some((m: any) => String((m as any).id ?? "") === messageId);
+            const merged = upsertAndSortMessage(prev, row);
+            const insertedIdx = merged.findIndex(
+              (m: any) => String((m as any).id ?? "") === messageId
+            );
+            const expectedTailIdx = Math.max(0, merged.length - 1);
+
+            if (!hadMessage && insertedIdx >= 0 && insertedIdx < expectedTailIdx) {
+              logTelemetry("chat_reorder_correction", {
+                insertedIdx,
+                expectedTailIdx,
+                createdAt: row.created_at ?? null,
+              });
+            } else if (hadMessage) {
+              logTelemetry("chat_dedupe_hit", { id: messageId });
+            }
+
+            return merged;
+          });
 
           void loadProfiles([rowUserId]);
 
@@ -878,14 +938,16 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           }, 30);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        logTelemetry("chat_channel_status", { status });
+      });
 
     return () => {
       disposed = true;
       clearInterval(intervalId);
       supabase.removeChannel(ch);
     };
-  }, [eventId, hasValidEventId, loadMessages, loadProfiles, scrollChatToEnd, userId]);
+  }, [eventId, hasValidEventId, loadMessages, loadProfiles, scrollChatToEnd, userId, logTelemetry]);
 
   const jumpToLatestMessages = useCallback(() => {
     setPendingMessageCount(0);
@@ -994,6 +1056,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       );
 
       if (error && !cancelled) {
+        logTelemetry("heartbeat_upsert_error", { message: error.message, appState });
         setPresenceErr((prev) => (prev === error.message ? prev : error.message));
       }
     };
@@ -1007,7 +1070,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [isJoined, eventId, hasValidEventId, appState, userId]);
+  }, [isJoined, eventId, hasValidEventId, appState, userId, logTelemetry]);
 
   // Presence computed
   const presenceSortedByLastSeen = useMemo(() => {
