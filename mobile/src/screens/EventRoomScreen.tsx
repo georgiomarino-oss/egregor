@@ -23,6 +23,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../supabase/client";
 import type { RootStackParamList } from "../types";
 import type { Database } from "../types/db";
+import { useAppState } from "../state";
+import { getAppColors } from "../theme/appearance";
 
 import {
   ensureRunState,
@@ -278,6 +280,8 @@ function mapChatSendError(message: string) {
 const CHAT_BOTTOM_THRESHOLD_PX = 120;
 
 export default function EventRoomScreen({ route, navigation }: Props) {
+  const { theme } = useAppState();
+  const c = useMemo(() => getAppColors(theme), [theme]);
   const eventId = route.params?.eventId ?? "";
   const hasValidEventId = !!eventId && isLikelyUuid(eventId);
 
@@ -1756,7 +1760,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   );
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -1796,9 +1800,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           keyboardShouldPersistTaps="handled"
         />
 
-        <View style={styles.chatComposerDock}>
+        <View style={[styles.chatComposerDock, { backgroundColor: c.background, borderTopColor: c.border }]}>
           {pendingMessageCount > 0 ? (
-            <Pressable style={styles.newMessagesBadge} onPress={jumpToLatestMessages}>
+            <Pressable style={[styles.newMessagesBadge, { backgroundColor: c.primary, borderColor: c.primary }]} onPress={jumpToLatestMessages}>
               <Text style={styles.newMessagesBadgeText}>
                 {pendingMessageCount === 1
                   ? "1 new message"
@@ -1811,20 +1815,20 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             <TextInput
               value={chatText}
               onChangeText={setChatText}
-              style={styles.chatInput}
+              style={[styles.chatInput, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
               placeholder="Message..."
-              placeholderTextColor="#6B7BB2"
+              placeholderTextColor={c.textMuted}
               maxLength={CHAT_MAX_CHARS}
               multiline
             />
-            <Text style={[styles.chatCounter, chatChars > CHAT_MAX_CHARS * 0.9 && styles.chatCounterWarn]}>
+            <Text style={[styles.chatCounter, { color: c.textMuted }, chatChars > CHAT_MAX_CHARS * 0.9 && styles.chatCounterWarn]}>
               {chatChars}/{CHAT_MAX_CHARS}
             </Text>
           </View>
           <Pressable
             onPress={sendMessage}
             disabled={sending || !chatText.trim()}
-            style={[styles.chatSend, (sending || !chatText.trim()) && styles.disabled]}
+            style={[styles.chatSend, { backgroundColor: c.primary }, (sending || !chatText.trim()) && styles.disabled]}
           >
             <Text style={styles.btnText}>{sending ? "..." : "Send"}</Text>
           </Pressable>

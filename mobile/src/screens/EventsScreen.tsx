@@ -19,6 +19,8 @@ import { useNavigation } from "@react-navigation/native";
 import { supabase } from "../supabase/client";
 import type { Database } from "../types/db";
 import type { RootStackParamList } from "../types";
+import { useAppState } from "../state";
+import { getAppColors } from "../theme/appearance";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type ScriptRow = Database["public"]["Tables"]["scripts"]["Row"];
@@ -151,6 +153,8 @@ export default function EventsScreen() {
   // EventsScreen is inside Tabs. We must navigate to EventRoom using the PARENT Stack navigator,
   // otherwise params can be missing and EventRoom shows "missing or invalid event id".
   const navigation = useNavigation<any>();
+  const { theme } = useAppState();
+  const c = useMemo(() => getAppColors(theme), [theme]);
 
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EventRow[]>([]);
@@ -1101,12 +1105,17 @@ export default function EventsScreen() {
     return (
       <Pressable
         onPress={() => setSelectedEventId(item.id)}
-        style={[styles.card, item.id === selectedEventId ? styles.cardSelected : undefined]}
+        style={[
+          styles.card,
+          { backgroundColor: c.cardAlt, borderColor: c.border },
+          item.id === selectedEventId ? styles.cardSelected : undefined,
+          item.id === selectedEventId ? { borderColor: c.primary, backgroundColor: c.card } : undefined,
+        ]}
       >
         <View style={styles.cardTopRow}>
           <View style={{ flex: 1, minWidth: 0 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <Text style={styles.cardTitle} numberOfLines={1}>
+              <Text style={[styles.cardTitle, { color: c.text }]} numberOfLines={1}>
                 {item.title}
               </Text>
 
@@ -1134,15 +1143,15 @@ export default function EventsScreen() {
               </View>
             </View>
 
-            <Text style={styles.meta}>
-              Hosted by: <Text style={{ color: "white", fontWeight: "800" }}>{hostLabel}</Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>
+              Hosted by: <Text style={{ color: c.text, fontWeight: "800" }}>{hostLabel}</Text>
             </Text>
           </View>
 
           <View style={{ flexDirection: "row", gap: 8 }}>
             <Pressable
               onPress={() => openRoom(item.id)}
-              style={[styles.smallBtn, styles.smallBtnPrimary]}
+              style={[styles.smallBtn, styles.smallBtnPrimary, { backgroundColor: c.primary }]}
             >
               <Text style={styles.smallBtnText}>Open</Text>
             </Pressable>
@@ -1181,30 +1190,24 @@ export default function EventsScreen() {
           </View>
         </View>
 
-        {!!item.description && <Text style={styles.cardText}>{item.description}</Text>}
+        {!!item.description && <Text style={[styles.cardText, { color: c.text }]}>{item.description}</Text>}
 
-        <Text style={styles.cardText}>Intention: {item.intention_statement}</Text>
+        <Text style={[styles.cardText, { color: c.text }]}>Intention: {item.intention_statement}</Text>
 
-        <Text style={styles.meta}>
-          {new Date(item.start_time_utc).toLocaleString()} →{" "}
-          {new Date(item.end_time_utc).toLocaleString()} ({item.timezone ?? "UTC"})
-        </Text>
+        <Text style={[styles.meta, { color: c.textMuted }]}>{new Date(item.start_time_utc).toLocaleString()} {"->"} {new Date(item.end_time_utc).toLocaleString()} ({item.timezone ?? "UTC"})</Text>
 
-        <Text style={styles.meta}>Duration: {item.duration_minutes ?? 0} min</Text>
+        <Text style={[styles.meta, { color: c.textMuted }]}>Duration: {item.duration_minutes ?? 0} min</Text>
 
-        <Text style={styles.meta}>
-          Active snapshot: {item.active_count_snapshot ?? 0} | Total joined:{" "}
-          {item.total_join_count ?? 0}
-        </Text>
+        <Text style={[styles.meta, { color: c.textMuted }]}>Active snapshot: {item.active_count_snapshot ?? 0} | Total joined: {" "}{item.total_join_count ?? 0}</Text>
 
-        <Text style={styles.meta}>Script: {getScriptLabel(item.script_id)}</Text>
-        <Text style={styles.meta}>ID: {item.id}</Text>
+        <Text style={[styles.meta, { color: c.textMuted }]}>Script: {getScriptLabel(item.script_id)}</Text>
+        <Text style={[styles.meta, { color: c.textMuted }]}>ID: {item.id}</Text>
       </Pressable>
     );
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
       <FlatList
         data={visibleEvents}
         keyExtractor={(item) => item.id}
@@ -1715,4 +1718,5 @@ const styles = StyleSheet.create({
   pickerTitle: { color: "white", fontSize: 14, fontWeight: "800" },
   pickerMeta: { color: "#93A3D9", fontSize: 12, marginTop: 4 },
 });
+
 
