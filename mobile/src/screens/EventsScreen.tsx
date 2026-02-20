@@ -368,9 +368,9 @@ export default function EventsScreen() {
           .delete()
           .eq("event_id", lastSelectedEventId)
           .eq("user_id", myUserId);
+        setPresenceStatus("Left previous live event after selection change.");
       }
       setIsJoined(false);
-      setPresenceStatus("");
       setPresenceError("");
       setLastSelectedEventId(selectedEventId);
     }
