@@ -935,19 +935,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     if (!isJoined) return;
     if (!hasValidEventId) return;
     if (appState !== "active") return;
+    if (!userId) return;
 
     let cancelled = false;
 
     const beat = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user || cancelled) return;
+      if (cancelled) return;
 
       const now = new Date().toISOString();
 
       const { error } = await supabase.from("event_presence").upsert(
-        { event_id: eventId, user_id: user.id, last_seen_at: now },
+        { event_id: eventId, user_id: userId, last_seen_at: now },
         { onConflict: "event_id,user_id" }
       );
 
@@ -963,7 +961,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [isJoined, eventId, hasValidEventId, appState]);
+  }, [isJoined, eventId, hasValidEventId, appState, userId]);
 
   // Presence computed
   const presenceSortedByLastSeen = useMemo(() => {

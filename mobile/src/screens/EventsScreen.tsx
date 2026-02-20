@@ -452,26 +452,30 @@ export default function EventsScreen() {
 
   // Presence upsert (heartbeat-safe): NEVER send created_at from the client
   const upsertPresence = useCallback(async (eventId: string) => {
-    const {
-      data: { user },
-      error: userErr,
-    } = await supabase.auth.getUser();
-
-    if (userErr || !user) throw new Error("Not signed in.");
+    let uid = myUserId;
+    if (!uid) {
+      const {
+        data: { user },
+        error: userErr,
+      } = await supabase.auth.getUser();
+      if (userErr || !user) throw new Error("Not signed in.");
+      uid = user.id;
+      setMyUserId(uid);
+    }
 
     const now = new Date().toISOString();
 
     const { error } = await supabase.from("event_presence").upsert(
       {
         event_id: eventId,
-        user_id: user.id,
+        user_id: uid,
         last_seen_at: now,
       },
       { onConflict: "event_id,user_id" }
     );
 
     if (error) throw error;
-  }, []);
+  }, [myUserId]);
 
   // Heartbeat while joined (presence only)
   useEffect(() => {
