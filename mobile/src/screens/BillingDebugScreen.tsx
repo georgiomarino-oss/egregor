@@ -76,6 +76,29 @@ type FunnelCounts = {
   membershipSyncFailure: number;
 };
 
+type FunnelSummaryRow = {
+  paywall_views: number | null;
+  paywall_cta_taps: number | null;
+  purchase_attempts: number | null;
+  purchase_success: number | null;
+  purchase_failure: number | null;
+  purchase_cancelled: number | null;
+  restore_attempts: number | null;
+  restore_success: number | null;
+  restore_failure: number | null;
+  refresh_attempts: number | null;
+  refresh_success: number | null;
+  debug_open_count: number | null;
+  ai_event_script_attempts: number | null;
+  ai_event_script_success: number | null;
+  ai_event_script_premium_success: number | null;
+  ai_solo_guidance_attempts: number | null;
+  ai_solo_guidance_success: number | null;
+  ai_solo_guidance_premium_success: number | null;
+  membership_sync_success: number | null;
+  membership_sync_failure: number | null;
+};
+
 const EMPTY_FUNNEL_COUNTS: FunnelCounts = {
   paywallViews: 0,
   paywallCtaTaps: 0,
@@ -124,30 +147,9 @@ function ratioLabel(success: number, total: number) {
   return `${pct}% (${success}/${total})`;
 }
 
-async function countMonetizationEvents(args: {
-  userId: string;
-  eventName: string;
-  stage?: string;
-  metadataContains?: Record<string, unknown>;
-}) {
-  let query = supabase
-    .from("monetization_event_log")
-    .select("id", { head: true, count: "exact" })
-    .eq("user_id", args.userId)
-    .eq("event_name", args.eventName);
-
-  if (args.stage) {
-    query = query.eq("stage", args.stage);
-  }
-  if (args.metadataContains && Object.keys(args.metadataContains).length > 0) {
-    query = query.contains("metadata", args.metadataContains);
-  }
-
-  const { count, error } = await query;
-  return {
-    count: typeof count === "number" ? count : 0,
-    error: error ? String(error.message ?? "unknown error") : "",
-  };
+function toCount(value: unknown) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
 }
 
 export default function BillingDebugScreen() {
@@ -201,26 +203,7 @@ export default function BillingDebugScreen() {
         subResult,
         hookResult,
         monetizationResult,
-        paywallViewCount,
-        paywallTapCount,
-        purchaseAttemptCount,
-        purchaseSuccessCount,
-        purchaseFailureCount,
-        purchaseCancelledCount,
-        restoreAttemptCount,
-        restoreSuccessCount,
-        restoreFailureCount,
-        refreshAttemptCount,
-        refreshSuccessCount,
-        debugOpenCount,
-        aiEventScriptAttemptCount,
-        aiEventScriptSuccessCount,
-        aiEventScriptPremiumSuccessCount,
-        aiSoloGuidanceAttemptCount,
-        aiSoloGuidanceSuccessCount,
-        aiSoloGuidancePremiumSuccessCount,
-        membershipSyncSuccessCount,
-        membershipSyncFailureCount,
+        funnelResult,
       ] = await Promise.all([
         supabase.rpc("is_circle_member", { p_user_id: uid }),
         supabase
@@ -247,115 +230,7 @@ export default function BillingDebugScreen() {
           .eq("user_id", uid)
           .order("created_at", { ascending: false })
           .limit(40),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "circle_paywall_view",
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "circle_paywall_cta_tap",
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "circle_purchase",
-          stage: "attempt",
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "circle_purchase",
-          stage: "success",
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "circle_purchase",
-          stage: "failure",
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "circle_purchase",
-          stage: "cancelled",
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "circle_restore",
-          stage: "attempt",
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "circle_restore",
-          stage: "success",
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "circle_restore",
-          stage: "failure",
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "billing_status_refresh",
-          stage: "attempt",
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "billing_status_refresh",
-          stage: "success",
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "billing_debug_open",
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "premium_feature_use",
-          stage: "attempt",
-          metadataContains: { feature: "ai_event_script_generate" },
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "premium_feature_use",
-          stage: "success",
-          metadataContains: { feature: "ai_event_script_generate" },
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "premium_feature_use",
-          stage: "success",
-          metadataContains: {
-            feature: "ai_event_script_generate",
-            isPremium: true,
-          },
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "premium_feature_use",
-          stage: "attempt",
-          metadataContains: { feature: "ai_solo_guidance_generate" },
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "premium_feature_use",
-          stage: "success",
-          metadataContains: { feature: "ai_solo_guidance_generate" },
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "premium_feature_use",
-          stage: "success",
-          metadataContains: {
-            feature: "ai_solo_guidance_generate",
-            isPremium: true,
-          },
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "circle_membership_sync",
-          stage: "success",
-        }),
-        countMonetizationEvents({
-          userId: uid,
-          eventName: "circle_membership_sync",
-          stage: "failure",
-        }),
+        supabase.rpc("get_monetization_funnel_summary", { p_user_id: uid }),
       ]);
 
       const errors: string[] = [];
@@ -394,56 +269,36 @@ export default function BillingDebugScreen() {
         setMonetizationRows(rows);
       }
 
-      const counterErrors = [
-        paywallViewCount,
-        paywallTapCount,
-        purchaseAttemptCount,
-        purchaseSuccessCount,
-        purchaseFailureCount,
-        purchaseCancelledCount,
-        restoreAttemptCount,
-        restoreSuccessCount,
-        restoreFailureCount,
-        refreshAttemptCount,
-        refreshSuccessCount,
-        debugOpenCount,
-        aiEventScriptAttemptCount,
-        aiEventScriptSuccessCount,
-        aiEventScriptPremiumSuccessCount,
-        aiSoloGuidanceAttemptCount,
-        aiSoloGuidanceSuccessCount,
-        aiSoloGuidancePremiumSuccessCount,
-        membershipSyncSuccessCount,
-        membershipSyncFailureCount,
-      ]
-        .map((row) => row.error)
-        .filter(Boolean);
-      if (counterErrors.length) {
-        errors.push(`monetization counters: ${counterErrors.join(" | ")}`);
+      if (funnelResult.error) {
+        errors.push(`rpc get_monetization_funnel_summary: ${funnelResult.error.message}`);
+        setFunnelCounts(EMPTY_FUNNEL_COUNTS);
+      } else {
+        const row = Array.isArray(funnelResult.data)
+          ? ((funnelResult.data[0] as FunnelSummaryRow | undefined) ?? null)
+          : ((funnelResult.data as FunnelSummaryRow | null) ?? null);
+        setFunnelCounts({
+          paywallViews: toCount(row?.paywall_views),
+          paywallCtaTaps: toCount(row?.paywall_cta_taps),
+          purchaseAttempts: toCount(row?.purchase_attempts),
+          purchaseSuccess: toCount(row?.purchase_success),
+          purchaseFailure: toCount(row?.purchase_failure),
+          purchaseCancelled: toCount(row?.purchase_cancelled),
+          restoreAttempts: toCount(row?.restore_attempts),
+          restoreSuccess: toCount(row?.restore_success),
+          restoreFailure: toCount(row?.restore_failure),
+          refreshAttempts: toCount(row?.refresh_attempts),
+          refreshSuccess: toCount(row?.refresh_success),
+          debugOpenCount: toCount(row?.debug_open_count),
+          aiEventScriptAttempts: toCount(row?.ai_event_script_attempts),
+          aiEventScriptSuccess: toCount(row?.ai_event_script_success),
+          aiEventScriptPremiumSuccess: toCount(row?.ai_event_script_premium_success),
+          aiSoloGuidanceAttempts: toCount(row?.ai_solo_guidance_attempts),
+          aiSoloGuidanceSuccess: toCount(row?.ai_solo_guidance_success),
+          aiSoloGuidancePremiumSuccess: toCount(row?.ai_solo_guidance_premium_success),
+          membershipSyncSuccess: toCount(row?.membership_sync_success),
+          membershipSyncFailure: toCount(row?.membership_sync_failure),
+        });
       }
-
-      setFunnelCounts({
-        paywallViews: paywallViewCount.count,
-        paywallCtaTaps: paywallTapCount.count,
-        purchaseAttempts: purchaseAttemptCount.count,
-        purchaseSuccess: purchaseSuccessCount.count,
-        purchaseFailure: purchaseFailureCount.count,
-        purchaseCancelled: purchaseCancelledCount.count,
-        restoreAttempts: restoreAttemptCount.count,
-        restoreSuccess: restoreSuccessCount.count,
-        restoreFailure: restoreFailureCount.count,
-        refreshAttempts: refreshAttemptCount.count,
-        refreshSuccess: refreshSuccessCount.count,
-        debugOpenCount: debugOpenCount.count,
-        aiEventScriptAttempts: aiEventScriptAttemptCount.count,
-        aiEventScriptSuccess: aiEventScriptSuccessCount.count,
-        aiEventScriptPremiumSuccess: aiEventScriptPremiumSuccessCount.count,
-        aiSoloGuidanceAttempts: aiSoloGuidanceAttemptCount.count,
-        aiSoloGuidanceSuccess: aiSoloGuidanceSuccessCount.count,
-        aiSoloGuidancePremiumSuccess: aiSoloGuidancePremiumSuccessCount.count,
-        membershipSyncSuccess: membershipSyncSuccessCount.count,
-        membershipSyncFailure: membershipSyncFailureCount.count,
-      });
 
       setServerError(errors.length ? errors.join(" | ") : null);
       setLastSyncAt(new Date().toISOString());

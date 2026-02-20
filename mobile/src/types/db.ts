@@ -738,6 +738,31 @@ export type Database = {
         Args: { p_event_id: string; p_stale_seconds?: number }
         Returns: number
       }
+      get_monetization_funnel_summary: {
+        Args: { p_user_id?: string }
+        Returns: {
+          ai_event_script_attempts: number
+          ai_event_script_premium_success: number
+          ai_event_script_success: number
+          ai_solo_guidance_attempts: number
+          ai_solo_guidance_premium_success: number
+          ai_solo_guidance_success: number
+          debug_open_count: number
+          membership_sync_failure: number
+          membership_sync_success: number
+          paywall_cta_taps: number
+          paywall_views: number
+          purchase_attempts: number
+          purchase_cancelled: number
+          purchase_failure: number
+          purchase_success: number
+          refresh_attempts: number
+          refresh_success: number
+          restore_attempts: number
+          restore_failure: number
+          restore_success: number
+        }[]
+      }
       is_circle_member: {
         Args: { p_user_id?: string }
         Returns: boolean
