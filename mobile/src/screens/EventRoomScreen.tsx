@@ -337,6 +337,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const eventId = route.params?.eventId ?? "";
   const hasValidEventId = !!eventId && isLikelyUuid(eventId);
   const activeEventIdRef = useRef(eventId);
+  const roomLoadSeqRef = useRef(0);
   useEffect(() => {
     activeEventIdRef.current = eventId;
   }, [eventId]);
@@ -594,8 +595,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     logTelemetry("presence_resync_success", { reason, count: rows.length });
   }, [eventId, hasValidEventId, loadProfiles, logTelemetry]);
 
-  const loadScriptById = useCallback(async (scriptId: string | null) => {
+  const loadScriptById = useCallback(async (scriptId: string | null, targetEventId?: string) => {
+    const expectedEventId = targetEventId ?? activeEventIdRef.current;
     if (!scriptId) {
+      if (activeEventIdRef.current !== expectedEventId) return;
       setScriptDbRow(null);
       setScript(null);
       return;
@@ -606,6 +609,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       .select("id,title,content_json")
       .eq("id", scriptId)
       .maybeSingle();
+
+    if (activeEventIdRef.current !== expectedEventId) return;
 
     if (scErr || !scData) {
       setScriptDbRow(null);
@@ -776,7 +781,14 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   // ---- Load room ----
   const loadEventRoom = useCallback(async () => {
+    const expectedEventId = eventId;
+    const loadSeq = roomLoadSeqRef.current + 1;
+    roomLoadSeqRef.current = loadSeq;
+    const isStale = () =>
+      roomLoadSeqRef.current !== loadSeq || activeEventIdRef.current !== expectedEventId;
+
     if (!hasValidEventId) {
+      if (isStale()) return;
       setLoading(false);
       setEvent(null);
       setScript(null);
@@ -793,6 +805,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       const {
         data: { user },
       } = await supabase.auth.getUser();
+      if (isStale()) return;
       setUserId(user?.id ?? "");
 
       const { data: evData, error: evErr } = await supabase
@@ -807,6 +820,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         .eq("id", eventId)
         .single();
 
+      if (isStale()) return;
       if (evErr || !evData) {
         setLoading(false);
         setEvent(null);
@@ -825,18 +839,21 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       await Promise.all([
         loadPresence("room_load"),
         loadMessages("room_load"),
-        loadScriptById((eventRow as any).script_id ?? null),
+        loadScriptById((eventRow as any).script_id ?? null, expectedEventId),
         (async () => {
           const row = await ensureRunState(eventId);
+          if (isStale()) return;
           setRunState(normalizeRunState(row.state));
           setRunReady(true);
         })(),
       ]);
 
+      if (isStale()) return;
       setLoading(false);
       // initial scroll only once; assume user wants latest
       setTimeout(() => scrollChatToEnd(false), 50);
     } catch (e: any) {
+      if (isStale()) return;
       setLoading(false);
       Alert.alert("Load failed", e?.message ?? "Unknown error");
     }
@@ -933,7 +950,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
           const nextScriptId = (next as any)?.script_id ?? null;
           const prevScriptId = (prev as any)?.script_id ?? null;
-          if (nextScriptId !== prevScriptId) await loadScriptById(nextScriptId);
+          if (nextScriptId !== prevScriptId) await loadScriptById(nextScriptId, eventId);
 
           const nextHostId = String((next as any)?.host_user_id ?? "");
           const prevHostId = String((prev as any)?.host_user_id ?? "");
@@ -1005,7 +1022,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             setScript(null);
             return;
           }
-          await loadScriptById(scriptId);
+          await loadScriptById(scriptId, eventId);
         }
       )
       .subscribe((status) => {
