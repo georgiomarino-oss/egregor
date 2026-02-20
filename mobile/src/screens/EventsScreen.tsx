@@ -211,6 +211,10 @@ export default function EventsScreen() {
     () => events.find((e) => e.id === selectedEventId) ?? null,
     [events, selectedEventId]
   );
+  const joinedEvent = useMemo(
+    () => (isJoined && selectedEventId ? events.find((e) => e.id === selectedEventId) ?? null : null),
+    [events, isJoined, selectedEventId]
+  );
 
   const attachEvent = useMemo(
     () => events.find((e) => e.id === attachEventId) ?? null,
@@ -1143,6 +1147,12 @@ export default function EventsScreen() {
               <Text style={styles.sectionTitle}>Live Presence</Text>
               <Text style={styles.meta}>
                 Selected: {selectedEvent ? selectedEvent.title : "(none)"}
+              </Text>
+              <Text style={styles.meta}>
+                Joined:{" "}
+                <Text style={{ color: "white", fontWeight: "800" }}>
+                  {joinedEvent ? joinedEvent.title : "(not joined)"}
+                </Text>
               </Text>
 
               <View style={styles.row}>
