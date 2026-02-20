@@ -5,11 +5,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../supabase/client";
 import { useAppState } from "../state";
+import { getAppColors } from "../theme/appearance";
 
 const KEY_AUTO_JOIN_GLOBAL = "prefs:autoJoinLive";
 
 export default function ProfileScreen() {
   const { theme, setTheme } = useAppState();
+  const c = useMemo(() => getAppColors(theme), [theme]);
   const [loading, setLoading] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
@@ -152,11 +154,11 @@ export default function ProfileScreen() {
   }, []);
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
       <View style={styles.wrap}>
-        <Text style={styles.h1}>Profile</Text>
+        <Text style={[styles.h1, { color: c.text }]}>Profile</Text>
 
-        <View style={styles.card}>
+        <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
           {avatarUrl ? (
             <Image
               source={{ uri: avatarUrl }}
@@ -166,92 +168,104 @@ export default function ProfileScreen() {
               }}
             />
           ) : (
-            <View style={styles.avatar}>
+            <View style={[styles.avatar, { backgroundColor: c.cardAlt, borderColor: c.primary }]}>
               <Text style={styles.avatarText}>{initials}</Text>
             </View>
           )}
 
           <View style={{ flex: 1 }}>
-            <Text style={styles.name}>{displayName?.trim() ? displayName.trim() : "Unnamed user"}</Text>
+            <Text style={[styles.name, { color: c.text }]}>{displayName?.trim() ? displayName.trim() : "Unnamed user"}</Text>
 
-            {!!email && <Text style={styles.meta}>{email}</Text>}
+            {!!email && <Text style={[styles.meta, { color: c.textMuted }]}>{email}</Text>}
 
             {!!userId && (
-              <Text style={styles.meta}>
-                User ID: <Text style={{ color: "#C8D3FF" }}>{userId.slice(0, 8)}...{userId.slice(-6)}</Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>
+                User ID: <Text style={{ color: c.text }}>{userId.slice(0, 8)}...{userId.slice(-6)}</Text>
               </Text>
             )}
 
-            {!!avatarUrl && <Text style={styles.meta}>Avatar: set</Text>}
+            {!!avatarUrl && <Text style={[styles.meta, { color: c.textMuted }]}>Avatar: set</Text>}
           </View>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Appearance</Text>
+        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={[styles.sectionTitle, { color: c.text }]}>Appearance</Text>
 
           <View style={styles.themeRow}>
             <Pressable
-              style={[styles.themeBtn, theme === "light" && styles.themeBtnActive]}
+              style={[
+                styles.themeBtn,
+                { borderColor: c.border, backgroundColor: c.cardAlt },
+                theme === "light" && [styles.themeBtnActive, { backgroundColor: c.primary, borderColor: c.primary }],
+              ]}
               onPress={() => setTheme("light")}
             >
-              <Text style={[styles.themeBtnText, theme === "light" && styles.themeBtnTextActive]}>Light</Text>
+              <Text style={[styles.themeBtnText, { color: c.textMuted }, theme === "light" && styles.themeBtnTextActive]}>Light</Text>
             </Pressable>
             <Pressable
-              style={[styles.themeBtn, theme === "dark" && styles.themeBtnActive]}
+              style={[
+                styles.themeBtn,
+                { borderColor: c.border, backgroundColor: c.cardAlt },
+                theme === "dark" && [styles.themeBtnActive, { backgroundColor: c.primary, borderColor: c.primary }],
+              ]}
               onPress={() => setTheme("dark")}
             >
-              <Text style={[styles.themeBtnText, theme === "dark" && styles.themeBtnTextActive]}>Dark</Text>
+              <Text style={[styles.themeBtnText, { color: c.textMuted }, theme === "dark" && styles.themeBtnTextActive]}>Dark</Text>
             </Pressable>
             <Pressable
-              style={[styles.themeBtn, theme === "cosmic" && styles.themeBtnActive]}
+              style={[
+                styles.themeBtn,
+                { borderColor: c.border, backgroundColor: c.cardAlt },
+                theme === "cosmic" && [styles.themeBtnActive, { backgroundColor: c.primary, borderColor: c.primary }],
+              ]}
               onPress={() => setTheme("cosmic")}
             >
-              <Text style={[styles.themeBtnText, theme === "cosmic" && styles.themeBtnTextActive]}>Cosmic</Text>
+              <Text style={[styles.themeBtnText, { color: c.textMuted }, theme === "cosmic" && styles.themeBtnTextActive]}>Cosmic</Text>
             </Pressable>
           </View>
 
-          <Text style={styles.tip}>Theme applies to navigation chrome and core surfaces.</Text>
+          <Text style={[styles.tip, { color: c.textMuted }]}>Theme applies to navigation chrome and core surfaces.</Text>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account</Text>
+        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={[styles.sectionTitle, { color: c.text }]}>Account</Text>
 
-          <Text style={styles.fieldLabel}>Display name</Text>
+          <Text style={[styles.fieldLabel, { color: c.textMuted }]}>Display name</Text>
           <TextInput
-            style={styles.input}
+            style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
             value={displayName}
             onChangeText={setDisplayName}
             placeholder="Your display name"
-            placeholderTextColor="#6B7BB2"
+            placeholderTextColor={c.textMuted}
             editable={!loading && !savingProfile}
           />
 
-          <Text style={styles.fieldLabel}>Avatar URL</Text>
+          <Text style={[styles.fieldLabel, { color: c.textMuted }]}>Avatar URL</Text>
           <TextInput
-            style={styles.input}
+            style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
             value={avatarUrl}
             onChangeText={setAvatarUrl}
             placeholder="https://..."
-            placeholderTextColor="#6B7BB2"
+            placeholderTextColor={c.textMuted}
             autoCapitalize="none"
             autoCorrect={false}
             editable={!loading && !savingProfile}
           />
 
           <Pressable
-            style={[styles.btn, styles.btnPrimary, (loading || savingProfile) && styles.disabled]}
+            style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, (loading || savingProfile) && styles.disabled]}
             onPress={handleSaveProfile}
             disabled={loading || savingProfile}
           >
             <Text style={styles.btnText}>{savingProfile ? "Saving..." : "Save profile"}</Text>
           </Pressable>
 
-          <Pressable style={[styles.btn, styles.btnGhost]} onPress={load} disabled={loading}>
-            <Text style={styles.btnGhostText}>{loading ? "Refreshing..." : "Refresh profile"}</Text>
+          <Pressable style={[styles.btn, styles.btnGhost, { borderColor: c.border }]} onPress={load} disabled={loading}>
+            <Text style={[styles.btnGhostText, { color: c.text }]}>{loading ? "Refreshing..." : "Refresh profile"}</Text>
           </Pressable>
 
-          <Pressable style={[styles.btn, styles.btnGhost]} onPress={clearAutoJoinPrefs}>
-            <Text style={styles.btnGhostText}>Reset auto-join remembers</Text>
+          <Pressable style={[styles.btn, styles.btnGhost, { borderColor: c.border }]} onPress={clearAutoJoinPrefs}>
+            <Text style={[styles.btnGhostText, { color: c.text }]}>Reset auto-join remembers</Text>
           </Pressable>
 
           <Pressable
@@ -262,7 +276,7 @@ export default function ProfileScreen() {
             <Text style={styles.btnText}>{signingOut ? "Signing out..." : "Sign out"}</Text>
           </Pressable>
 
-          <Text style={styles.tip}>
+          <Text style={[styles.tip, { color: c.textMuted }]}>
             Tip: if you ever get stuck signed in, use Sign out here and relaunch the app.
           </Text>
 
