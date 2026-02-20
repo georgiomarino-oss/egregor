@@ -65,6 +65,12 @@ type FunnelCounts = {
   refreshAttempts: number;
   refreshSuccess: number;
   debugOpenCount: number;
+  aiEventScriptAttempts: number;
+  aiEventScriptSuccess: number;
+  aiEventScriptPremiumSuccess: number;
+  aiSoloGuidanceAttempts: number;
+  aiSoloGuidanceSuccess: number;
+  aiSoloGuidancePremiumSuccess: number;
 };
 
 const EMPTY_FUNNEL_COUNTS: FunnelCounts = {
@@ -80,6 +86,12 @@ const EMPTY_FUNNEL_COUNTS: FunnelCounts = {
   refreshAttempts: 0,
   refreshSuccess: 0,
   debugOpenCount: 0,
+  aiEventScriptAttempts: 0,
+  aiEventScriptSuccess: 0,
+  aiEventScriptPremiumSuccess: 0,
+  aiSoloGuidanceAttempts: 0,
+  aiSoloGuidanceSuccess: 0,
+  aiSoloGuidancePremiumSuccess: 0,
 };
 
 function clip(input: string, max: number) {
@@ -111,6 +123,7 @@ async function countMonetizationEvents(args: {
   userId: string;
   eventName: string;
   stage?: string;
+  metadataContains?: Record<string, unknown>;
 }) {
   let query = (supabase as any)
     .from("monetization_event_log")
@@ -120,6 +133,9 @@ async function countMonetizationEvents(args: {
 
   if (args.stage) {
     query = query.eq("stage", args.stage);
+  }
+  if (args.metadataContains && Object.keys(args.metadataContains).length > 0) {
+    query = query.contains("metadata", args.metadataContains);
   }
 
   const { count, error } = await query;
@@ -192,6 +208,12 @@ export default function BillingDebugScreen() {
         refreshAttemptCount,
         refreshSuccessCount,
         debugOpenCount,
+        aiEventScriptAttemptCount,
+        aiEventScriptSuccessCount,
+        aiEventScriptPremiumSuccessCount,
+        aiSoloGuidanceAttemptCount,
+        aiSoloGuidanceSuccessCount,
+        aiSoloGuidancePremiumSuccessCount,
       ] = await Promise.all([
         supabase.rpc("is_circle_member" as any, { p_user_id: uid }),
         (supabase as any)
@@ -275,6 +297,48 @@ export default function BillingDebugScreen() {
           userId: uid,
           eventName: "billing_debug_open",
         }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "premium_feature_use",
+          stage: "attempt",
+          metadataContains: { feature: "ai_event_script_generate" },
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "premium_feature_use",
+          stage: "success",
+          metadataContains: { feature: "ai_event_script_generate" },
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "premium_feature_use",
+          stage: "success",
+          metadataContains: {
+            feature: "ai_event_script_generate",
+            isPremium: true,
+          },
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "premium_feature_use",
+          stage: "attempt",
+          metadataContains: { feature: "ai_solo_guidance_generate" },
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "premium_feature_use",
+          stage: "success",
+          metadataContains: { feature: "ai_solo_guidance_generate" },
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "premium_feature_use",
+          stage: "success",
+          metadataContains: {
+            feature: "ai_solo_guidance_generate",
+            isPremium: true,
+          },
+        }),
       ]);
 
       const errors: string[] = [];
@@ -326,6 +390,12 @@ export default function BillingDebugScreen() {
         refreshAttemptCount,
         refreshSuccessCount,
         debugOpenCount,
+        aiEventScriptAttemptCount,
+        aiEventScriptSuccessCount,
+        aiEventScriptPremiumSuccessCount,
+        aiSoloGuidanceAttemptCount,
+        aiSoloGuidanceSuccessCount,
+        aiSoloGuidancePremiumSuccessCount,
       ]
         .map((row) => row.error)
         .filter(Boolean);
@@ -346,6 +416,12 @@ export default function BillingDebugScreen() {
         refreshAttempts: refreshAttemptCount.count,
         refreshSuccess: refreshSuccessCount.count,
         debugOpenCount: debugOpenCount.count,
+        aiEventScriptAttempts: aiEventScriptAttemptCount.count,
+        aiEventScriptSuccess: aiEventScriptSuccessCount.count,
+        aiEventScriptPremiumSuccess: aiEventScriptPremiumSuccessCount.count,
+        aiSoloGuidanceAttempts: aiSoloGuidanceAttemptCount.count,
+        aiSoloGuidanceSuccess: aiSoloGuidanceSuccessCount.count,
+        aiSoloGuidancePremiumSuccess: aiSoloGuidancePremiumSuccessCount.count,
       });
 
       setServerError(errors.length ? errors.join(" | ") : null);
@@ -469,6 +545,24 @@ export default function BillingDebugScreen() {
           </Text>
           <Text style={[styles.meta, { color: c.textMuted }]}>
             Billing debug opens: {funnelCounts.debugOpenCount}
+          </Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            AI event-script generations: attempts {funnelCounts.aiEventScriptAttempts} | success{" "}
+            {funnelCounts.aiEventScriptSuccess} | premium success{" "}
+            {funnelCounts.aiEventScriptPremiumSuccess}
+          </Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            AI event-script success rate:{" "}
+            {ratioLabel(funnelCounts.aiEventScriptSuccess, funnelCounts.aiEventScriptAttempts)}
+          </Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            AI solo-guidance generations: attempts {funnelCounts.aiSoloGuidanceAttempts} | success{" "}
+            {funnelCounts.aiSoloGuidanceSuccess} | premium success{" "}
+            {funnelCounts.aiSoloGuidancePremiumSuccess}
+          </Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            AI solo-guidance success rate:{" "}
+            {ratioLabel(funnelCounts.aiSoloGuidanceSuccess, funnelCounts.aiSoloGuidanceAttempts)}
           </Text>
         </View>
 

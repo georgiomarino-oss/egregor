@@ -24,6 +24,7 @@ import {
   type AiQuotaResult,
   type EventScriptSection,
 } from "../features/ai/aiScriptRepo";
+import { logMonetizationEvent } from "../features/billing/billingAnalyticsRepo";
 
 type ScriptRow = Database["public"]["Tables"]["scripts"]["Row"];
 type ScriptInsert = Database["public"]["Tables"]["scripts"]["Insert"];
@@ -529,6 +530,18 @@ export default function ScriptsScreen() {
       return;
     }
 
+    void logMonetizationEvent({
+      userId: user.id,
+      eventName: "premium_feature_use",
+      stage: "attempt",
+      isCircleMember: isCircleMember,
+      metadata: {
+        feature: "ai_event_script_generate",
+        mode: "event_script",
+        isPremium: isCircleMember,
+      },
+    });
+
     const quota = await consumeAiGenerationQuota({
       userId: user.id,
       mode: "event_script",
@@ -538,6 +551,21 @@ export default function ScriptsScreen() {
 
     if (!quota.allowed) {
       const capText = quota.limit ? `${quota.limit}` : "your";
+      void logMonetizationEvent({
+        userId: user.id,
+        eventName: "premium_feature_use",
+        stage: "failure",
+        isCircleMember: isCircleMember,
+        errorMessage: "quota_denied",
+        metadata: {
+          feature: "ai_event_script_generate",
+          mode: "event_script",
+          isPremium: isCircleMember,
+          usedToday: quota.usedToday,
+          limit: quota.limit,
+          remaining: quota.remaining,
+        },
+      });
       Alert.alert(
         "Daily AI limit reached",
         `Free tier allows ${capText} AI event scripts per day. Upgrade to Egregor Circle for unlimited generation.`
@@ -560,6 +588,21 @@ export default function ScriptsScreen() {
       setTone(generated.tone);
       setScriptLanguage(normalizeLanguage(generated.language));
       setCreateSectionsOverride(generated.sections);
+      void logMonetizationEvent({
+        userId: user.id,
+        eventName: "premium_feature_use",
+        stage: "success",
+        isCircleMember: isCircleMember,
+        metadata: {
+          feature: "ai_event_script_generate",
+          mode: "event_script",
+          isPremium: isCircleMember,
+          source: generated.source,
+          language: generated.language,
+          durationMinutes: generated.durationMinutes,
+          sections: generated.sections.length,
+        },
+      });
       Alert.alert(
         "AI script ready",
         generated.source === "openai"
@@ -567,6 +610,18 @@ export default function ScriptsScreen() {
           : "Generated with local fallback. Review and create when ready."
       );
     } catch (e: any) {
+      void logMonetizationEvent({
+        userId: user.id,
+        eventName: "premium_feature_use",
+        stage: "failure",
+        isCircleMember: isCircleMember,
+        errorMessage: e?.message ?? "Could not generate script.",
+        metadata: {
+          feature: "ai_event_script_generate",
+          mode: "event_script",
+          isPremium: isCircleMember,
+        },
+      });
       Alert.alert("AI generation failed", e?.message ?? "Could not generate script.");
     } finally {
       setGeneratingAi(false);

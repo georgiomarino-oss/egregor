@@ -32,6 +32,7 @@ import {
   listSoloHistory,
   type SoloHistoryEntry,
 } from "../features/solo/soloHistoryRepo";
+import { logMonetizationEvent } from "../features/billing/billingAnalyticsRepo";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
@@ -570,6 +571,18 @@ export default function HomeScreen() {
       return;
     }
 
+    void logMonetizationEvent({
+      userId: uid,
+      eventName: "premium_feature_use",
+      stage: "attempt",
+      isCircleMember: isCircleMember,
+      metadata: {
+        feature: "ai_solo_guidance_generate",
+        mode: "solo_guidance",
+        isPremium: isCircleMember,
+      },
+    });
+
     const quota = await consumeAiGenerationQuota({
       userId: uid,
       mode: "solo_guidance",
@@ -577,6 +590,21 @@ export default function HomeScreen() {
     });
     setSoloAiQuota(quota);
     if (!quota.allowed) {
+      void logMonetizationEvent({
+        userId: uid,
+        eventName: "premium_feature_use",
+        stage: "failure",
+        isCircleMember: isCircleMember,
+        errorMessage: "quota_denied",
+        metadata: {
+          feature: "ai_solo_guidance_generate",
+          mode: "solo_guidance",
+          isPremium: isCircleMember,
+          usedToday: quota.usedToday,
+          limit: quota.limit,
+          remaining: quota.remaining,
+        },
+      });
       Alert.alert(
         "Daily AI limit reached",
         `Free tier allows ${quota.limit ?? 0} AI solo guidance generations per day. Upgrade to Egregor Circle for unlimited AI guidance.`
@@ -593,6 +621,21 @@ export default function HomeScreen() {
         language: preferredLanguage,
       });
       setSoloAiLines(generated.lines);
+      void logMonetizationEvent({
+        userId: uid,
+        eventName: "premium_feature_use",
+        stage: "success",
+        isCircleMember: isCircleMember,
+        metadata: {
+          feature: "ai_solo_guidance_generate",
+          mode: "solo_guidance",
+          isPremium: isCircleMember,
+          source: generated.source,
+          lines: generated.lines.length,
+          language: preferredLanguage,
+          durationMinutes: soloDurationMin,
+        },
+      });
       Alert.alert(
         "Guidance ready",
         generated.source === "openai"
@@ -600,6 +643,18 @@ export default function HomeScreen() {
           : "Generated with local fallback. Start whenever you are ready."
       );
     } catch (e: any) {
+      void logMonetizationEvent({
+        userId: uid,
+        eventName: "premium_feature_use",
+        stage: "failure",
+        isCircleMember: isCircleMember,
+        errorMessage: e?.message ?? "Could not generate guidance.",
+        metadata: {
+          feature: "ai_solo_guidance_generate",
+          mode: "solo_guidance",
+          isPremium: isCircleMember,
+        },
+      });
       Alert.alert("Could not generate guidance", e?.message ?? "Please try again.");
     } finally {
       setSoloGeneratingAi(false);

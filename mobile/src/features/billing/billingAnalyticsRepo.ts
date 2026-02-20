@@ -7,7 +7,8 @@ export type MonetizationEventName =
   | "billing_status_refresh"
   | "circle_paywall_view"
   | "circle_paywall_cta_tap"
-  | "billing_debug_open";
+  | "billing_debug_open"
+  | "premium_feature_use";
 
 export type MonetizationEventStage =
   | "attempt"
