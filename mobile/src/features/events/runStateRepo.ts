@@ -25,6 +25,23 @@ const DEFAULT_STATE: EventRunStateV1 = {
   sectionIndex: 0,
 };
 
+function isLikelyRlsInsertError(error: unknown) {
+  const code = String((error as any)?.code ?? "").trim();
+  if (code === "42501") return true;
+  const msg = String((error as any)?.message ?? "").toLowerCase();
+  return msg.includes("row-level security") || msg.includes("permission denied");
+}
+
+function buildDefaultRunStateRow(eventId: string): EventRunStateRow {
+  const now = new Date().toISOString();
+  return {
+    event_id: eventId,
+    state: DEFAULT_STATE,
+    created_at: now,
+    updated_at: now,
+  };
+}
+
 export async function getRunState(eventId: string): Promise<EventRunStateRow | null> {
   const { data, error } = await supabase
     .from("event_run_state")
@@ -40,17 +57,25 @@ export async function ensureRunState(eventId: string): Promise<EventRunStateRow>
   const existing = await getRunState(eventId);
   if (existing) return existing;
 
-  const { data, error } = await supabase
-    .from("event_run_state")
-    .insert({
-      event_id: eventId,
-      state: DEFAULT_STATE,
-    })
-    .select("*")
-    .single();
+  try {
+    const { data, error } = await supabase
+      .from("event_run_state")
+      .insert({
+        event_id: eventId,
+        state: DEFAULT_STATE,
+      })
+      .select("*")
+      .single();
 
-  if (error) throw error;
-  return data as EventRunStateRow;
+    if (error) throw error;
+    return data as EventRunStateRow;
+  } catch (error) {
+    // Attendees may be blocked by host-only insert policy; keep UI stable with a local default.
+    if (isLikelyRlsInsertError(error)) {
+      return buildDefaultRunStateRow(eventId);
+    }
+    throw error;
+  }
 }
 
 export async function upsertRunState(eventId: string, state: EventRunStateV1): Promise<EventRunStateRow> {

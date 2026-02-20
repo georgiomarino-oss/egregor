@@ -100,6 +100,18 @@ Build/Commit: `b91c599`
 - Status: NOT RUN
 - Notes:
 
+### 9) Run-State Host Permissions
+- Open EventRoom as a non-host attendee for an event with no existing run-state row.
+- Expected:
+  - No blocking error banner.
+  - Room remains usable with idle/default run state.
+- Open same room as host and start session.
+- Expected:
+  - Host actions persist run-state.
+  - Attendee sees synced run-state updates.
+- Status: NOT RUN
+- Notes:
+
 ## Summary
 - Overall result: IN PROGRESS
 - Blocking issues:
