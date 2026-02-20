@@ -8,7 +8,6 @@ import { supabase } from "../supabase/client";
 import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
 import type { RootStackParamList } from "../types";
-import type { Database } from "../types/db";
 import { logMonetizationEvent } from "../features/billing/billingAnalyticsRepo";
 import { getSoloHistoryStats, listSoloHistory, type SoloHistoryEntry } from "../features/solo/soloHistoryRepo";
 
@@ -19,13 +18,26 @@ const KEY_SUPPORT_TOTAL = "support:total:v1";
 const KEY_DAILY_INTENTION = "onboarding:intention:v1";
 const KEY_CIRCLE_WAITLIST = "circle:waitlist:v1";
 const KEY_MY_CIRCLES = "social:circles:v1";
-type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
-type EventRow = Database["public"]["Tables"]["events"]["Row"];
-type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
 type JournalEntry = { id: string; createdAt: string; text: string };
 type CircleWaitlistEntry = { id: string; createdAt: string; email: string; note: string };
 type SocialCircle = { id: string; name: string; intention: string; createdAt: string };
 type RhythmDay = { label: string; value: number };
+type ProfileLiveStatsRow = {
+  streak_days: number | null;
+  active_days_30: number | null;
+  intention_energy: number | null;
+  rhythm_sun: number | null;
+  rhythm_mon: number | null;
+  rhythm_tue: number | null;
+  rhythm_wed: number | null;
+  rhythm_thu: number | null;
+  rhythm_fri: number | null;
+  rhythm_sat: number | null;
+  live_events_now: number | null;
+  active_participants_now: number | null;
+  prayers_week: number | null;
+  shared_intentions_week: number | null;
+};
 const PROFILE_LANGUAGES = ["English", "Spanish", "Portuguese", "French"] as const;
 type ProfileLanguage = (typeof PROFILE_LANGUAGES)[number];
 
@@ -84,37 +96,10 @@ function safeTimeMs(iso: string | null | undefined): number {
   return Number.isFinite(t) ? t : 0;
 }
 
-function toDayKey(iso: string) {
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return "";
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function computeStreakDays(dayKeys: string[]): number {
-  if (!dayKeys.length) return 0;
-  const set = new Set(dayKeys.filter(Boolean));
-  if (!set.size) return 0;
-
-  const now = new Date();
-  const utcMidnightMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  let streak = 0;
-
-  for (let i = 0; i < 366; i += 1) {
-    const ms = utcMidnightMs - i * 24 * 60 * 60 * 1000;
-    const d = new Date(ms);
-    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
-    if (set.has(key)) {
-      streak += 1;
-      continue;
-    }
-    if (i === 0) continue;
-    break;
-  }
-
-  return streak;
+function safeCount(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.floor(n));
 }
 
 export default function ProfileScreen() {
@@ -336,80 +321,30 @@ export default function ProfileScreen() {
 
       statsRefreshInFlightRef.current = true;
       try {
-        const nowMs = Date.now();
-        const weekAgoIso = new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString();
-        const activeCutoffIso = new Date(nowMs - 90_000).toISOString();
+        const { data, error } = await supabase.rpc("get_profile_live_stats", { p_user_id: uid });
+        if (error) throw error;
 
-        const [{ data: presenceRows }, { data: allEvents }, { count: prayersWeekCount }, { data: activePresenceRows }, { count: sharedIntentionsCount }] =
-          await Promise.all([
-            supabase
-              .from("event_presence")
-              .select("event_id,joined_at,last_seen_at")
-              .eq("user_id", uid)
-              .order("last_seen_at", { ascending: false })
-              .limit(5000),
-            supabase
-              .from("events")
-              .select("id,start_time_utc,end_time_utc")
-              .limit(300),
-            supabase
-              .from("event_presence")
-              .select("*", { count: "exact", head: true })
-              .gte("last_seen_at", weekAgoIso),
-            supabase
-              .from("event_presence")
-              .select("event_id,user_id,last_seen_at")
-              .gte("last_seen_at", activeCutoffIso)
-              .limit(5000),
-            supabase
-              .from("event_messages")
-              .select("*", { count: "exact", head: true })
-              .gte("created_at", weekAgoIso),
-          ]);
+        const row = Array.isArray(data)
+          ? ((data[0] as ProfileLiveStatsRow | undefined) ?? null)
+          : ((data as ProfileLiveStatsRow | null) ?? null);
 
-        const rows = (presenceRows ?? []) as Pick<PresenceRow, "event_id" | "joined_at" | "last_seen_at">[];
-        const dayKeys = rows
-          .map((r) => toDayKey(String((r as any).last_seen_at ?? (r as any).joined_at ?? "")))
-          .filter(Boolean);
-        const distinctDayKeys = Array.from(new Set(dayKeys));
-        const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-        const recentDays = distinctDayKeys.filter((k) => safeTimeMs(`${k}T00:00:00.000Z`) >= cutoff).length;
-        const distinctEventCount = new Set(rows.map((r) => String((r as any).event_id ?? ""))).size;
-
-        setStreakDays(computeStreakDays(distinctDayKeys));
-        setActiveDays30(recentDays);
-        setIntentionEnergy(distinctEventCount);
-
-        const cadenceCutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
-        const counts = new Map<string, number>();
-        for (const label of WEEKDAY_LABELS) counts.set(label, 0);
-        for (const r of rows) {
-          const iso = String((r as any).last_seen_at ?? (r as any).joined_at ?? "");
-          const ms = safeTimeMs(iso);
-          if (!ms || ms < cadenceCutoff) continue;
-          const label = WEEKDAY_LABELS[new Date(ms).getDay()];
-          counts.set(label, (counts.get(label) ?? 0) + 1);
-        }
-        setRhythmByDay(WEEKDAY_LABELS.map((label) => ({ label, value: counts.get(label) ?? 0 })));
-
-        const eventsRows = (allEvents ?? []) as Pick<EventRow, "id" | "start_time_utc" | "end_time_utc">[];
-        const liveEventsNow = eventsRows.filter((e) => {
-          const startMs = safeTimeMs(String((e as any).start_time_utc ?? ""));
-          const endMs = safeTimeMs(String((e as any).end_time_utc ?? ""));
-          return startMs > 0 && startMs <= nowMs && (endMs <= 0 || nowMs <= endMs);
-        }).length;
-
-        const activeRows = (activePresenceRows ?? []) as Pick<PresenceRow, "event_id" | "user_id" | "last_seen_at">[];
-        const activeParticipantsNow = activeRows.filter((r) => {
-          const ts = safeTimeMs(String((r as any).last_seen_at ?? ""));
-          return ts > 0 && nowMs - ts <= 90_000;
-        }).length;
-
+        setStreakDays(safeCount(row?.streak_days));
+        setActiveDays30(safeCount(row?.active_days_30));
+        setIntentionEnergy(safeCount(row?.intention_energy));
+        setRhythmByDay([
+          { label: "Sun", value: safeCount(row?.rhythm_sun) },
+          { label: "Mon", value: safeCount(row?.rhythm_mon) },
+          { label: "Tue", value: safeCount(row?.rhythm_tue) },
+          { label: "Wed", value: safeCount(row?.rhythm_wed) },
+          { label: "Thu", value: safeCount(row?.rhythm_thu) },
+          { label: "Fri", value: safeCount(row?.rhythm_fri) },
+          { label: "Sat", value: safeCount(row?.rhythm_sat) },
+        ]);
         setCollectiveImpact({
-          liveEventsNow,
-          activeParticipantsNow,
-          prayersWeek: prayersWeekCount ?? 0,
-          sharedIntentionsWeek: sharedIntentionsCount ?? 0,
+          liveEventsNow: safeCount(row?.live_events_now),
+          activeParticipantsNow: safeCount(row?.active_participants_now),
+          prayersWeek: safeCount(row?.prayers_week),
+          sharedIntentionsWeek: safeCount(row?.shared_intentions_week),
         });
       } catch {
         // keep previous values on refresh failure

@@ -763,6 +763,25 @@ export type Database = {
           restore_success: number
         }[]
       }
+      get_profile_live_stats: {
+        Args: { p_user_id?: string }
+        Returns: {
+          active_days_30: number
+          active_participants_now: number
+          intention_energy: number
+          live_events_now: number
+          prayers_week: number
+          rhythm_fri: number
+          rhythm_mon: number
+          rhythm_sat: number
+          rhythm_sun: number
+          rhythm_thu: number
+          rhythm_tue: number
+          rhythm_wed: number
+          shared_intentions_week: number
+          streak_days: number
+        }[]
+      }
       is_circle_member: {
         Args: { p_user_id?: string }
         Returns: boolean
