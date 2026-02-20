@@ -1,4 +1,3 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../../supabase/client";
 
 export type AiGenerationMode = "event_script" | "solo_guidance";
@@ -34,8 +33,6 @@ export type GeneratedSoloGuidance = {
   source: "openai" | "fallback";
 };
 
-type StoredUsage = Record<string, Record<string, Record<AiGenerationMode, number>>>;
-
 type GenerateFunctionResponse = {
   ok?: boolean;
   source?: string;
@@ -43,21 +40,20 @@ type GenerateFunctionResponse = {
   error?: string;
 };
 
-const KEY_AI_USAGE = "ai:usage:v1";
+type QuotaRpcRow = {
+  is_premium?: boolean | null;
+  used_today?: number | null;
+  limit_daily?: number | null;
+  remaining?: number | null;
+  allowed?: boolean | null;
+};
+
 const FREE_DAILY_LIMITS: Record<AiGenerationMode, number> = {
   event_script: 3,
   solo_guidance: 2,
 };
 const SOLO_LINE_LIMIT = 8;
 const SOLO_LINE_MAX_CHARS = 180;
-
-function todayKeyUtc() {
-  const now = new Date();
-  const y = now.getUTCFullYear();
-  const m = String(now.getUTCMonth() + 1).padStart(2, "0");
-  const d = String(now.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
 
 function safeText(value: unknown, fallback = "") {
   const text = String(value ?? "").replace(/\s+/g, " ").trim();
@@ -72,31 +68,6 @@ function clampMinutes(value: unknown, fallback = 20) {
 
 function normalizeMode(mode: AiGenerationMode) {
   return mode === "solo_guidance" ? "solo" : "event";
-}
-
-async function readUsage(): Promise<StoredUsage> {
-  try {
-    const raw = await AsyncStorage.getItem(KEY_AI_USAGE);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return {};
-    return parsed as StoredUsage;
-  } catch {
-    return {};
-  }
-}
-
-async function writeUsage(next: StoredUsage) {
-  await AsyncStorage.setItem(KEY_AI_USAGE, JSON.stringify(next));
-}
-
-function getUsedToday(
-  usage: StoredUsage,
-  userId: string,
-  mode: AiGenerationMode,
-  dateKey: string
-) {
-  return Number(usage?.[userId]?.[dateKey]?.[mode] ?? 0) || 0;
 }
 
 function buildQuotaResult(args: {
@@ -125,6 +96,35 @@ function buildQuotaResult(args: {
   };
 }
 
+function mapQuotaRowToResult(row: QuotaRpcRow | null, mode: AiGenerationMode): AiQuotaResult {
+  if (!row || typeof row !== "object") {
+    return buildQuotaResult({ isPremium: false, usedToday: 0, mode });
+  }
+  const isPremium = !!row.is_premium;
+  const usedToday = Math.max(0, Number(row.used_today ?? 0) || 0);
+  const limit = row.limit_daily === null || row.limit_daily === undefined
+    ? null
+    : Math.max(0, Number(row.limit_daily) || 0);
+  const remaining = row.remaining === null || row.remaining === undefined
+    ? null
+    : Math.max(0, Number(row.remaining) || 0);
+
+  return {
+    isPremium,
+    usedToday,
+    limit,
+    remaining,
+    allowed: row.allowed !== false,
+  };
+}
+
+async function invokeQuotaRpc(fn: "get_ai_generation_quota" | "consume_ai_generation_quota", mode: AiGenerationMode) {
+  const { data, error } = await supabase.rpc(fn as any, { p_mode: mode });
+  if (error) throw new Error(error.message || `${fn} failed`);
+  const rows = Array.isArray(data) ? (data as QuotaRpcRow[]) : [];
+  return mapQuotaRowToResult(rows[0] ?? null, mode);
+}
+
 export async function getAiQuotaSnapshot(args: {
   userId: string;
   mode: AiGenerationMode;
@@ -134,9 +134,15 @@ export async function getAiQuotaSnapshot(args: {
     return buildQuotaResult({ isPremium: args.isPremium, usedToday: 0, mode: args.mode });
   }
 
-  const usage = await readUsage();
-  const usedToday = getUsedToday(usage, args.userId, args.mode, todayKeyUtc());
-  return buildQuotaResult({ isPremium: args.isPremium, usedToday, mode: args.mode });
+  try {
+    return await invokeQuotaRpc("get_ai_generation_quota", args.mode);
+  } catch {
+    return buildQuotaResult({
+      isPremium: args.isPremium,
+      usedToday: 0,
+      mode: args.mode,
+    });
+  }
 }
 
 export async function consumeAiGenerationQuota(args: {
@@ -155,30 +161,26 @@ export async function consumeAiGenerationQuota(args: {
     };
   }
 
-  const usage = await readUsage();
-  const dateKey = todayKeyUtc();
-  const usedToday = getUsedToday(usage, userId, args.mode, dateKey);
-  const quota = buildQuotaResult({
-    isPremium: args.isPremium,
-    usedToday,
-    mode: args.mode,
-  });
-  if (!quota.allowed) return quota;
-
-  if (!args.isPremium) {
-    if (!usage[userId]) usage[userId] = {};
-    if (!usage[userId][dateKey]) {
-      usage[userId][dateKey] = { event_script: 0, solo_guidance: 0 };
+  try {
+    return await invokeQuotaRpc("consume_ai_generation_quota", args.mode);
+  } catch {
+    if (args.isPremium) {
+      return {
+        allowed: true,
+        isPremium: true,
+        usedToday: 0,
+        limit: null,
+        remaining: null,
+      };
     }
-    usage[userId][dateKey][args.mode] = usedToday + 1;
-    await writeUsage(usage);
+    return {
+      allowed: false,
+      isPremium: false,
+      usedToday: 0,
+      limit: FREE_DAILY_LIMITS[args.mode],
+      remaining: 0,
+    };
   }
-
-  return buildQuotaResult({
-    isPremium: args.isPremium,
-    usedToday: args.isPremium ? usedToday : usedToday + 1,
-    mode: args.mode,
-  });
 }
 
 function fallbackEventScript(args: {
