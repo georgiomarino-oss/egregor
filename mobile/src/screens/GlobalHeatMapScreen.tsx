@@ -11,6 +11,14 @@ import type { RootStackParamList } from "../types";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
+type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
+type ManifestationItem = {
+  id: string;
+  eventId: string;
+  body: string;
+  createdAt: string;
+  eventTitle: string;
+};
 
 type RegionKey = "Americas" | "Europe" | "Asia" | "Africa" | "Oceania" | "Global";
 type HeatWindow = "90s" | "24h" | "7d";
@@ -79,6 +87,14 @@ export default function GlobalHeatMapScreen() {
   });
   const [selectedRegion, setSelectedRegion] = useState<RegionKey>("Americas");
   const [heatWindow, setHeatWindow] = useState<HeatWindow>("90s");
+  const [manifestationsByRegion, setManifestationsByRegion] = useState<Record<RegionKey, ManifestationItem[]>>({
+    Americas: [],
+    Europe: [],
+    Asia: [],
+    Africa: [],
+    Oceania: [],
+    Global: [],
+  });
 
   const openEventRoom = useCallback(
     (eventId: string) => {
@@ -98,7 +114,7 @@ export default function GlobalHeatMapScreen() {
       const now = Date.now();
       const selectedWindowMs = windowMs(heatWindow);
       const cutoffIso = new Date(now - selectedWindowMs).toISOString();
-      const [{ data: presenceRows }, { data: eventRows }] = await Promise.all([
+      const [{ data: presenceRows }, { data: eventRows }, { data: messageRows }] = await Promise.all([
         supabase
           .from("event_presence")
           .select("event_id,user_id,last_seen_at")
@@ -109,6 +125,12 @@ export default function GlobalHeatMapScreen() {
           .select("id,title,start_time_utc,end_time_utc,timezone,intention_statement")
           .order("start_time_utc", { ascending: false })
           .limit(500),
+        supabase
+          .from("event_messages")
+          .select("id,event_id,body,created_at")
+          .gte("created_at", cutoffIso)
+          .order("created_at", { ascending: false })
+          .limit(300),
       ]);
 
       const events = (eventRows ?? []) as EventRow[];
@@ -155,6 +177,34 @@ export default function GlobalHeatMapScreen() {
         liveByRegion[region].push(e);
       }
       setLiveEventsByRegion(liveByRegion);
+
+      const messages = (messageRows ?? []) as Pick<EventMessageRow, "id" | "event_id" | "body" | "created_at">[];
+      const manifests: Record<RegionKey, ManifestationItem[]> = {
+        Americas: [],
+        Europe: [],
+        Asia: [],
+        Africa: [],
+        Oceania: [],
+        Global: [],
+      };
+      for (const m of messages) {
+        const eventId = String((m as any).event_id ?? "");
+        const event = eventById[eventId];
+        const region = regionFromTimezone((event as any)?.timezone ?? "");
+        const body = String((m as any).body ?? "").trim();
+        if (!body) continue;
+        manifests[region].push({
+          id: String((m as any).id ?? ""),
+          eventId,
+          body,
+          createdAt: String((m as any).created_at ?? ""),
+          eventTitle: String((event as any)?.title ?? "Live circle"),
+        });
+      }
+      for (const key of Object.keys(manifests) as RegionKey[]) {
+        manifests[key] = manifests[key].slice(0, 6);
+      }
+      setManifestationsByRegion(manifests);
     } finally {
       setLoading(false);
     }
@@ -191,6 +241,7 @@ export default function GlobalHeatMapScreen() {
   );
 
   const selectedEvents = liveEventsByRegion[selectedRegion] ?? [];
+  const selectedManifestations = manifestationsByRegion[selectedRegion] ?? [];
 
   const onToggleLocation = useCallback(async (next: boolean) => {
     setLocationOptIn(next);
@@ -278,6 +329,33 @@ export default function GlobalHeatMapScreen() {
                   : `Events started in the selected ${heatWindow} window.`}
               </Text>
             </View>
+
+            <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+              <Text style={[styles.sectionTitle, { color: c.text }]}>Recent Manifestations</Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>
+                Shared intentions from {selectedRegion} in the selected window.
+              </Text>
+              {selectedManifestations.length === 0 ? (
+                <Text style={[styles.meta, { color: c.textMuted }]}>No recent manifestations yet.</Text>
+              ) : (
+                <View style={{ gap: 8 }}>
+                  {selectedManifestations.map((m) => (
+                    <Pressable
+                      key={m.id}
+                      style={[styles.manifestCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}
+                      onPress={() => openEventRoom(m.eventId)}
+                    >
+                      <Text style={[styles.meta, { color: c.textMuted }]} numberOfLines={1}>
+                        {m.eventTitle} • {new Date(m.createdAt).toLocaleTimeString()}
+                      </Text>
+                      <Text style={[styles.meta, { color: c.text }]} numberOfLines={2}>
+                        {m.body}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+            </View>
           </View>
         }
         renderItem={({ item }) => (
@@ -339,6 +417,11 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   fill: { height: "100%", borderRadius: 999 },
+  manifestCard: {
+    borderRadius: 10,
+    borderWidth: 1,
+    padding: 10,
+  },
   eventCard: {
     borderRadius: 12,
     borderWidth: 1,
