@@ -244,6 +244,7 @@ const ACTIVE_WINDOW_MS = 90_000;
 const HEARTBEAT_MS = 10_000;
 const PRESENCE_RESYNC_MS = 60_000;
 const CHAT_RESYNC_MS = 60_000;
+const RUN_STATE_RESYNC_MS = 60_000;
 
 
 // Chat: how close to bottom counts as “near bottom”
@@ -716,12 +717,34 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!hasValidEventId) return;
 
+    let disposed = false;
+    const resync = async () => {
+      if (disposed) return;
+      try {
+        const row = await ensureRunState(eventId);
+        if (disposed) return;
+        setRunState(normalizeRunState(row.state));
+        setRunReady(true);
+      } catch {
+        // keep realtime subscription as primary source
+      }
+    };
+
+    void resync();
+    const intervalId = setInterval(() => {
+      void resync();
+    }, RUN_STATE_RESYNC_MS);
+
     const sub = subscribeRunState(eventId, (row) => {
       setRunState(normalizeRunState(row.state));
       setRunReady(true);
     });
 
-    return () => sub.unsubscribe();
+    return () => {
+      disposed = true;
+      clearInterval(intervalId);
+      sub.unsubscribe();
+    };
   }, [eventId, hasValidEventId]);
 
   // Presence realtime
@@ -955,7 +978,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       const t = safeTimeMs(r.last_seen_at);
       return t > 0 && now - t <= ACTIVE_WINDOW_MS;
     });
-  }, [presenceSortedByLastSeen]);
+  }, [presenceSortedByLastSeen, tick]);
 
   const recentPresence = useMemo(() => {
     const now = Date.now();
@@ -963,7 +986,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       const t = safeTimeMs(r.last_seen_at);
       return t > 0 && now - t > ACTIVE_WINDOW_MS;
     });
-  }, [presenceSortedByLastSeen]);
+  }, [presenceSortedByLastSeen, tick]);
 
   const activeCount = activePresence.length;
   const totalAttendees = presenceRows.length;
