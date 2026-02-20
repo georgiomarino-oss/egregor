@@ -502,7 +502,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const [chatText, setChatText] = useState("");
   const [sending, setSending] = useState(false);
   const [pendingMessageCount, setPendingMessageCount] = useState(0);
+  const [unreadMarkerMessageId, setUnreadMarkerMessageId] = useState<string | null>(null);
   const chatListRef = useRef<FlatList<EventMessageRow>>(null);
+  const chatContentHeightRef = useRef(0);
+  const chatScrollOffsetYRef = useRef(0);
 
   // “Should we autoscroll?” tracking
   const shouldAutoScrollRef = useRef(true);
@@ -517,12 +520,14 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   const onChatScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
+    chatScrollOffsetYRef.current = contentOffset.y;
     const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
     const nearBottom = distanceFromBottom <= CHAT_BOTTOM_THRESHOLD_PX;
     shouldAutoScrollRef.current = nearBottom;
 
     if (nearBottom) {
       setPendingMessageCount(0);
+      setUnreadMarkerMessageId(null);
     }
   }, []);
 
@@ -549,7 +554,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
     const rows = (data ?? []) as EventMessageRow[];
     setMessages(sortMessagesByCreatedAt(rows));
-    setPendingMessageCount(0);
+    if (shouldAutoScrollRef.current) {
+      setPendingMessageCount(0);
+      setUnreadMarkerMessageId(null);
+    }
     void loadProfiles(rows.map((m) => String((m as any).user_id ?? "")));
     logTelemetry("chat_resync_success", { reason, count: rows.length });
   }, [eventId, hasValidEventId, loadProfiles, logTelemetry]);
@@ -587,6 +595,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setChatText("");
       shouldAutoScrollRef.current = true;
       setPendingMessageCount(0);
+      setUnreadMarkerMessageId(null);
       setTimeout(() => scrollChatToEnd(true), 30);
     } finally {
       setSending(false);
@@ -932,8 +941,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             if (shouldAutoScrollRef.current) {
               scrollChatToEnd(true);
               setPendingMessageCount(0);
+              setUnreadMarkerMessageId(null);
             } else if (!isMine) {
-              setPendingMessageCount((count) => count + 1);
+              setPendingMessageCount((count) => {
+                if (count === 0 && messageId) setUnreadMarkerMessageId(messageId);
+                return count + 1;
+              });
             }
           }, 30);
         }
@@ -951,6 +964,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   const jumpToLatestMessages = useCallback(() => {
     setPendingMessageCount(0);
+    setUnreadMarkerMessageId(null);
     shouldAutoScrollRef.current = true;
     scrollChatToEnd(true);
   }, [scrollChatToEnd]);
@@ -1437,18 +1451,29 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   };
 
   const renderMsg = ({ item }: { item: EventMessageRow }) => {
+    const messageId = String((item as any).id ?? "");
     const uid = String((item as any).user_id ?? "");
     const mine = !!userId && uid === userId;
     const name = uid ? displayNameForUserId(uid) : "Unknown";
     const ts = (item as any).created_at ? new Date((item as any).created_at).toLocaleTimeString() : "";
+    const showUnreadMarker = !!unreadMarkerMessageId && messageId === unreadMarkerMessageId;
 
     return (
-      <View style={[styles.msgRow, mine ? styles.msgMine : styles.msgOther]}>
-        <Text style={styles.msgMeta}>
-          <Text style={{ color: "#DCE4FF", fontWeight: "800" }}>{mine ? "You" : name}</Text>
-          <Text style={{ color: "#6F83C6" }}> · {ts}</Text>
-        </Text>
-        <Text style={styles.msgText}>{String((item as any).body ?? "")}</Text>
+      <View>
+        {showUnreadMarker ? (
+          <View style={styles.unreadMarkerWrap}>
+            <View style={styles.unreadMarkerLine} />
+            <Text style={styles.unreadMarkerText}>Unread messages</Text>
+            <View style={styles.unreadMarkerLine} />
+          </View>
+        ) : null}
+        <View style={[styles.msgRow, mine ? styles.msgMine : styles.msgOther]}>
+          <Text style={styles.msgMeta}>
+            <Text style={{ color: "#DCE4FF", fontWeight: "800" }}>{mine ? "You" : name}</Text>
+            <Text style={{ color: "#6F83C6" }}> | {ts}</Text>
+          </Text>
+          <Text style={styles.msgText}>{String((item as any).body ?? "")}</Text>
+        </View>
       </View>
     );
   };
@@ -1719,8 +1744,25 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           onRefresh={loadEventRoom}
           ListHeaderComponent={Header}
           contentContainerStyle={styles.content}
-          onContentSizeChange={() => {
-            if (shouldAutoScrollRef.current) scrollChatToEnd(false);
+          onContentSizeChange={(_, height) => {
+            const previousHeight = chatContentHeightRef.current;
+            chatContentHeightRef.current = height;
+
+            if (shouldAutoScrollRef.current) {
+              scrollChatToEnd(false);
+              return;
+            }
+
+            if (previousHeight > 0 && height > previousHeight) {
+              const delta = height - previousHeight;
+              const nextOffset = Math.max(0, chatScrollOffsetYRef.current + delta);
+              chatScrollOffsetYRef.current = nextOffset;
+              try {
+                chatListRef.current?.scrollToOffset({ offset: nextOffset, animated: false });
+              } catch {
+                // ignore
+              }
+            }
           }}
           onScroll={onChatScroll}
           scrollEventThrottle={16}
@@ -1905,6 +1947,25 @@ const styles = StyleSheet.create({
   },
   msgMeta: { color: "#93A3D9", fontSize: 11, marginBottom: 4 },
   msgText: { color: "white", lineHeight: 18 },
+  unreadMarkerWrap: {
+    marginTop: 8,
+    marginBottom: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  unreadMarkerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "#36508F",
+  },
+  unreadMarkerText: {
+    color: "#9DB6FF",
+    fontSize: 11,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
 
   // Docked composer (outside FlatList)
   chatComposerDock: {
@@ -1968,5 +2029,3 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 });
-
-
