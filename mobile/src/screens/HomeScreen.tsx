@@ -1,5 +1,16 @@
 import React, { useCallback, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Modal,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { supabase } from "../supabase/client";
@@ -27,6 +38,24 @@ function shortId(id: string) {
   return `${id.slice(0, 6)}...${id.slice(-4)}`;
 }
 
+function formatClock(totalSeconds: number) {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const mm = Math.floor(s / 60);
+  const ss = s % 60;
+  return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+}
+
+function buildSoloPrayer(intent: string) {
+  const core = intent.trim() || "peace and healing";
+  return [
+    `Breathe in slowly and center your awareness on ${core}.`,
+    "Breathe out and soften your shoulders, jaw, and breath.",
+    `With each inhale, invite clarity and compassion into ${core}.`,
+    "With each exhale, release fear and attachment to outcomes.",
+    "Rest in gratitude for what is already shifting in your life.",
+  ];
+}
+
 export default function HomeScreen() {
   const { theme } = useAppState();
   const c = useMemo(() => getAppColors(theme), [theme]);
@@ -35,6 +64,10 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [weeklyImpact, setWeeklyImpact] = useState(0);
+  const [soloOpen, setSoloOpen] = useState(false);
+  const [soloIntent, setSoloIntent] = useState("peace, healing, and grounded courage");
+  const [soloSecondsLeft, setSoloSecondsLeft] = useState(180);
+  const [soloRunning, setSoloRunning] = useState(false);
 
   const liveEvents = useMemo(() => {
     const now = Date.now();
@@ -56,6 +89,7 @@ export default function HomeScreen() {
   const activeNow = useMemo(() => {
     return liveEvents.reduce((sum, e) => sum + Number((e as any).active_count_snapshot ?? 0), 0);
   }, [liveEvents]);
+  const soloLines = useMemo(() => buildSoloPrayer(soloIntent), [soloIntent]);
 
   const loadHome = useCallback(async () => {
     setLoading(true);
@@ -109,6 +143,23 @@ export default function HomeScreen() {
     openEventRoom(live.id);
   }, [liveEvents, openEventRoom]);
 
+  React.useEffect(() => {
+    if (!soloOpen) return;
+    if (!soloRunning) return;
+
+    const id = setInterval(() => {
+      setSoloSecondsLeft((prev) => {
+        if (prev <= 1) {
+          setSoloRunning(false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(id);
+  }, [soloOpen, soloRunning]);
+
   const renderEvent = ({ item }: { item: EventRow }) => {
     const startMs = safeTimeMs((item as any).start_time_utc);
     const label = startMs ? new Date(startMs).toLocaleString() : "Unknown time";
@@ -154,6 +205,12 @@ export default function HomeScreen() {
                 <Text style={[styles.secondaryBtnText, { color: c.text }]}>Browse Events</Text>
               </Pressable>
             </View>
+            <Pressable
+              style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+              onPress={() => setSoloOpen(true)}
+            >
+              <Text style={[styles.secondaryBtnText, { color: c.text }]}>Quick Solo Prayer</Text>
+            </Pressable>
 
             <View style={styles.metricsRow}>
               <View style={[styles.metricCard, { backgroundColor: c.card, borderColor: c.border }]}>
@@ -191,6 +248,65 @@ export default function HomeScreen() {
         }
         contentContainerStyle={{ paddingBottom: 120 }}
       />
+
+      <Modal visible={soloOpen} animationType="slide" transparent onRequestClose={() => setSoloOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border }]}>
+            <Text style={[styles.modalTitle, { color: c.text }]}>Solo Guided Prayer</Text>
+            <Text style={[styles.modalMeta, { color: c.textMuted }]}>
+              3-minute rhythm. Keep breathing steady and stay with one intention.
+            </Text>
+
+            <TextInput
+              value={soloIntent}
+              onChangeText={setSoloIntent}
+              placeholder="What intention are you holding right now?"
+              placeholderTextColor={c.textMuted}
+              style={[styles.modalInput, { color: c.text, borderColor: c.border, backgroundColor: c.cardAlt }]}
+              multiline
+            />
+
+            <View style={[styles.timerChip, { borderColor: c.primary, backgroundColor: c.cardAlt }]}>
+              <Text style={[styles.timerValue, { color: c.text }]}>{formatClock(soloSecondsLeft)}</Text>
+            </View>
+
+            <View style={{ gap: 6, marginTop: 10 }}>
+              {soloLines.map((line, idx) => (
+                <Text key={`${idx}-${line}`} style={[styles.modalLine, { color: c.text }]}>
+                  {idx + 1}. {line}
+                </Text>
+              ))}
+            </View>
+
+            <View style={styles.row}>
+              <Pressable
+                style={[styles.primaryBtn, { backgroundColor: c.primary }]}
+                onPress={() => setSoloRunning((v) => !v)}
+              >
+                <Text style={[styles.primaryBtnText, { color: "#FFFFFF" }]}>
+                  {soloRunning ? "Pause" : "Start"}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+                onPress={() => {
+                  setSoloRunning(false);
+                  setSoloSecondsLeft(180);
+                }}
+              >
+                <Text style={[styles.secondaryBtnText, { color: c.text }]}>Reset</Text>
+              </Pressable>
+            </View>
+
+            <Pressable
+              style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt, marginTop: 10 }]}
+              onPress={() => setSoloOpen(false)}
+            >
+              <Text style={[styles.secondaryBtnText, { color: c.text }]}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -262,4 +378,35 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(4, 7, 15, 0.7)",
+    justifyContent: "flex-end",
+  },
+  modalCard: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderWidth: 1,
+    padding: 16,
+    paddingBottom: 28,
+  },
+  modalTitle: { fontSize: 22, fontWeight: "900" },
+  modalMeta: { fontSize: 12, marginTop: 4, marginBottom: 10 },
+  modalInput: {
+    minHeight: 52,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  timerChip: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderRadius: 999,
+    alignSelf: "flex-start",
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  timerValue: { fontSize: 22, fontWeight: "900" },
+  modalLine: { fontSize: 13, lineHeight: 19 },
 });
