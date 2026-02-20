@@ -112,7 +112,7 @@ function isLikelyUuid(v: string) {
 
 function shortId(id: string) {
   if (!id) return "";
-  return `${id.slice(0, 6)}…${id.slice(-4)}`;
+  return `${id.slice(0, 6)}...${id.slice(-4)}`;
 }
 
 function nowIso() {
@@ -276,7 +276,7 @@ function mapChatSendError(message: string) {
 }
 
 
-// Chat: how close to bottom counts as “near bottom”
+// Chat: how close to bottom counts as "near bottom"
 const CHAT_BOTTOM_THRESHOLD_PX = 120;
 
 export default function EventRoomScreen({ route, navigation }: Props) {
@@ -430,7 +430,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   ]);
 
   const runStatusLabel = useMemo(() => {
-    if (!runReady) return "…";
+    if (!runReady) return "...";
     if (runState.mode === "idle") return "Idle";
     if (runState.mode === "running") return "Running";
     if (runState.mode === "paused") return "Paused";
@@ -537,7 +537,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const chatContentHeightRef = useRef(0);
   const chatScrollOffsetYRef = useRef(0);
 
-  // “Should we autoscroll?” tracking
+  // "Should we autoscroll?" tracking
   const shouldAutoScrollRef = useRef(true);
 
   const scrollChatToEnd = useCallback((animated = true) => {
@@ -943,10 +943,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           const rowUserId = String((row as any).user_id ?? "");
           const isMine = !!userId && rowUserId === userId;
           const messageId = String((row as any).id ?? "");
+          let insertedNew = false;
 
           setMessages((prev) => {
             const hadMessage =
               !!messageId && prev.some((m: any) => String((m as any).id ?? "") === messageId);
+            insertedNew = !hadMessage;
             const merged = upsertAndSortMessage(prev, row);
             const insertedIdx = merged.findIndex(
               (m: any) => String((m as any).id ?? "") === messageId
@@ -973,7 +975,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
               scrollChatToEnd(true);
               setPendingMessageCount(0);
               setUnreadMarkerMessageId(null);
-            } else if (!isMine) {
+            } else if (!isMine && insertedNew) {
               setPendingMessageCount((count) => {
                 if (count === 0 && messageId) setUnreadMarkerMessageId(messageId);
                 return count + 1;
@@ -1207,7 +1209,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       }
 
       setIsJoined(false);
-      setPresenceMsg("✅ You left live.");
+      setPresenceMsg("You left live.");
       await writeJoinPref(eventId, false);
       setShouldAutoJoinForEvent(false);
       await loadPresence();
@@ -2059,6 +2061,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 });
+
 
 
 
