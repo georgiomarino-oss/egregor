@@ -225,13 +225,13 @@ export default function EventsScreen() {
             // Profile is a hidden tab route; we can navigate to it reliably
             navigation.navigate("Profile");
           }}
-          style={styles.headerBtn}
+          style={[styles.headerBtn, { borderColor: c.border }]}
         >
-          <Text style={styles.headerBtnText}>Profile</Text>
+          <Text style={[styles.headerBtnText, { color: c.text }]}>Profile</Text>
         </Pressable>
       ),
     });
-  }, [navigation]);
+  }, [navigation, c.border, c.text]);
 
   const selectedEvent = useMemo(
     () => events.find((e) => e.id === selectedEventId) ?? null,
@@ -1315,14 +1315,14 @@ export default function EventsScreen() {
               </Text>
             </View>
 
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Live Presence</Text>
-              <Text style={styles.meta}>
+            <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+              <Text style={[styles.sectionTitle, { color: c.text }]}>Live Presence</Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>
                 Selected: {selectedEvent ? selectedEvent.title : "(none)"}
               </Text>
-              <Text style={styles.meta}>
+              <Text style={[styles.meta, { color: c.textMuted }]}>
                 Joined:{" "}
-                <Text style={{ color: "white", fontWeight: "800" }}>
+                <Text style={{ color: c.text, fontWeight: "800" }}>
                   {joinedEvent ? joinedEvent.title : "(not joined)"}
                 </Text>
               </Text>
@@ -1332,6 +1332,7 @@ export default function EventsScreen() {
                   style={[
                     styles.btn,
                     styles.btnPrimary,
+                    { backgroundColor: c.primary },
                     (!selectedEventId || isJoined) && styles.disabled,
                   ]}
                   onPress={handleJoin}
@@ -1344,16 +1345,17 @@ export default function EventsScreen() {
                   style={[
                     styles.btn,
                     styles.btnGhost,
+                    { borderColor: c.border },
                     (!selectedEventId || !isJoined) && styles.disabled,
                   ]}
                   onPress={handleLeave}
                   disabled={!selectedEventId || !isJoined}
                 >
-                  <Text style={styles.btnGhostText}>Leave live</Text>
+                  <Text style={[styles.btnGhostText, { color: c.text }]}>Leave live</Text>
                 </Pressable>
 
                 <Pressable
-                  style={[styles.btn, styles.btnGhost, !selectedEventId && styles.disabled]}
+                  style={[styles.btn, styles.btnGhost, { borderColor: c.border }, !selectedEventId && styles.disabled]}
                   onPress={() => {
                     if (!selectedEventId) {
                       Alert.alert("Select event", "Please select an event first.");
@@ -1363,7 +1365,7 @@ export default function EventsScreen() {
                   }}
                   disabled={!selectedEventId}
                 >
-                  <Text style={styles.btnGhostText}>Open room</Text>
+                  <Text style={[styles.btnGhostText, { color: c.text }]}>Open room</Text>
                 </Pressable>
               </View>
 
@@ -1371,72 +1373,72 @@ export default function EventsScreen() {
               {!!presenceError && <Text style={styles.err}>{presenceError}</Text>}
             </View>
 
-            <Text style={styles.sectionTitle}>All Events</Text>
+            <Text style={[styles.sectionTitle, { color: c.text }]}>All Events</Text>
           </View>
         }
         ListEmptyComponent={
-          <Text style={styles.empty}>{loading ? "Loading..." : "No events yet."}</Text>
+          <Text style={[styles.empty, { color: c.textMuted }]}>{loading ? "Loading..." : "No events yet."}</Text>
         }
       />
 
       {/* Edit Event Modal */}
       <Modal visible={editOpen} transparent animationType="slide" onRequestClose={() => setEditOpen(false)}>
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Edit Event</Text>
+              <Text style={[styles.modalTitle, { color: c.text }]}>Edit Event</Text>
               <Pressable onPress={() => setEditOpen(false)} style={styles.modalClose} disabled={loading}>
                 <Text style={styles.btnText}>Close</Text>
               </Pressable>
             </View>
 
-            <Text style={styles.label}>Title</Text>
+            <Text style={[styles.label, { color: c.textMuted }]}>Title</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
               value={editTitle}
               onChangeText={setEditTitle}
               maxLength={EVENT_TITLE_MAX}
               placeholder="Event title"
-              placeholderTextColor="#6B7BB2"
+              placeholderTextColor={c.textMuted}
             />
-            <Text style={styles.meta}>{editTitle.trim().length}/{EVENT_TITLE_MAX}</Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>{editTitle.trim().length}/{EVENT_TITLE_MAX}</Text>
 
-            <Text style={styles.label}>Intention</Text>
+            <Text style={[styles.label, { color: c.textMuted }]}>Intention</Text>
             <TextInput
-              style={[styles.input, styles.multi]}
+              style={[styles.input, styles.multi, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
               value={editIntention}
               onChangeText={setEditIntention}
               multiline
               maxLength={EVENT_INTENTION_MAX}
               placeholder="Intention statement"
-              placeholderTextColor="#6B7BB2"
+              placeholderTextColor={c.textMuted}
             />
-            <Text style={styles.meta}>{editIntention.trim().length}/{EVENT_INTENTION_MAX}</Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>{editIntention.trim().length}/{EVENT_INTENTION_MAX}</Text>
 
-            <Text style={styles.label}>Description</Text>
+            <Text style={[styles.label, { color: c.textMuted }]}>Description</Text>
             <TextInput
-              style={[styles.input, styles.multi]}
+              style={[styles.input, styles.multi, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
               value={editDescription}
               onChangeText={setEditDescription}
               multiline
               maxLength={EVENT_DESCRIPTION_MAX}
               placeholder="Description"
-              placeholderTextColor="#6B7BB2"
+              placeholderTextColor={c.textMuted}
             />
-            <Text style={styles.meta}>{editDescription.trim().length}/{EVENT_DESCRIPTION_MAX}</Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>{editDescription.trim().length}/{EVENT_DESCRIPTION_MAX}</Text>
 
-            <Text style={styles.label}>Start local (YYYY-MM-DDTHH:mm)</Text>
-            <TextInput style={styles.input} value={editStartLocal} onChangeText={setEditStartLocal} />
+            <Text style={[styles.label, { color: c.textMuted }]}>Start local (YYYY-MM-DDTHH:mm)</Text>
+            <TextInput style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]} value={editStartLocal} onChangeText={setEditStartLocal} placeholderTextColor={c.textMuted} />
 
-            <Text style={styles.label}>End local (YYYY-MM-DDTHH:mm)</Text>
-            <TextInput style={styles.input} value={editEndLocal} onChangeText={setEditEndLocal} />
+            <Text style={[styles.label, { color: c.textMuted }]}>End local (YYYY-MM-DDTHH:mm)</Text>
+            <TextInput style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]} value={editEndLocal} onChangeText={setEditEndLocal} placeholderTextColor={c.textMuted} />
 
-            <Text style={styles.label}>Timezone</Text>
-            <TextInput style={styles.input} value={editTimezone} onChangeText={setEditTimezone} />
+            <Text style={[styles.label, { color: c.textMuted }]}>Timezone</Text>
+            <TextInput style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]} value={editTimezone} onChangeText={setEditTimezone} placeholderTextColor={c.textMuted} />
 
             <View style={styles.row}>
               <Pressable
-                style={[styles.btn, styles.btnPrimary, loading && styles.disabled]}
+                style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, loading && styles.disabled]}
                 onPress={saveEventEdits}
                 disabled={loading || !editEvent}
               >
@@ -1455,9 +1457,9 @@ export default function EventsScreen() {
         onRequestClose={() => setAttachOpen(false)}
       >
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Event Script</Text>
+              <Text style={[styles.modalTitle, { color: c.text }]}>Event Script</Text>
               <Pressable
                 onPress={() => setAttachOpen(false)}
                 style={styles.modalClose}
@@ -1471,12 +1473,12 @@ export default function EventsScreen() {
               <>
                 <Text style={styles.modalMeta}>
                   Event:{" "}
-                  <Text style={{ fontWeight: "900", color: "white" }}>{attachEvent.title}</Text>
+                  <Text style={{ fontWeight: "900", color: c.text }}>{attachEvent.title}</Text>
                 </Text>
 
                 <Text style={styles.modalMeta}>
                   Current:{" "}
-                  <Text style={{ fontWeight: "900", color: "white" }}>
+                  <Text style={{ fontWeight: "900", color: c.text }}>
                     {attachEvent.script_id ? getScriptLabel(attachEvent.script_id) : "(none)"}
                   </Text>
                 </Text>
@@ -1496,19 +1498,19 @@ export default function EventsScreen() {
 
                   <Pressable
                     onPress={loadScriptsForDisplay}
-                    style={[styles.btn, styles.btnGhost, loading && styles.disabled]}
+                    style={[styles.btn, styles.btnGhost, { borderColor: c.border }, loading && styles.disabled]}
                     disabled={loading}
                   >
-                    <Text style={styles.btnGhostText}>Refresh scripts</Text>
+                    <Text style={[styles.btnGhostText, { color: c.text }]}>Refresh scripts</Text>
                   </Pressable>
                 </View>
 
                 <TextInput
                   value={scriptQuery}
                   onChangeText={setScriptQuery}
-                  style={styles.input}
-                  placeholder="Search your scripts…"
-                  placeholderTextColor="#6B7BB2"
+                  style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+                  placeholder="Search your scripts..."
+                  placeholderTextColor={c.textMuted}
                 />
 
                 {myScripts.length === 0 ? (
