@@ -1454,7 +1454,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setIsJoined(true);
       setPresenceMsg("You joined live.");
       await writeJoinPref(targetEventId, true);
+      if (isStale()) return;
       setShouldAutoJoinForEvent(true);
+      if (isStale()) return;
       await loadPresence();
     } catch (e: any) {
       if (!isStale()) setPresenceErr(e?.message ?? "Failed to join live.");
@@ -1499,8 +1501,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       const { error } = await supabase
         .from("event_presence")
         .delete()
-        .eq("event_id", eventId)
+        .eq("event_id", targetEventId)
         .eq("user_id", uid);
+      if (isStale()) return;
 
       if (error) {
         setIsJoined(wasJoined);
@@ -1510,7 +1513,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
       setPresenceMsg("You left live.");
       await writeJoinPref(targetEventId, false);
+      if (isStale()) return;
       setShouldAutoJoinForEvent(false);
+      if (isStale()) return;
       await loadPresence();
     } catch (e: any) {
       if (!isStale()) {
