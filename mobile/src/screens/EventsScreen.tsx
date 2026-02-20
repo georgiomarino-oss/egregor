@@ -72,7 +72,7 @@ function isLikelyUuid(v: string) {
 
 function shortId(id: string) {
   if (!id) return "";
-  return `${id.slice(0, 6)}…${id.slice(-4)}`;
+  return `${id.slice(0, 6)}...${id.slice(-4)}`;
 }
 
 function safeTimeMs(iso: string | null | undefined): number {
@@ -195,6 +195,7 @@ export default function EventsScreen() {
   // Filters
   const [upcomingOnly, setUpcomingOnly] = useState(true);
   const [hostedOnly, setHostedOnly] = useState(false);
+  const [eventQuery, setEventQuery] = useState("");
 
   // Attach modal state
   const [attachOpen, setAttachOpen] = useState(false);
@@ -780,7 +781,7 @@ export default function EventsScreen() {
       }
 
       if (event.host_user_id !== user.id) {
-        Alert.alert("Not allowed", "Only the host can change this event’s script.");
+        Alert.alert("Not allowed", "Only the host can change this event's script.");
         return;
       }
 
@@ -1046,6 +1047,7 @@ export default function EventsScreen() {
   const visibleEvents = useMemo(() => {
     void nowTick;
     const now = Date.now();
+    const query = eventQuery.trim().toLowerCase();
 
     let rows = [...events];
 
@@ -1074,6 +1076,24 @@ export default function EventsScreen() {
       rows = rows.filter((e) => !isPast(e) || isLive(e));
     }
 
+    if (query) {
+      rows = rows.filter((e) => {
+        const titleText = String((e as any).title ?? "").toLowerCase();
+        const intentionText = String((e as any).intention_statement ?? (e as any).intention ?? "").toLowerCase();
+        const descriptionText = String((e as any).description ?? "").toLowerCase();
+        const hostText = displayNameForUserId(String((e as any).host_user_id ?? "")).toLowerCase();
+        const scriptId = String((e as any).script_id ?? "");
+        const scriptText = scriptId ? String(scriptsById[scriptId]?.title ?? scriptId).toLowerCase() : "(none)";
+        return (
+          titleText.includes(query) ||
+          intentionText.includes(query) ||
+          descriptionText.includes(query) ||
+          hostText.includes(query) ||
+          scriptText.includes(query)
+        );
+      });
+    }
+
     rows.sort((a, b) => {
       const aLive = isLive(a) ? 1 : 0;
       const bLive = isLive(b) ? 1 : 0;
@@ -1091,7 +1111,7 @@ export default function EventsScreen() {
     });
 
     return rows;
-  }, [events, hostedOnly, myUserId, upcomingOnly, nowTick]);
+  }, [events, hostedOnly, myUserId, upcomingOnly, nowTick, eventQuery, displayNameForUserId, scriptsById]);
 
   const renderEvent = ({ item }: { item: EventRow }) => {
     void nowTick;
@@ -1281,6 +1301,14 @@ export default function EventsScreen() {
 
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Filters</Text>
+
+              <TextInput
+                style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+                value={eventQuery}
+                onChangeText={setEventQuery}
+                placeholder="Search events, hosts, intention, script..."
+                placeholderTextColor={c.textMuted}
+              />
 
               <View style={styles.filterRow}>
                 <Pressable
@@ -1720,5 +1748,4 @@ const styles = StyleSheet.create({
   pickerTitle: { color: "white", fontSize: 14, fontWeight: "800" },
   pickerMeta: { color: "#93A3D9", fontSize: 12, marginTop: 4 },
 });
-
 
