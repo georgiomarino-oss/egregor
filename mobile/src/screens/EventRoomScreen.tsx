@@ -256,6 +256,7 @@ const PRESENCE_RESYNC_MS = 60_000;
 const CHAT_RESYNC_MS = 60_000;
 const RUN_STATE_RESYNC_MS = 60_000;
 const CHAT_MAX_CHARS = 1000;
+const ENERGY_GIFT_VALUES = [1, 3, 7] as const;
 
 function mapChatSendError(message: string) {
   const m = String(message ?? "").toLowerCase();
@@ -572,6 +573,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const [messages, setMessages] = useState<EventMessageRow[]>([]);
   const [chatText, setChatText] = useState("");
   const [sending, setSending] = useState(false);
+  const [sendingEnergy, setSendingEnergy] = useState<number | null>(null);
   const [pendingMessageCount, setPendingMessageCount] = useState(0);
   const [unreadMarkerMessageId, setUnreadMarkerMessageId] = useState<string | null>(null);
   const chatListRef = useRef<FlatList<EventMessageRow>>(null);
@@ -673,6 +675,43 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setSending(false);
     }
   }, [chatText, eventId, hasValidEventId, scrollChatToEnd, ensureUserId]);
+
+  const sendEnergyGift = useCallback(
+    async (amount: number) => {
+      if (!Number.isFinite(amount) || amount <= 0) return;
+      if (!hasValidEventId) return;
+
+      const uid = await ensureUserId();
+      if (!uid) {
+        Alert.alert("Not signed in", "Please sign in first.");
+        return;
+      }
+
+      setSendingEnergy(amount);
+      try {
+        const payload: EventMessageInsert = {
+          event_id: eventId,
+          user_id: uid,
+          body: `Sent ${amount} energy to this circle.`,
+        };
+
+        const { error } = await supabase.from("event_messages").insert(payload);
+        if (error) {
+          const mapped = mapChatSendError(error.message);
+          Alert.alert(mapped.title, mapped.body);
+          return;
+        }
+
+        shouldAutoScrollRef.current = true;
+        setPendingMessageCount(0);
+        setUnreadMarkerMessageId(null);
+        setTimeout(() => scrollChatToEnd(true), 30);
+      } finally {
+        setSendingEnergy(null);
+      }
+    },
+    [ensureUserId, eventId, hasValidEventId, scrollChatToEnd]
+  );
 
   // ---- Load room ----
   const loadEventRoom = useCallback(async () => {
@@ -1956,6 +1995,25 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           ) : null}
 
           <View style={{ flex: 1 }}>
+            <View style={styles.energyRow}>
+              {ENERGY_GIFT_VALUES.map((amount) => (
+                <Pressable
+                  key={amount}
+                  onPress={() => sendEnergyGift(amount)}
+                  disabled={!!sendingEnergy}
+                  style={[
+                    styles.energyChip,
+                    { borderColor: c.border, backgroundColor: c.cardAlt },
+                    sendingEnergy === amount && { borderColor: c.primary },
+                    !!sendingEnergy && styles.disabled,
+                  ]}
+                >
+                  <Text style={[styles.energyChipText, { color: c.text }]}>
+                    +{amount} energy
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
             <TextInput
               value={chatText}
               onChangeText={setChatText}
@@ -2220,6 +2278,22 @@ const styles = StyleSheet.create({
     color: "white",
     fontWeight: "800",
     fontSize: 12,
+  },
+  energyRow: {
+    flexDirection: "row",
+    gap: 6,
+    marginBottom: 8,
+    flexWrap: "wrap",
+  },
+  energyChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  energyChipText: {
+    fontSize: 11,
+    fontWeight: "800",
   },
   chatInput: {
     minHeight: 44,
