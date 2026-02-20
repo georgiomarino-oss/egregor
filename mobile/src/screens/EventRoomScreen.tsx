@@ -321,6 +321,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   // Presence
   const [presenceRows, setPresenceRows] = useState<PresenceRow[]>([]);
   const [isJoined, setIsJoined] = useState(false);
+  const [isJoiningLive, setIsJoiningLive] = useState(false);
   const [isLeavingLive, setIsLeavingLive] = useState(false);
   const [presenceMsg, setPresenceMsg] = useState("");
   const [presenceErr, setPresenceErr] = useState("");
@@ -1314,8 +1315,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       Alert.alert("Missing event", "This screen was opened without a valid event id.");
       return;
     }
+    if (isJoiningLive || isLeavingLive) return;
 
     try {
+      setIsJoiningLive(true);
       setPresenceErr("");
       setPresenceMsg("");
 
@@ -1339,11 +1342,22 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       await loadPresence();
     } catch (e: any) {
       setPresenceErr(e?.message ?? "Failed to join live.");
+    } finally {
+      setIsJoiningLive(false);
     }
-  }, [eventId, hasValidEventId, loadPresence, upsertPresencePreserveJoinedAt, ensureUserId]);
+  }, [
+    eventId,
+    hasValidEventId,
+    loadPresence,
+    upsertPresencePreserveJoinedAt,
+    ensureUserId,
+    isJoiningLive,
+    isLeavingLive,
+  ]);
 
   const handleLeaveLive = useCallback(async () => {
     if (!hasValidEventId) return;
+    if (isJoiningLive || isLeavingLive) return;
     const wasJoined = isJoined;
 
     try {
@@ -1385,7 +1399,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     } finally {
       setIsLeavingLive(false);
     }
-  }, [eventId, hasValidEventId, loadPresence, ensureUserId, isJoined]);
+  }, [eventId, hasValidEventId, loadPresence, ensureUserId, isJoined, isJoiningLive, isLeavingLive]);
 
   const handleToggleAutoJoinGlobal = useCallback(async (next: boolean) => {
     setAutoJoinGlobalEnabled(next);
@@ -1783,12 +1797,32 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         ) : null}
 
         <View style={styles.row}>
-          <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, isJoined && styles.disabled]} onPress={handleJoinLive} disabled={isJoined}>
-            <Text style={styles.btnText}>Join live</Text>
+          <Pressable
+            style={[
+              styles.btn,
+              styles.btnPrimary,
+              { backgroundColor: c.primary },
+              (isJoined || isJoiningLive || isLeavingLive) && styles.disabled,
+            ]}
+            onPress={handleJoinLive}
+            disabled={isJoined || isJoiningLive || isLeavingLive}
+          >
+            <Text style={styles.btnText}>{isJoiningLive ? "Joining..." : "Join live"}</Text>
           </Pressable>
 
-          <Pressable style={[styles.btn, styles.btnGhost, { borderColor: c.border }, !isJoined && styles.disabled]} onPress={handleLeaveLive} disabled={!isJoined}>
-            <Text style={[styles.btnGhostText, { color: c.text }]}>Leave live</Text>
+          <Pressable
+            style={[
+              styles.btn,
+              styles.btnGhost,
+              { borderColor: c.border },
+              (!isJoined || isJoiningLive || isLeavingLive) && styles.disabled,
+            ]}
+            onPress={handleLeaveLive}
+            disabled={!isJoined || isJoiningLive || isLeavingLive}
+          >
+            <Text style={[styles.btnGhostText, { color: c.text }]}>
+              {isLeavingLive ? "Leaving..." : "Leave live"}
+            </Text>
           </Pressable>
 
           <Pressable style={[styles.btn, styles.btnGhost, { borderColor: c.border }]} onPress={loadEventRoom}>
