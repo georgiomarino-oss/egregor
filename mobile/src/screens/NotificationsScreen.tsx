@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -13,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
+import { supabase } from "../supabase/client";
 import type { RootStackParamList } from "../types";
 import {
   getUnreadNotificationCount,
@@ -55,6 +56,8 @@ export default function NotificationsScreen() {
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [readIds, setReadIds] = useState<string[]>([]);
+  const loadInFlightRef = useRef(false);
+  const queuedLoadRef = useRef(false);
 
   const readSet = useMemo(() => new Set(readIds), [readIds]);
   const unreadCount = useMemo(
@@ -87,6 +90,11 @@ export default function NotificationsScreen() {
   }, []);
 
   const load = useCallback(async () => {
+    if (loadInFlightRef.current) {
+      queuedLoadRef.current = true;
+      return;
+    }
+    loadInFlightRef.current = true;
     setLoading(true);
     try {
       const [nextItems, nextRead] = await Promise.all([listNotifications(), readNotificationIds()]);
@@ -94,6 +102,11 @@ export default function NotificationsScreen() {
       setReadIds(nextRead);
     } finally {
       setLoading(false);
+      loadInFlightRef.current = false;
+      if (queuedLoadRef.current) {
+        queuedLoadRef.current = false;
+        void load();
+      }
     }
   }, []);
 
@@ -107,7 +120,39 @@ export default function NotificationsScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      let disposed = false;
+      let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
+      const scheduleRefresh = () => {
+        if (disposed || refreshTimeout) return;
+        refreshTimeout = setTimeout(() => {
+          refreshTimeout = null;
+          if (disposed) return;
+          void load();
+        }, 1200);
+      };
+
       void load();
+      const intervalId = setInterval(() => {
+        void load();
+      }, 30_000);
+
+      const realtime = supabase
+        .channel("notifications:refresh")
+        .on("postgres_changes", { event: "*", schema: "public", table: "events" }, scheduleRefresh)
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "event_messages" },
+          scheduleRefresh
+        )
+        .on("postgres_changes", { event: "*", schema: "public", table: "event_presence" }, scheduleRefresh)
+        .subscribe();
+
+      return () => {
+        disposed = true;
+        clearInterval(intervalId);
+        if (refreshTimeout) clearTimeout(refreshTimeout);
+        supabase.removeChannel(realtime);
+      };
     }, [load])
   );
 
@@ -239,4 +284,3 @@ const styles = StyleSheet.create({
   dimmed: { opacity: 0.5 },
   empty: { paddingVertical: 24, alignItems: "center", justifyContent: "center" },
 });
-
