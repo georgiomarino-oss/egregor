@@ -23,8 +23,37 @@ type Props = {
   navigation?: any;
 };
 
+const RESYNC_MS = 60_000;
+
+function upsertScriptRow(rows: ScriptRow[], next: ScriptRow): ScriptRow[] {
+  const idx = rows.findIndex((r) => r.id === next.id);
+  if (idx < 0) return [...rows, next];
+  const copy = [...rows];
+  copy[idx] = next;
+  return copy;
+}
+
+function removeScriptRow(rows: ScriptRow[], scriptId: string): ScriptRow[] {
+  if (!scriptId) return rows;
+  return rows.filter((r) => r.id !== scriptId);
+}
+
+function upsertEventRow(rows: EventRow[], next: EventRow): EventRow[] {
+  const idx = rows.findIndex((r) => r.id === next.id);
+  if (idx < 0) return [...rows, next];
+  const copy = [...rows];
+  copy[idx] = next;
+  return copy;
+}
+
+function removeEventRow(rows: EventRow[], eventId: string): EventRow[] {
+  if (!eventId) return rows;
+  return rows.filter((r) => r.id !== eventId);
+}
+
 export default function ScriptsScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(false);
+  const [myUserId, setMyUserId] = useState("");
 
   // Create script form
   const [title, setTitle] = useState("Peace Circle Script");
@@ -78,6 +107,19 @@ export default function ScriptsScreen({ navigation }: Props) {
     setScripts((data ?? []) as ScriptRow[]);
   }, []);
 
+  const loadMyUserId = useCallback(async () => {
+    const {
+      data: { user },
+      error: userErr,
+    } = await supabase.auth.getUser();
+
+    if (userErr || !user) {
+      setMyUserId("");
+      return;
+    }
+    setMyUserId(user.id);
+  }, []);
+
   const loadMyHostedEvents = useCallback(async () => {
     const {
       data: { user },
@@ -102,15 +144,91 @@ export default function ScriptsScreen({ navigation }: Props) {
   const refreshAll = useCallback(async () => {
     setLoading(true);
     try {
-      await Promise.all([loadScripts(), loadMyHostedEvents()]);
+      await Promise.all([loadMyUserId(), loadScripts(), loadMyHostedEvents()]);
     } finally {
       setLoading(false);
     }
-  }, [loadMyHostedEvents, loadScripts]);
+  }, [loadMyHostedEvents, loadMyUserId, loadScripts]);
 
   useEffect(() => {
     refreshAll();
   }, [refreshAll]);
+
+  useEffect(() => {
+    let disposed = false;
+    const resync = () => {
+      if (disposed) return;
+      void loadScripts();
+    };
+
+    resync();
+    const intervalId = setInterval(resync, RESYNC_MS);
+
+    const channel = supabase
+      .channel("scripts:list")
+      .on("postgres_changes", { event: "*", schema: "public", table: "scripts" }, (payload) => {
+        const eventType = String((payload as any).eventType ?? "");
+        const next = ((payload as any).new ?? null) as ScriptRow | null;
+        const prev = ((payload as any).old ?? null) as ScriptRow | null;
+
+        setScripts((rows) => {
+          if (eventType === "DELETE") {
+            const scriptId = String((prev as any)?.id ?? "");
+            return removeScriptRow(rows, scriptId);
+          }
+          if (!next) return rows;
+          return upsertScriptRow(rows, next);
+        });
+      })
+      .subscribe();
+
+    return () => {
+      disposed = true;
+      clearInterval(intervalId);
+      supabase.removeChannel(channel);
+    };
+  }, [loadScripts]);
+
+  useEffect(() => {
+    if (!myUserId) return;
+
+    let disposed = false;
+    const resync = () => {
+      if (disposed) return;
+      void loadMyHostedEvents();
+    };
+
+    resync();
+    const intervalId = setInterval(resync, RESYNC_MS);
+
+    const channel = supabase
+      .channel(`events:hosted:${myUserId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "events", filter: `host_user_id=eq.${myUserId}` },
+        (payload) => {
+          const eventType = String((payload as any).eventType ?? "");
+          const next = ((payload as any).new ?? null) as EventRow | null;
+          const prev = ((payload as any).old ?? null) as EventRow | null;
+
+          setMyEvents((rows) => {
+            if (eventType === "DELETE") {
+              const eventId = String((prev as any)?.id ?? "");
+              return removeEventRow(rows, eventId);
+            }
+            if (!next) return rows;
+            return upsertEventRow(rows, next);
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      disposed = true;
+      clearInterval(intervalId);
+      supabase.removeChannel(channel);
+    };
+  }, [myUserId, loadMyHostedEvents]);
 
   const handleCreateScript = useCallback(async () => {
     const mins = Number(durationMinutes);
