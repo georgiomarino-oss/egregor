@@ -947,6 +947,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     setChatText("");
     setSending(false);
     setSendingEnergy(null);
+    setIsJoiningLive(false);
+    setIsLeavingLive(false);
     setPresenceMsg("");
     setPresenceErr("");
     setRunErr("");
@@ -1416,6 +1418,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const hostName = hostId ? displayNameForUserId(hostId) : "(unknown)";
 
   const handleJoinLive = useCallback(async () => {
+    const targetEventId = eventId;
+    const isStale = () => activeEventIdRef.current !== targetEventId;
     if (!hasValidEventId) {
       Alert.alert("Missing event", "This screen was opened without a valid event id.");
       return;
@@ -1432,6 +1436,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         error,
       } = await supabase.auth.getUser();
       const uid = user?.id ?? (await ensureUserId());
+      if (isStale()) return;
 
       if (error || !uid) {
         Alert.alert("Not signed in", "Please sign in first.");
@@ -1439,16 +1444,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       }
 
       await upsertPresencePreserveJoinedAt(uid);
+      if (isStale()) return;
 
       setIsJoined(true);
       setPresenceMsg("You joined live.");
-      await writeJoinPref(eventId, true);
+      await writeJoinPref(targetEventId, true);
       setShouldAutoJoinForEvent(true);
       await loadPresence();
     } catch (e: any) {
-      setPresenceErr(e?.message ?? "Failed to join live.");
+      if (!isStale()) setPresenceErr(e?.message ?? "Failed to join live.");
     } finally {
-      setIsJoiningLive(false);
+      if (!isStale()) setIsJoiningLive(false);
     }
   }, [
     eventId,
@@ -1461,6 +1467,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   ]);
 
   const handleLeaveLive = useCallback(async () => {
+    const targetEventId = eventId;
+    const isStale = () => activeEventIdRef.current !== targetEventId;
     if (!hasValidEventId) return;
     if (isJoiningLive || isLeavingLive) return;
     const wasJoined = isJoined;
@@ -1475,6 +1483,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         data: { user },
       } = await supabase.auth.getUser();
       const uid = user?.id ?? (await ensureUserId());
+      if (isStale()) return;
 
       if (!uid) {
         setIsJoined(wasJoined);
@@ -1495,14 +1504,16 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       }
 
       setPresenceMsg("You left live.");
-      await writeJoinPref(eventId, false);
+      await writeJoinPref(targetEventId, false);
       setShouldAutoJoinForEvent(false);
       await loadPresence();
     } catch (e: any) {
-      setIsJoined(wasJoined);
-      setPresenceErr(e?.message ?? "Failed to leave.");
+      if (!isStale()) {
+        setIsJoined(wasJoined);
+        setPresenceErr(e?.message ?? "Failed to leave.");
+      }
     } finally {
-      setIsLeavingLive(false);
+      if (!isStale()) setIsLeavingLive(false);
     }
   }, [eventId, hasValidEventId, loadPresence, ensureUserId, isJoined, isJoiningLive, isLeavingLive]);
 
