@@ -371,7 +371,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const [runReady, setRunReady] = useState(false);
   const [runErr, setRunErr] = useState("");
 
-  // Local ticker for UI countdown refresh
+  // Local ticker for UI countdown/presence "ago" labels
   const [tick, setTick] = useState(0);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -870,7 +870,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   useEffect(() => {
     if (tickRef.current) clearInterval(tickRef.current);
-    tickRef.current = setInterval(() => setTick((t) => t + 1), 500);
+    tickRef.current = setInterval(() => setTick((t) => t + 1), 1000);
     return () => {
       if (tickRef.current) clearInterval(tickRef.current);
       tickRef.current = null;
