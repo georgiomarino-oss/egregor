@@ -223,6 +223,36 @@ function mergeAndTrimMessages(
   return merged.slice(merged.length - maxRows);
 }
 
+function reconcileSnapshotMessages(
+  current: EventMessageRow[],
+  snapshot: EventMessageRow[],
+  maxRows: number
+): EventMessageRow[] {
+  const snapshotSorted = sortMessagesByCreatedAt(snapshot).slice(-maxRows);
+  if (snapshotSorted.length === 0) return [];
+
+  const snapshotIds = new Set(
+    snapshotSorted
+      .map((m: any) => String((m as any)?.id ?? ""))
+      .filter((id: string) => !!id)
+  );
+  const newestSnapshotMs = snapshotSorted.reduce(
+    (max, row) => Math.max(max, safeTimeMs(row.created_at)),
+    0
+  );
+
+  // Keep local realtime rows that are newer than the fetched snapshot window.
+  const recentLocal = current.filter((row: any) => {
+    const id = String((row as any)?.id ?? "");
+    if (id && snapshotIds.has(id)) return false;
+    return safeTimeMs((row as any)?.created_at) > newestSnapshotMs;
+  });
+
+  const merged = sortMessagesByCreatedAt([...snapshotSorted, ...recentLocal]);
+  if (merged.length <= maxRows) return merged;
+  return merged.slice(merged.length - maxRows);
+}
+
 /**
  * Local preferences:
  * - Global: prefs:autoJoinLive (default true)
@@ -644,7 +674,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
     const rows = (data ?? []) as EventMessageRow[];
     setMessages((prev) => {
-      const merged = mergeAndTrimMessages(prev, rows, 200);
+      const merged = reconcileSnapshotMessages(prev, rows, 200);
       messageIdsRef.current = new Set(
         merged
           .map((m: any) => String((m as any)?.id ?? ""))
