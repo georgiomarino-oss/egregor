@@ -336,6 +336,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
   const eventId = route.params?.eventId ?? "";
   const hasValidEventId = !!eventId && isLikelyUuid(eventId);
+  const activeEventIdRef = useRef(eventId);
+  useEffect(() => {
+    activeEventIdRef.current = eventId;
+  }, [eventId]);
 
   const [loading, setLoading] = useState(true);
   const [event, setEvent] = useState<EventRow | null>(null);
@@ -582,6 +586,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       logTelemetry("presence_resync_error", { reason, message: error.message });
       return;
     }
+    if (activeEventIdRef.current !== eventId) return;
 
     const rows = (data ?? []) as PresenceRow[];
     setPresenceRows(rows);
@@ -671,6 +676,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       logTelemetry("chat_resync_error", { reason, message: error.message });
       return;
     }
+    if (activeEventIdRef.current !== eventId) return;
 
     const rows = (data ?? []) as EventMessageRow[];
     setMessages((prev) => {
