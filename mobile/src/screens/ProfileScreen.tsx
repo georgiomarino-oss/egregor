@@ -1128,18 +1128,10 @@ export default function ProfileScreen() {
                   ))}
                 </View>
               ) : (
-                <Pressable
-                  style={[
-                    styles.btn,
-                    styles.btnPrimary,
-                    { backgroundColor: c.primary },
-                    billingActionBusy && styles.disabled,
-                  ]}
-                  onPress={() => handlePurchaseCircle()}
-                  disabled={billingActionBusy}
-                >
-                  <Text style={styles.btnText}>Activate Circle</Text>
-                </Pressable>
+                <Text style={[styles.meta, { color: c.textMuted }]}>
+                  No subscription packages are available yet. Import products into RevenueCat from App
+                  Store Connect and Google Play Console, then tap Refresh status.
+                </Text>
               )}
               <View style={styles.row}>
                 <Pressable
