@@ -14,6 +14,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { supabase } from "../supabase/client";
+import { useAppState } from "../state";
+import { getAppColors } from "../theme/appearance";
 import type { Database } from "../types/db";
 
 type ScriptRow = Database["public"]["Tables"]["scripts"]["Row"];
@@ -113,6 +115,8 @@ function buildDefaultSections(durationMinutes: number, intentionText: string) {
 
 export default function ScriptsScreen() {
   const navigation = useNavigation<any>();
+  const { theme } = useAppState();
+  const c = useMemo(() => getAppColors(theme), [theme]);
   const [loading, setLoading] = useState(false);
   const [myUserId, setMyUserId] = useState("");
 
@@ -657,45 +661,45 @@ export default function ScriptsScreen() {
   }, [navigation]);
 
   const renderScript = ({ item }: { item: ScriptRow }) => (
-    <View style={styles.card}>
-      <Text style={styles.cardTitle}>{(item as any).title ?? "Untitled"}</Text>
+    <View style={[styles.card, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+      <Text style={[styles.cardTitle, { color: c.text }]}>{(item as any).title ?? "Untitled"}</Text>
 
-      {"tone" in (item as any) ? <Text style={styles.meta}>Tone: {(item as any).tone}</Text> : null}
+      {"tone" in (item as any) ? <Text style={[styles.meta, { color: c.textMuted }]}>Tone: {(item as any).tone}</Text> : null}
 
       {"duration_minutes" in (item as any) ? (
-        <Text style={styles.meta}>Duration: {(item as any).duration_minutes} min</Text>
+        <Text style={[styles.meta, { color: c.textMuted }]}>Duration: {(item as any).duration_minutes} min</Text>
       ) : null}
 
       {"intention" in (item as any) ? (
-        <Text style={styles.meta} numberOfLines={2}>
+        <Text style={[styles.meta, { color: c.textMuted }]} numberOfLines={2}>
           Intention: {(item as any).intention}
         </Text>
       ) : null}
 
-      <Text style={styles.meta}>
+      <Text style={[styles.meta, { color: c.textMuted }]}>
         Used by hosted events: {hostedUsageByScriptId[item.id] ?? 0}
       </Text>
 
       <View style={styles.row}>
         <Pressable
           onPress={() => openEditScript(item)}
-          style={[styles.btn, styles.btnGhost, loading && styles.disabled]}
+          style={[styles.btn, styles.btnGhost, { borderColor: c.border }, loading && styles.disabled]}
           disabled={loading}
         >
-          <Text style={styles.btnGhostText}>Edit</Text>
+          <Text style={[styles.btnGhostText, { color: c.textMuted }]}>Edit</Text>
         </Pressable>
 
         <Pressable
           onPress={() => handleDuplicateScript(item)}
-          style={[styles.btn, styles.btnGhost, loading && styles.disabled]}
+          style={[styles.btn, styles.btnGhost, { borderColor: c.border }, loading && styles.disabled]}
           disabled={loading}
         >
-          <Text style={styles.btnGhostText}>Duplicate</Text>
+          <Text style={[styles.btnGhostText, { color: c.textMuted }]}>Duplicate</Text>
         </Pressable>
 
         <Pressable
           onPress={() => openAttachForScript(item.id)}
-          style={[styles.btn, styles.btnPrimary, loading && styles.disabled]}
+          style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, loading && styles.disabled]}
           disabled={loading}
         >
           <Text style={styles.btnText}>Attach to event</Text>
@@ -710,7 +714,7 @@ export default function ScriptsScreen() {
         </Pressable>
       </View>
 
-      <Text style={styles.metaSmall}>ID: {item.id}</Text>
+      <Text style={[styles.metaSmall, { color: c.textMuted }]}>ID: {item.id}</Text>
     </View>
   );
 
@@ -723,17 +727,17 @@ export default function ScriptsScreen() {
     const attachLabel = isUsingSelected ? "Attached" : item.script_id ? "Replace" : "Attach";
 
     return (
-      <View style={styles.eventCard}>
-        <Text style={styles.eventTitle} numberOfLines={1}>
+      <View style={[styles.eventCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+        <Text style={[styles.eventTitle, { color: c.text }]} numberOfLines={1}>
           {item.title}
         </Text>
 
-        <Text style={styles.eventMeta} numberOfLines={1}>
+        <Text style={[styles.eventMeta, { color: c.textMuted }]} numberOfLines={1}>
           {new Date(item.start_time_utc).toLocaleString()} ({item.timezone ?? "UTC"})
         </Text>
 
-        <Text style={styles.eventMeta} numberOfLines={1}>
-          Current: <Text style={{ color: "white", fontWeight: "800" }}>{currentTitle}</Text>
+        <Text style={[styles.eventMeta, { color: c.textMuted }]} numberOfLines={1}>
+          Current: <Text style={{ color: c.text, fontWeight: "800" }}>{currentTitle}</Text>
         </Text>
 
         <View style={styles.row}>
@@ -741,12 +745,14 @@ export default function ScriptsScreen() {
             onPress={() => attachToEvent(item)}
             style={[
               styles.btn,
-              isUsingSelected ? styles.btnGhost : styles.btnPrimary,
+              isUsingSelected
+                ? [styles.btnGhost, { borderColor: c.border }]
+                : [styles.btnPrimary, { backgroundColor: c.primary }],
               (loading || !attachScriptId) && styles.disabled,
             ]}
             disabled={loading || !attachScriptId || isUsingSelected}
           >
-            <Text style={isUsingSelected ? styles.btnGhostText : styles.btnText}>
+            <Text style={isUsingSelected ? [styles.btnGhostText, { color: c.textMuted }] : styles.btnText}>
               {attachLabel}
             </Text>
           </Pressable>
@@ -764,7 +770,7 @@ export default function ScriptsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]}>
       <FlatList
         data={scripts}
         keyExtractor={(item) => item.id}
@@ -775,61 +781,61 @@ export default function ScriptsScreen() {
         ListHeaderComponent={
           <View style={{ gap: 12 }}>
             <View style={styles.headerRow}>
-              <Text style={styles.h1}>Scripts</Text>
+              <Text style={[styles.h1, { color: c.text }]}>Scripts</Text>
 
-              <Pressable onPress={goProfile} style={styles.headerBtn}>
-                <Text style={styles.headerBtnText}>Profile</Text>
+              <Pressable onPress={goProfile} style={[styles.headerBtn, { borderColor: c.border }]}>
+                <Text style={[styles.headerBtnText, { color: c.textMuted }]}>Profile</Text>
               </Pressable>
             </View>
 
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Create Script</Text>
+            <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+              <Text style={[styles.sectionTitle, { color: c.text }]}>Create Script</Text>
 
-              <Text style={styles.label}>Title</Text>
+              <Text style={[styles.label, { color: c.textMuted }]}>Title</Text>
               <TextInput
                 value={title}
                 onChangeText={setTitle}
-                style={styles.input}
+                style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
                 placeholder="Script title"
-                placeholderTextColor="#6B7BB2"
+                placeholderTextColor={c.textMuted}
                 maxLength={SCRIPT_TITLE_MAX}
               />
-              <Text style={styles.meta}>{title.trim().length}/{SCRIPT_TITLE_MAX}</Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>{title.trim().length}/{SCRIPT_TITLE_MAX}</Text>
 
-              <Text style={styles.label}>Intention</Text>
+              <Text style={[styles.label, { color: c.textMuted }]}>Intention</Text>
               <TextInput
                 value={intention}
                 onChangeText={setIntention}
-                style={[styles.input, styles.multi]}
+                style={[styles.input, styles.multi, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
                 multiline
                 placeholder="What is this script for?"
-                placeholderTextColor="#6B7BB2"
+                placeholderTextColor={c.textMuted}
                 maxLength={SCRIPT_INTENTION_MAX}
               />
-              <Text style={styles.meta}>{intention.trim().length}/{SCRIPT_INTENTION_MAX}</Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>{intention.trim().length}/{SCRIPT_INTENTION_MAX}</Text>
 
               <View style={styles.row}>
                 <View style={{ flex: 1, minWidth: 140 }}>
-                  <Text style={styles.label}>Duration (minutes)</Text>
+                  <Text style={[styles.label, { color: c.textMuted }]}>Duration (minutes)</Text>
                   <TextInput
                     value={durationMinutes}
                     onChangeText={setDurationMinutes}
                     keyboardType="numeric"
-                    style={styles.input}
+                    style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
                     placeholder="20"
-                    placeholderTextColor="#6B7BB2"
+                    placeholderTextColor={c.textMuted}
                     maxLength={3}
                   />
                 </View>
 
                 <View style={{ flex: 1, minWidth: 140 }}>
-                  <Text style={styles.label}>Tone</Text>
+                  <Text style={[styles.label, { color: c.textMuted }]}>Tone</Text>
                   <TextInput
                     value={tone}
                     onChangeText={setTone}
-                    style={styles.input}
+                    style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
                     placeholder="calm"
-                    placeholderTextColor="#6B7BB2"
+                    placeholderTextColor={c.textMuted}
                     maxLength={SCRIPT_TONE_MAX}
                   />
                 </View>
@@ -838,7 +844,7 @@ export default function ScriptsScreen() {
               <View style={styles.row}>
                 <Pressable
                   onPress={handleCreateScript}
-                  style={[styles.btn, styles.btnPrimary, loading && styles.disabled]}
+                  style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, loading && styles.disabled]}
                   disabled={loading}
                 >
                   <Text style={styles.btnText}>{loading ? "Working..." : "Create script"}</Text>
@@ -846,24 +852,24 @@ export default function ScriptsScreen() {
 
                 <Pressable
                   onPress={refreshAll}
-                  style={[styles.btn, styles.btnGhost, loading && styles.disabled]}
+                  style={[styles.btn, styles.btnGhost, { borderColor: c.border }, loading && styles.disabled]}
                   disabled={loading}
                 >
-                  <Text style={styles.btnGhostText}>Refresh</Text>
+                  <Text style={[styles.btnGhostText, { color: c.textMuted }]}>Refresh</Text>
                 </Pressable>
               </View>
             </View>
 
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Attach Script to Event</Text>
-              <Text style={styles.meta}>
+            <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+              <Text style={[styles.sectionTitle, { color: c.text }]}>Attach Script to Event</Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>
                 Tap "Attach to event" on a script, then choose one of your hosted events.
               </Text>
             </View>
           </View>
         }
         ListEmptyComponent={
-          <Text style={styles.empty}>{loading ? "Loading..." : "No scripts yet."}</Text>
+          <Text style={[styles.empty, { color: c.textMuted }]}>{loading ? "Loading..." : "No scripts yet."}</Text>
         }
       />
 
@@ -874,17 +880,17 @@ export default function ScriptsScreen() {
         onRequestClose={() => setAttachOpen(false)}
       >
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, { backgroundColor: c.background, borderColor: c.border }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Attach Script</Text>
-              <Pressable onPress={() => setAttachOpen(false)} style={styles.modalClose}>
+              <Text style={[styles.modalTitle, { color: c.text }]}>Attach Script</Text>
+              <Pressable onPress={() => setAttachOpen(false)} style={[styles.modalClose, { backgroundColor: c.cardAlt }]}>
                 <Text style={styles.btnText}>Close</Text>
               </Pressable>
             </View>
 
-            <Text style={styles.modalMeta}>
+            <Text style={[styles.modalMeta, { color: c.textMuted }]}>
               Selected script:{" "}
-              <Text style={{ fontWeight: "800", color: "white" }}>
+              <Text style={{ fontWeight: "800", color: c.text }}>
                 {selectedScript ? (selectedScript as any).title : "(none)"}
               </Text>
             </Text>
@@ -892,13 +898,13 @@ export default function ScriptsScreen() {
             <TextInput
               value={eventQuery}
               onChangeText={setEventQuery}
-              style={styles.input}
+              style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
               placeholder="Search your events (title, description, current script)"
-              placeholderTextColor="#6B7BB2"
+              placeholderTextColor={c.textMuted}
             />
 
             {myEvents.length === 0 ? (
-              <Text style={styles.empty}>No hosted events found. Create one in Events first.</Text>
+              <Text style={[styles.empty, { color: c.textMuted }]}>No hosted events found. Create one in Events first.</Text>
             ) : (
               <FlatList
                 data={filteredEvents}
@@ -918,59 +924,63 @@ export default function ScriptsScreen() {
         onRequestClose={() => setEditOpen(false)}
       >
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, { backgroundColor: c.background, borderColor: c.border }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Edit Script</Text>
-              <Pressable onPress={() => setEditOpen(false)} style={styles.modalClose} disabled={loading}>
+              <Text style={[styles.modalTitle, { color: c.text }]}>Edit Script</Text>
+              <Pressable
+                onPress={() => setEditOpen(false)}
+                style={[styles.modalClose, { backgroundColor: c.cardAlt }]}
+                disabled={loading}
+              >
                 <Text style={styles.btnText}>Close</Text>
               </Pressable>
             </View>
 
-            <Text style={styles.label}>Title</Text>
+            <Text style={[styles.label, { color: c.textMuted }]}>Title</Text>
             <TextInput
               value={editTitle}
               onChangeText={setEditTitle}
-              style={styles.input}
+              style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
               placeholder="Script title"
-              placeholderTextColor="#6B7BB2"
+              placeholderTextColor={c.textMuted}
               maxLength={SCRIPT_TITLE_MAX}
             />
-            <Text style={styles.meta}>{editTitle.trim().length}/{SCRIPT_TITLE_MAX}</Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>{editTitle.trim().length}/{SCRIPT_TITLE_MAX}</Text>
 
-            <Text style={styles.label}>Intention</Text>
+            <Text style={[styles.label, { color: c.textMuted }]}>Intention</Text>
             <TextInput
               value={editIntention}
               onChangeText={setEditIntention}
-              style={[styles.input, styles.multi]}
+              style={[styles.input, styles.multi, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
               multiline
               placeholder="What is this script for?"
-              placeholderTextColor="#6B7BB2"
+              placeholderTextColor={c.textMuted}
               maxLength={SCRIPT_INTENTION_MAX}
             />
-            <Text style={styles.meta}>{editIntention.trim().length}/{SCRIPT_INTENTION_MAX}</Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>{editIntention.trim().length}/{SCRIPT_INTENTION_MAX}</Text>
 
             <View style={styles.row}>
               <View style={{ flex: 1, minWidth: 140 }}>
-                <Text style={styles.label}>Duration (minutes)</Text>
+                <Text style={[styles.label, { color: c.textMuted }]}>Duration (minutes)</Text>
                 <TextInput
                   value={editDurationMinutes}
                   onChangeText={setEditDurationMinutes}
                   keyboardType="numeric"
-                  style={styles.input}
+                  style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
                   placeholder="20"
-                  placeholderTextColor="#6B7BB2"
+                  placeholderTextColor={c.textMuted}
                   maxLength={3}
                 />
               </View>
 
               <View style={{ flex: 1, minWidth: 140 }}>
-                <Text style={styles.label}>Tone</Text>
+                <Text style={[styles.label, { color: c.textMuted }]}>Tone</Text>
                 <TextInput
                   value={editTone}
                   onChangeText={setEditTone}
-                  style={styles.input}
+                  style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
                   placeholder="calm"
-                  placeholderTextColor="#6B7BB2"
+                  placeholderTextColor={c.textMuted}
                   maxLength={SCRIPT_TONE_MAX}
                 />
               </View>
@@ -979,7 +989,7 @@ export default function ScriptsScreen() {
             <View style={styles.row}>
               <Pressable
                 onPress={saveScriptEdit}
-                style={[styles.btn, styles.btnPrimary, loading && styles.disabled]}
+                style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, loading && styles.disabled]}
                 disabled={loading || !editingScript}
               >
                 <Text style={styles.btnText}>{loading ? "Working..." : "Save changes"}</Text>
@@ -1115,4 +1125,5 @@ const styles = StyleSheet.create({
   eventTitle: { color: "white", fontSize: 14, fontWeight: "800" },
   eventMeta: { color: "#93A3D9", fontSize: 12, marginTop: 4 },
 });
+
 

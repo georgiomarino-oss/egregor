@@ -3,11 +3,13 @@ import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-nativ
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../supabase/client";
 import { useAppState } from "../state";
+import { getAppColors } from "../theme/appearance";
 
 type Mode = "signin" | "signup";
 
 export default function AuthScreen() {
-  const { user, signOut } = useAppState();
+  const { user, signOut, theme } = useAppState();
+  const c = useMemo(() => getAppColors(theme), [theme]);
 
   const [mode, setMode] = useState<Mode>("signin");
   const [loading, setLoading] = useState(false);
@@ -74,23 +76,23 @@ export default function AuthScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
       <View style={styles.container}>
-        <Text style={styles.h1}>Egregor</Text>
-        <Text style={styles.sub}>
+        <Text style={[styles.h1, { color: c.text }]}>Egregor</Text>
+        <Text style={[styles.sub, { color: c.textMuted }]}>
           Sign in to create events, generate scripts, and join live presence.
         </Text>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Account</Text>
+        <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={[styles.sectionTitle, { color: c.text }]}>Account</Text>
 
-          <Text style={styles.meta}>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
             Status: <Text style={user ? styles.ok : styles.warn}>{user ? "Signed in" : "Signed out"}</Text>
           </Text>
 
           {user ? (
             <>
-              <Text style={styles.meta}>Signed in as: {user.email ?? user.id}</Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>Signed in as: {user.email ?? user.id}</Text>
 
               <Pressable
                 style={[styles.btn, styles.btnDanger, loading && styles.disabled]}
@@ -104,7 +106,13 @@ export default function AuthScreen() {
             <>
               <View style={styles.row}>
                 <Pressable
-                  style={[styles.pill, mode === "signin" ? styles.pillActive : styles.pillInactive]}
+                  style={[
+                    styles.pill,
+                    { borderColor: c.border },
+                    mode === "signin"
+                      ? [styles.pillActive, { backgroundColor: c.cardAlt, borderColor: c.primary }]
+                      : styles.pillInactive,
+                  ]}
                   onPress={() => {
                     setMode("signin");
                     setConfirmPassword("");
@@ -115,7 +123,13 @@ export default function AuthScreen() {
                 </Pressable>
 
                 <Pressable
-                  style={[styles.pill, mode === "signup" ? styles.pillActive : styles.pillInactive]}
+                  style={[
+                    styles.pill,
+                    { borderColor: c.border },
+                    mode === "signup"
+                      ? [styles.pillActive, { backgroundColor: c.cardAlt, borderColor: c.primary }]
+                      : styles.pillInactive,
+                  ]}
                   onPress={() => {
                     setMode("signup");
                     setConfirmPassword("");
@@ -126,44 +140,44 @@ export default function AuthScreen() {
                 </Pressable>
               </View>
 
-              <Text style={styles.label}>Email</Text>
+              <Text style={[styles.label, { color: c.textMuted }]}>Email</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
                 value={email}
                 onChangeText={onChangeEmail}
                 autoCapitalize="none"
                 autoCorrect={false}
                 keyboardType="email-address"
                 placeholder="you@example.com"
-                placeholderTextColor="#6F7FB2"
+                placeholderTextColor={c.textMuted}
               />
 
-              <Text style={styles.label}>Password (min 6 chars)</Text>
+              <Text style={[styles.label, { color: c.textMuted }]}>Password (min 6 chars)</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
                 value={password}
                 onChangeText={setPassword}
                 secureTextEntry
                 placeholder="********"
-                placeholderTextColor="#6F7FB2"
+                placeholderTextColor={c.textMuted}
               />
 
               {mode === "signup" ? (
                 <>
-                  <Text style={styles.label}>Confirm password</Text>
+                  <Text style={[styles.label, { color: c.textMuted }]}>Confirm password</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
                     value={confirmPassword}
                     onChangeText={setConfirmPassword}
                     secureTextEntry
                     placeholder="********"
-                    placeholderTextColor="#6F7FB2"
+                    placeholderTextColor={c.textMuted}
                   />
                 </>
               ) : null}
 
               <Pressable
-                style={[styles.btn, styles.btnPrimary, !canSubmit && styles.disabled]}
+                style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, !canSubmit && styles.disabled]}
                 onPress={submit}
                 disabled={!canSubmit}
               >
@@ -172,7 +186,7 @@ export default function AuthScreen() {
                 </Text>
               </Pressable>
 
-              <Text style={styles.hint}>
+              <Text style={[styles.hint, { color: c.textMuted }]}>
                 Tip: if you disabled email confirmation in Supabase, Sign up should immediately sign you in.
               </Text>
             </>
