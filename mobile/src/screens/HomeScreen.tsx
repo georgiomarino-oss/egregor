@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { supabase } from "../supabase/client";
 import type { Database } from "../types/db";
@@ -35,6 +36,16 @@ type CommunityFeedItem = {
 
 const ACTIVE_WINDOW_MS = 90_000;
 const HOME_RESYNC_MS = 30_000;
+const KEY_PROFILE_PREFS = "profile:prefs:v1";
+type HomeLanguage = "English" | "Spanish" | "Portuguese" | "French";
+
+function normalizeLanguage(v: string): HomeLanguage {
+  const raw = v.trim().toLowerCase();
+  if (raw.startsWith("span")) return "Spanish";
+  if (raw.startsWith("port")) return "Portuguese";
+  if (raw.startsWith("fren")) return "French";
+  return "English";
+}
 
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -60,8 +71,35 @@ function formatClock(totalSeconds: number) {
   return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 }
 
-function buildSoloPrayer(intent: string) {
+function buildSoloPrayer(intent: string, language: HomeLanguage) {
   const core = intent.trim() || "peace and healing";
+  if (language === "Spanish") {
+    return [
+      `Inhala despacio y centra tu atencion en ${core}.`,
+      "Exhala y suaviza hombros, mandibula y respiracion.",
+      `Con cada inhalacion, invita claridad y compasion a ${core}.`,
+      "Con cada exhalacion, suelta el miedo y el apego al resultado.",
+      "Descansa en gratitud por lo que ya esta cambiando en tu vida.",
+    ];
+  }
+  if (language === "Portuguese") {
+    return [
+      `Inspire lentamente e concentre sua atencao em ${core}.`,
+      "Expire e relaxe ombros, mandibula e respiracao.",
+      `A cada inspiracao, convide clareza e compaixao para ${core}.`,
+      "A cada expiracao, solte o medo e o apego aos resultados.",
+      "Descanse em gratidao pelo que ja esta mudando em sua vida.",
+    ];
+  }
+  if (language === "French") {
+    return [
+      `Inspirez lentement et centrez votre attention sur ${core}.`,
+      "Expirez et relachez epaules, machoire et souffle.",
+      `A chaque inspiration, invitez clarte et compassion dans ${core}.`,
+      "A chaque expiration, liberez la peur et l'attachement au resultat.",
+      "Reposez-vous dans la gratitude pour ce qui change deja dans votre vie.",
+    ];
+  }
   return [
     `Breathe in slowly and center your awareness on ${core}.`,
     "Breathe out and soften your shoulders, jaw, and breath.",
@@ -74,7 +112,7 @@ function buildSoloPrayer(intent: string) {
 function truncate(text: string, max = 150) {
   const clean = text.trim();
   if (clean.length <= max) return clean;
-  return `${clean.slice(0, max - 1)}…`;
+  return `${clean.slice(0, max - 1)}...`;
 }
 
 export default function HomeScreen() {
@@ -88,6 +126,7 @@ export default function HomeScreen() {
   const [activeGlobalParticipants, setActiveGlobalParticipants] = useState(0);
   const [activeGlobalEvents, setActiveGlobalEvents] = useState(0);
   const [feedItems, setFeedItems] = useState<CommunityFeedItem[]>([]);
+  const [preferredLanguage, setPreferredLanguage] = useState<HomeLanguage>("English");
   const [soloOpen, setSoloOpen] = useState(false);
   const [soloIntent, setSoloIntent] = useState("peace, healing, and grounded courage");
   const [soloSecondsLeft, setSoloSecondsLeft] = useState(180);
@@ -113,7 +152,53 @@ export default function HomeScreen() {
   const activeNow = useMemo(() => {
     return liveEvents.reduce((sum, e) => sum + Number((e as any).active_count_snapshot ?? 0), 0);
   }, [liveEvents]);
-  const soloLines = useMemo(() => buildSoloPrayer(soloIntent), [soloIntent]);
+
+  const soloLines = useMemo(() => buildSoloPrayer(soloIntent, preferredLanguage), [soloIntent, preferredLanguage]);
+
+  const ui = useMemo(() => {
+    if (preferredLanguage === "Spanish") {
+      return {
+        hero: "Cual es tu intencion hoy?",
+        subtitle: "Unete a un circulo global sincronizado o inicia tu propio momento de enfoque.",
+        joinLive: "Unirse en vivo",
+        browseEvents: "Explorar eventos",
+        quickSolo: "Oracion individual rapida",
+        communityFeed: "Comunidad",
+        noShares: "Aun no hay mensajes publicos.",
+      };
+    }
+    if (preferredLanguage === "Portuguese") {
+      return {
+        hero: "Qual e a sua intencao hoje?",
+        subtitle: "Participe de um circulo global sincronizado ou inicie seu proprio momento de foco.",
+        joinLive: "Entrar ao vivo",
+        browseEvents: "Ver eventos",
+        quickSolo: "Oracao individual rapida",
+        communityFeed: "Comunidade",
+        noShares: "Ainda nao ha mensagens publicas.",
+      };
+    }
+    if (preferredLanguage === "French") {
+      return {
+        hero: "Quelle est votre intention aujourd'hui?",
+        subtitle: "Rejoignez un cercle mondial synchronise ou commencez votre propre moment de centrage.",
+        joinLive: "Rejoindre en direct",
+        browseEvents: "Parcourir les evenements",
+        quickSolo: "Priere solo rapide",
+        communityFeed: "Communaute",
+        noShares: "Pas encore de partages publics.",
+      };
+    }
+    return {
+      hero: "What is your intention today?",
+      subtitle: "Join a synchronized global circle or begin your own focused moment.",
+      joinLive: "Join Live Now",
+      browseEvents: "Browse Events",
+      quickSolo: "Quick Solo Prayer",
+      communityFeed: "Community Feed",
+      noShares: "No public shares yet.",
+    };
+  }, [preferredLanguage]);
 
   const loadHome = useCallback(async () => {
     setLoading(true);
@@ -204,11 +289,30 @@ export default function HomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void loadHome();
+      let disposed = false;
+      const run = async () => {
+        const raw = await AsyncStorage.getItem(KEY_PROFILE_PREFS);
+        if (disposed) return;
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            setPreferredLanguage(normalizeLanguage(String(parsed?.language ?? "English")));
+          } catch {
+            setPreferredLanguage("English");
+          }
+        } else {
+          setPreferredLanguage("English");
+        }
+        if (!disposed) await loadHome();
+      };
+      void run();
       const id = setInterval(() => {
         void loadHome();
       }, HOME_RESYNC_MS);
-      return () => clearInterval(id);
+      return () => {
+        disposed = true;
+        clearInterval(id);
+      };
     }, [loadHome])
   );
 
@@ -279,27 +383,25 @@ export default function HomeScreen() {
         ListHeaderComponent={
           <View style={styles.content}>
             <Text style={[styles.kicker, { color: c.textMuted }]}>EGREGOR</Text>
-            <Text style={[styles.hero, { color: c.text }]}>What is your intention today?</Text>
-            <Text style={[styles.subtitle, { color: c.text }]}>
-              Join a synchronized global circle or begin your own focused moment.
-            </Text>
+            <Text style={[styles.hero, { color: c.text }]}>{ui.hero}</Text>
+            <Text style={[styles.subtitle, { color: c.text }]}>{ui.subtitle}</Text>
 
             <View style={styles.row}>
               <Pressable style={[styles.primaryBtn, { backgroundColor: c.primary }]} onPress={joinLiveNow}>
-                <Text style={[styles.primaryBtnText, { color: "#FFFFFF" }]}>Join Live Now</Text>
+                <Text style={[styles.primaryBtnText, { color: "#FFFFFF" }]}>{ui.joinLive}</Text>
               </Pressable>
               <Pressable
                 style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.card }]}
                 onPress={() => navigation.navigate("Events")}
               >
-                <Text style={[styles.secondaryBtnText, { color: c.text }]}>Browse Events</Text>
+                <Text style={[styles.secondaryBtnText, { color: c.text }]}>{ui.browseEvents}</Text>
               </Pressable>
             </View>
             <Pressable
               style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
               onPress={() => setSoloOpen(true)}
             >
-              <Text style={[styles.secondaryBtnText, { color: c.text }]}>Quick Solo Prayer</Text>
+              <Text style={[styles.secondaryBtnText, { color: c.text }]}>{ui.quickSolo}</Text>
             </Pressable>
 
             <View style={styles.metricsRow}>
@@ -323,14 +425,10 @@ export default function HomeScreen() {
             </Text>
 
             <View style={[styles.sectionCard, { backgroundColor: c.card, borderColor: c.border }]}>
-              <Text style={[styles.sectionTitle, { color: c.text }]}>Community Feed</Text>
-              <Text style={[styles.sectionMeta, { color: c.textMuted }]}>
-                Recent shared intentions from live circles.
-              </Text>
+              <Text style={[styles.sectionTitle, { color: c.text }]}>{ui.communityFeed}</Text>
+              <Text style={[styles.sectionMeta, { color: c.textMuted }]}>Recent shared intentions from live circles.</Text>
               {feedItems.length === 0 ? (
-                <Text style={[styles.sectionMeta, { color: c.textMuted, marginTop: 8 }]}>
-                  No public shares yet.
-                </Text>
+                <Text style={[styles.sectionMeta, { color: c.textMuted, marginTop: 8 }]}>{ui.noShares}</Text>
               ) : (
                 <View style={{ gap: 8, marginTop: 8 }}>
                   {feedItems.map((item) => (
@@ -340,7 +438,7 @@ export default function HomeScreen() {
                       onPress={() => openEventRoom(item.eventId)}
                     >
                       <Text style={[styles.feedMeta, { color: c.textMuted }]}>
-                        {item.displayName} in {item.eventTitle} •{" "}
+                        {item.displayName} in {item.eventTitle} -{" "}
                         {item.createdAt ? new Date(item.createdAt).toLocaleTimeString() : "now"}
                       </Text>
                       <Text style={[styles.feedBody, { color: c.text }]}>{truncate(item.body, 160)}</Text>
@@ -352,9 +450,7 @@ export default function HomeScreen() {
 
             <View style={[styles.sectionCard, { backgroundColor: c.chip, borderColor: c.border }]}>
               <Text style={[styles.sectionTitle, { color: c.chipText }]}>Recommended Events</Text>
-              <Text style={[styles.sectionMeta, { color: c.textMuted }]}>
-                Tap any event below to enter the live room in sync.
-              </Text>
+              <Text style={[styles.sectionMeta, { color: c.textMuted }]}>Tap any event below to enter the live room in sync.</Text>
             </View>
           </View>
         }
@@ -376,9 +472,7 @@ export default function HomeScreen() {
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border }]}>
             <Text style={[styles.modalTitle, { color: c.text }]}>Solo Guided Prayer</Text>
-            <Text style={[styles.modalMeta, { color: c.textMuted }]}>
-              3-minute rhythm. Keep breathing steady and stay with one intention.
-            </Text>
+            <Text style={[styles.modalMeta, { color: c.textMuted }]}>3-minute rhythm. Keep breathing steady and stay with one intention.</Text>
 
             <TextInput
               value={soloIntent}
@@ -402,13 +496,8 @@ export default function HomeScreen() {
             </View>
 
             <View style={styles.row}>
-              <Pressable
-                style={[styles.primaryBtn, { backgroundColor: c.primary }]}
-                onPress={() => setSoloRunning((v) => !v)}
-              >
-                <Text style={[styles.primaryBtnText, { color: "#FFFFFF" }]}>
-                  {soloRunning ? "Pause" : "Start"}
-                </Text>
+              <Pressable style={[styles.primaryBtn, { backgroundColor: c.primary }]} onPress={() => setSoloRunning((v) => !v)}>
+                <Text style={[styles.primaryBtnText, { color: "#FFFFFF" }]}>{soloRunning ? "Pause" : "Start"}</Text>
               </Pressable>
               <Pressable
                 style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
