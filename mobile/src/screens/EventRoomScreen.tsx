@@ -542,10 +542,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       }
 
       setChatText("");
-      // only scroll if user is already near bottom
-      setTimeout(() => {
-        if (shouldAutoScrollRef.current) scrollChatToEnd(true);
-      }, 30);
+      shouldAutoScrollRef.current = true;
+      setPendingMessageCount(0);
+      setTimeout(() => scrollChatToEnd(true), 30);
     } finally {
       setSending(false);
     }
