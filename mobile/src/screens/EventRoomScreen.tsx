@@ -243,6 +243,7 @@ type ProfileMini = Pick<ProfileRow, "id" | "display_name" | "avatar_url">;
 const ACTIVE_WINDOW_MS = 90_000;
 const HEARTBEAT_MS = 10_000;
 const PRESENCE_RESYNC_MS = 60_000;
+const CHAT_RESYNC_MS = 60_000;
 
 
 // Chat: how close to bottom counts as “near bottom”
@@ -774,6 +775,15 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!hasValidEventId) return;
 
+    let disposed = false;
+    const resync = () => {
+      if (disposed) return;
+      void loadMessages();
+    };
+
+    resync();
+    const intervalId = setInterval(resync, CHAT_RESYNC_MS);
+
     const ch = supabase
       .channel(`chat:${eventId}`)
       .on(
@@ -786,16 +796,18 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         },
         (payload) => {
           const row = payload.new as EventMessageRow;
+          const rowUserId = String((row as any).user_id ?? "");
+          const isMine = !!userId && rowUserId === userId;
 
           setMessages((prev) => upsertAndSortMessage(prev, row));
 
-          void loadProfiles([String((row as any).user_id ?? "")]);
+          void loadProfiles([rowUserId]);
 
           setTimeout(() => {
             if (shouldAutoScrollRef.current) {
               scrollChatToEnd(true);
               setPendingMessageCount(0);
-            } else {
+            } else if (!isMine) {
               setPendingMessageCount((count) => count + 1);
             }
           }, 30);
@@ -804,9 +816,11 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       .subscribe();
 
     return () => {
+      disposed = true;
+      clearInterval(intervalId);
       supabase.removeChannel(ch);
     };
-  }, [eventId, hasValidEventId, loadProfiles, scrollChatToEnd]);
+  }, [eventId, hasValidEventId, loadMessages, loadProfiles, scrollChatToEnd, userId]);
 
   const jumpToLatestMessages = useCallback(() => {
     setPendingMessageCount(0);
