@@ -1,13 +1,15 @@
 // mobile/App.tsx
 import "react-native-gesture-handler";
-import React, { useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { NavigationContainer, DefaultTheme } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import AuthScreen from "./src/screens/AuthScreen";
+import OnboardingScreen from "./src/screens/OnboardingScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import GlobalHeatMapScreen from "./src/screens/GlobalHeatMapScreen";
 import EventsScreen from "./src/screens/EventsScreen";
@@ -21,6 +23,7 @@ import { getAppColors } from "./src/theme/appearance";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tabs = createBottomTabNavigator<RootTabParamList>();
+const KEY_ONBOARDING_DONE = "onboarding:done:v1";
 
 function LoadingScreen() {
   return (
@@ -74,6 +77,43 @@ function AuthedTabs() {
 function RootNav() {
   const { user, initializing, theme, highContrast } = useAppState();
   const c = getAppColors(theme, highContrast);
+  const [onboardingResolved, setOnboardingResolved] = useState(false);
+  const [onboardingDone, setOnboardingDone] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (!user) {
+        if (!cancelled) {
+          setOnboardingDone(false);
+          setOnboardingResolved(true);
+        }
+        return;
+      }
+      try {
+        const raw = await AsyncStorage.getItem(KEY_ONBOARDING_DONE);
+        if (!cancelled) setOnboardingDone(raw === "1");
+      } catch {
+        if (!cancelled) setOnboardingDone(false);
+      } finally {
+        if (!cancelled) setOnboardingResolved(true);
+      }
+    };
+    setOnboardingResolved(false);
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  const completeOnboarding = useCallback(async () => {
+    setOnboardingDone(true);
+    try {
+      await AsyncStorage.setItem(KEY_ONBOARDING_DONE, "1");
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const navTheme = useMemo(
     () => ({
@@ -93,6 +133,9 @@ function RootNav() {
   if (initializing) {
     return <LoadingScreen />;
   }
+  if (user && !onboardingResolved) {
+    return <LoadingScreen />;
+  }
 
   return (
     <NavigationContainer theme={navTheme}>
@@ -103,6 +146,10 @@ function RootNav() {
       >
         {!user ? (
           <Stack.Screen name="Auth" component={AuthScreen} />
+        ) : !onboardingDone ? (
+          <Stack.Screen name="Onboarding">
+            {() => <OnboardingScreen onComplete={completeOnboarding} />}
+          </Stack.Screen>
         ) : (
           <>
             <Stack.Screen name="RootTabs" component={AuthedTabs} />

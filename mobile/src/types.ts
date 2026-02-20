@@ -10,6 +10,7 @@ export type RootTabParamList = {
 
 export type RootStackParamList = {
   Auth: undefined;
+  Onboarding: undefined;
   RootTabs: undefined;
   EventRoom: { eventId: string };
 };
