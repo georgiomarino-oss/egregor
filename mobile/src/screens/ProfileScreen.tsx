@@ -1,6 +1,6 @@
 // mobile/src/screens/ProfileScreen.tsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../supabase/client";
@@ -14,11 +14,13 @@ const KEY_PROFILE_PREFS = "profile:prefs:v1";
 const KEY_SUPPORT_TOTAL = "support:total:v1";
 const KEY_DAILY_INTENTION = "onboarding:intention:v1";
 const KEY_CIRCLE_WAITLIST = "circle:waitlist:v1";
+const KEY_MY_CIRCLES = "social:circles:v1";
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
 type JournalEntry = { id: string; createdAt: string; text: string };
 type CircleWaitlistEntry = { id: string; createdAt: string; email: string; note: string };
+type SocialCircle = { id: string; name: string; intention: string; createdAt: string };
 const PROFILE_LANGUAGES = ["English", "Spanish", "Portuguese", "French"] as const;
 type ProfileLanguage = (typeof PROFILE_LANGUAGES)[number];
 
@@ -128,6 +130,9 @@ export default function ProfileScreen() {
   const [waitlistEmail, setWaitlistEmail] = useState("");
   const [waitlistNote, setWaitlistNote] = useState("");
   const [savingWaitlist, setSavingWaitlist] = useState(false);
+  const [circles, setCircles] = useState<SocialCircle[]>([]);
+  const [circleName, setCircleName] = useState("");
+  const [circleIntention, setCircleIntention] = useState("Weekly peace and gratitude.");
 
   const loadJournal = useCallback(async () => {
     try {
@@ -225,6 +230,33 @@ export default function ProfileScreen() {
       setWaitlistNote("");
     }
   }, [email]);
+
+  const loadCircles = useCallback(async () => {
+    try {
+      const raw = await AsyncStorage.getItem(KEY_MY_CIRCLES);
+      if (!raw) {
+        setCircles([]);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        setCircles([]);
+        return;
+      }
+      const rows = parsed
+        .map((r: any) => ({
+          id: String(r?.id ?? ""),
+          name: String(r?.name ?? "").trim(),
+          intention: String(r?.intention ?? "").trim(),
+          createdAt: String(r?.createdAt ?? ""),
+        }))
+        .filter((r: SocialCircle) => !!r.id && !!r.name);
+      rows.sort((a: SocialCircle, b: SocialCircle) => safeTimeMs(b.createdAt) - safeTimeMs(a.createdAt));
+      setCircles(rows);
+    } catch {
+      setCircles([]);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -339,7 +371,8 @@ export default function ProfileScreen() {
     void loadSupportTotal();
     void loadDailyIntention();
     void loadWaitlistDraft();
-  }, [load, loadJournal, loadPrefs, loadSupportTotal, loadDailyIntention, loadWaitlistDraft]);
+    void loadCircles();
+  }, [load, loadJournal, loadPrefs, loadSupportTotal, loadDailyIntention, loadWaitlistDraft, loadCircles]);
 
   useEffect(() => {
     if (!waitlistEmail.trim() && email.trim()) {
@@ -553,6 +586,61 @@ export default function ProfileScreen() {
       setSavingWaitlist(false);
     }
   }, [waitlistEmail, waitlistNote]);
+
+  const createCircle = useCallback(async () => {
+    const name = circleName.trim();
+    const intention = circleIntention.trim();
+    if (!name) {
+      Alert.alert("Validation", "Circle name is required.");
+      return;
+    }
+    if (name.length > 60) {
+      Alert.alert("Validation", "Circle name must be 60 characters or fewer.");
+      return;
+    }
+    if (intention.length > 200) {
+      Alert.alert("Validation", "Circle intention must be 200 characters or fewer.");
+      return;
+    }
+    try {
+      const next: SocialCircle = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name,
+        intention,
+        createdAt: new Date().toISOString(),
+      };
+      const merged = [next, ...circles].slice(0, 50);
+      setCircles(merged);
+      setCircleName("");
+      await AsyncStorage.setItem(KEY_MY_CIRCLES, JSON.stringify(merged));
+      Alert.alert("Circle created", "You can now share an invite.");
+    } catch (e: any) {
+      Alert.alert("Save failed", e?.message ?? "Could not create circle.");
+    }
+  }, [circleIntention, circleName, circles]);
+
+  const deleteCircle = useCallback(async (id: string) => {
+    const next = circles.filter((c) => c.id !== id);
+    setCircles(next);
+    try {
+      await AsyncStorage.setItem(KEY_MY_CIRCLES, JSON.stringify(next));
+    } catch {
+      Alert.alert("Delete failed", "Could not update circles.");
+    }
+  }, [circles]);
+
+  const shareCircleInvite = useCallback(async (circle: SocialCircle) => {
+    const lines = [
+      `Join my Egregor circle: ${circle.name}`,
+      circle.intention ? `Intention: ${circle.intention}` : "",
+      "Open Egregor and join us for synchronized practice.",
+    ].filter(Boolean);
+    try {
+      await Share.share({ message: lines.join("\n") });
+    } catch {
+      // ignore
+    }
+  }, []);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
@@ -787,6 +875,54 @@ export default function ProfileScreen() {
             ))}
           </View>
           <Text style={[styles.tip, { color: c.textMuted }]}>Total supported: ${supportTotalUsd}</Text>
+        </View>
+
+        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={[styles.sectionTitle, { color: c.text }]}>My Circles</Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            Create private friend circles and share invites.
+          </Text>
+          <TextInput
+            style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+            value={circleName}
+            onChangeText={setCircleName}
+            placeholder="Circle name"
+            placeholderTextColor={c.textMuted}
+            maxLength={60}
+          />
+          <TextInput
+            style={[styles.input, styles.journalInput, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+            value={circleIntention}
+            onChangeText={setCircleIntention}
+            placeholder="Circle intention"
+            placeholderTextColor={c.textMuted}
+            multiline
+            maxLength={200}
+          />
+          <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }]} onPress={createCircle}>
+            <Text style={styles.btnText}>Create circle</Text>
+          </Pressable>
+
+          {circles.length === 0 ? (
+            <Text style={[styles.meta, { color: c.textMuted }]}>No circles yet.</Text>
+          ) : (
+            <View style={{ gap: 8 }}>
+              {circles.slice(0, 8).map((circle) => (
+                <View key={circle.id} style={[styles.journalCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+                  <Text style={[styles.sectionTitle, { color: c.text, fontSize: 14 }]}>{circle.name}</Text>
+                  {!!circle.intention && <Text style={[styles.meta, { color: c.textMuted }]}>{circle.intention}</Text>}
+                  <View style={styles.row}>
+                    <Pressable style={[styles.btnGhost, { borderColor: c.border }]} onPress={() => shareCircleInvite(circle)}>
+                      <Text style={[styles.btnGhostText, { color: c.text }]}>Share invite</Text>
+                    </Pressable>
+                    <Pressable style={[styles.btnGhost, { borderColor: c.border }]} onPress={() => deleteCircle(circle.id)}>
+                      <Text style={[styles.btnGhostText, { color: c.text }]}>Delete</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
 
         <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
