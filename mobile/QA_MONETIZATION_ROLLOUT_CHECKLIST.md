@@ -46,6 +46,7 @@ Baseline commit: `1201fe0`
    - Server/local membership values are consistent
    - `user_subscription_state` rows appear
    - `Client Monetization Events` section shows `circle_purchase` and `circle_restore` events
+   - `Funnel Summary` section counters increment for paywall view / CTA taps
 5. Execute purchase on device (sandbox/test account).
 6. Confirm:
    - Purchase succeeds
@@ -55,6 +56,8 @@ Baseline commit: `1201fe0`
 7. Test `Restore purchases`.
 8. Confirm restore event appears:
    - `event_name=circle_restore` with stage `success` or `failure` (with error details).
+9. Confirm funnel math:
+   - `Purchase conversion` and `Restore success rate` show expected ratios.
 
 ## AI Quota + Premium Unlock QA
 1. As free user, consume daily limit in:

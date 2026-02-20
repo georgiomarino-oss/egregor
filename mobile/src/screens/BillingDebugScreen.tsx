@@ -52,6 +52,36 @@ type MonetizationEventRow = {
   metadata: Record<string, unknown> | null;
 };
 
+type FunnelCounts = {
+  paywallViews: number;
+  paywallCtaTaps: number;
+  purchaseAttempts: number;
+  purchaseSuccess: number;
+  purchaseFailure: number;
+  purchaseCancelled: number;
+  restoreAttempts: number;
+  restoreSuccess: number;
+  restoreFailure: number;
+  refreshAttempts: number;
+  refreshSuccess: number;
+  debugOpenCount: number;
+};
+
+const EMPTY_FUNNEL_COUNTS: FunnelCounts = {
+  paywallViews: 0,
+  paywallCtaTaps: 0,
+  purchaseAttempts: 0,
+  purchaseSuccess: 0,
+  purchaseFailure: 0,
+  purchaseCancelled: 0,
+  restoreAttempts: 0,
+  restoreSuccess: 0,
+  restoreFailure: 0,
+  refreshAttempts: 0,
+  refreshSuccess: 0,
+  debugOpenCount: 0,
+};
+
 function clip(input: string, max: number) {
   const clean = String(input ?? "").replace(/\s+/g, " ").trim();
   if (clean.length <= max) return clean;
@@ -69,6 +99,34 @@ function safeIso(value: string | null | undefined) {
 function safeText(value: string | null | undefined, fallback = "-") {
   const next = String(value ?? "").trim();
   return next || fallback;
+}
+
+function ratioLabel(success: number, total: number) {
+  if (total <= 0) return "-";
+  const pct = Math.round((success / total) * 100);
+  return `${pct}% (${success}/${total})`;
+}
+
+async function countMonetizationEvents(args: {
+  userId: string;
+  eventName: string;
+  stage?: string;
+}) {
+  let query = (supabase as any)
+    .from("monetization_event_log")
+    .select("id", { head: true, count: "exact" })
+    .eq("user_id", args.userId)
+    .eq("event_name", args.eventName);
+
+  if (args.stage) {
+    query = query.eq("stage", args.stage);
+  }
+
+  const { count, error } = await query;
+  return {
+    count: typeof count === "number" ? count : 0,
+    error: error ? String(error.message ?? "unknown error") : "",
+  };
 }
 
 export default function BillingDebugScreen() {
@@ -91,6 +149,7 @@ export default function BillingDebugScreen() {
   const [subscriptionRows, setSubscriptionRows] = useState<SubscriptionRow[]>([]);
   const [webhookRows, setWebhookRows] = useState<WebhookLogRow[]>([]);
   const [monetizationRows, setMonetizationRows] = useState<MonetizationEventRow[]>([]);
+  const [funnelCounts, setFunnelCounts] = useState<FunnelCounts>(EMPTY_FUNNEL_COUNTS);
   const [lastSyncAt, setLastSyncAt] = useState("");
   const loadInFlightRef = useRef(false);
   const queuedLoadRef = useRef(false);
@@ -111,11 +170,29 @@ export default function BillingDebugScreen() {
         setSubscriptionRows([]);
         setWebhookRows([]);
         setMonetizationRows([]);
+        setFunnelCounts(EMPTY_FUNNEL_COUNTS);
         setLastSyncAt(new Date().toISOString());
         return;
       }
 
-      const [rpcResult, subResult, hookResult, monetizationResult] = await Promise.all([
+      const [
+        rpcResult,
+        subResult,
+        hookResult,
+        monetizationResult,
+        paywallViewCount,
+        paywallTapCount,
+        purchaseAttemptCount,
+        purchaseSuccessCount,
+        purchaseFailureCount,
+        purchaseCancelledCount,
+        restoreAttemptCount,
+        restoreSuccessCount,
+        restoreFailureCount,
+        refreshAttemptCount,
+        refreshSuccessCount,
+        debugOpenCount,
+      ] = await Promise.all([
         supabase.rpc("is_circle_member" as any, { p_user_id: uid }),
         (supabase as any)
           .from("user_subscription_state")
@@ -141,6 +218,63 @@ export default function BillingDebugScreen() {
           .eq("user_id", uid)
           .order("created_at", { ascending: false })
           .limit(40),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "circle_paywall_view",
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "circle_paywall_cta_tap",
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "circle_purchase",
+          stage: "attempt",
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "circle_purchase",
+          stage: "success",
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "circle_purchase",
+          stage: "failure",
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "circle_purchase",
+          stage: "cancelled",
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "circle_restore",
+          stage: "attempt",
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "circle_restore",
+          stage: "success",
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "circle_restore",
+          stage: "failure",
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "billing_status_refresh",
+          stage: "attempt",
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "billing_status_refresh",
+          stage: "success",
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "billing_debug_open",
+        }),
       ]);
 
       const errors: string[] = [];
@@ -178,6 +312,41 @@ export default function BillingDebugScreen() {
           : [];
         setMonetizationRows(rows);
       }
+
+      const counterErrors = [
+        paywallViewCount,
+        paywallTapCount,
+        purchaseAttemptCount,
+        purchaseSuccessCount,
+        purchaseFailureCount,
+        purchaseCancelledCount,
+        restoreAttemptCount,
+        restoreSuccessCount,
+        restoreFailureCount,
+        refreshAttemptCount,
+        refreshSuccessCount,
+        debugOpenCount,
+      ]
+        .map((row) => row.error)
+        .filter(Boolean);
+      if (counterErrors.length) {
+        errors.push(`monetization counters: ${counterErrors.join(" | ")}`);
+      }
+
+      setFunnelCounts({
+        paywallViews: paywallViewCount.count,
+        paywallCtaTaps: paywallTapCount.count,
+        purchaseAttempts: purchaseAttemptCount.count,
+        purchaseSuccess: purchaseSuccessCount.count,
+        purchaseFailure: purchaseFailureCount.count,
+        purchaseCancelled: purchaseCancelledCount.count,
+        restoreAttempts: restoreAttemptCount.count,
+        restoreSuccess: restoreSuccessCount.count,
+        restoreFailure: restoreFailureCount.count,
+        refreshAttempts: refreshAttemptCount.count,
+        refreshSuccess: refreshSuccessCount.count,
+        debugOpenCount: debugOpenCount.count,
+      });
 
       setServerError(errors.length ? errors.join(" | ") : null);
       setLastSyncAt(new Date().toISOString());
@@ -267,6 +436,40 @@ export default function BillingDebugScreen() {
             </Pressable>
           </View>
           {loading ? <ActivityIndicator style={{ marginTop: 6 }} /> : null}
+        </View>
+
+        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={[styles.sectionTitle, { color: c.text }]}>Funnel Summary (All-Time)</Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            Paywall views: {funnelCounts.paywallViews} | CTA taps: {funnelCounts.paywallCtaTaps}
+          </Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            Purchase attempts: {funnelCounts.purchaseAttempts} | success: {funnelCounts.purchaseSuccess} |
+            failure: {funnelCounts.purchaseFailure} | cancelled: {funnelCounts.purchaseCancelled}
+          </Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            Purchase conversion:{" "}
+            {ratioLabel(funnelCounts.purchaseSuccess, funnelCounts.purchaseAttempts)}
+          </Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            Restore attempts: {funnelCounts.restoreAttempts} | success: {funnelCounts.restoreSuccess} |
+            failure: {funnelCounts.restoreFailure}
+          </Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            Restore success rate:{" "}
+            {ratioLabel(funnelCounts.restoreSuccess, funnelCounts.restoreAttempts)}
+          </Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            Billing refresh attempts: {funnelCounts.refreshAttempts} | success:{" "}
+            {funnelCounts.refreshSuccess}
+          </Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            Billing refresh success rate:{" "}
+            {ratioLabel(funnelCounts.refreshSuccess, funnelCounts.refreshAttempts)}
+          </Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            Billing debug opens: {funnelCounts.debugOpenCount}
+          </Text>
         </View>
 
         <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>

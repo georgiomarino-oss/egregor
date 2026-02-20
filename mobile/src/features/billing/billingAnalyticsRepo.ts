@@ -4,7 +4,10 @@ import { supabase } from "../../supabase/client";
 export type MonetizationEventName =
   | "circle_purchase"
   | "circle_restore"
-  | "billing_status_refresh";
+  | "billing_status_refresh"
+  | "circle_paywall_view"
+  | "circle_paywall_cta_tap"
+  | "billing_debug_open";
 
 export type MonetizationEventStage =
   | "attempt"

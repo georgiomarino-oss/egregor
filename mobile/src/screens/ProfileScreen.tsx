@@ -9,6 +9,7 @@ import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
 import type { RootStackParamList } from "../types";
 import type { Database } from "../types/db";
+import { logMonetizationEvent } from "../features/billing/billingAnalyticsRepo";
 import { getSoloHistoryStats, listSoloHistory, type SoloHistoryEntry } from "../features/solo/soloHistoryRepo";
 
 const KEY_AUTO_JOIN_GLOBAL = "prefs:autoJoinLive";
@@ -167,6 +168,7 @@ export default function ProfileScreen() {
   const [rhythmByDay, setRhythmByDay] = useState<RhythmDay[]>(emptyRhythmDays());
   const statsRefreshInFlightRef = useRef(false);
   const statsRefreshQueuedRef = useRef(false);
+  const paywallViewSignatureRef = useRef("");
 
   const loadJournal = useCallback(async () => {
     try {
@@ -524,6 +526,29 @@ export default function ProfileScreen() {
     }, [refreshLiveProfileStats, userId])
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      if (!userId || !billingReady || isCircleMember) return;
+
+      const today = new Date().toISOString().slice(0, 10);
+      const signature = `${userId}:${today}:${billingAvailable ? "available" : "unavailable"}:${circlePackages.length}`;
+      if (paywallViewSignatureRef.current === signature) return;
+      paywallViewSignatureRef.current = signature;
+
+      void logMonetizationEvent({
+        userId,
+        eventName: "circle_paywall_view",
+        stage: "info",
+        isCircleMember,
+        metadata: {
+          screen: "Profile",
+          billingAvailable,
+          packageCount: circlePackages.length,
+        },
+      });
+    }, [billingAvailable, billingReady, circlePackages.length, isCircleMember, userId])
+  );
+
   useEffect(() => {
     if (!waitlistEmail.trim() && email.trim()) {
       setWaitlistEmail(email.trim());
@@ -699,12 +724,39 @@ export default function ProfileScreen() {
   }, [dailyIntention]);
 
   const openWaitlist = useCallback(() => {
+    if (userId) {
+      void logMonetizationEvent({
+        userId,
+        eventName: "circle_paywall_cta_tap",
+        stage: "info",
+        isCircleMember,
+        metadata: {
+          cta: "join_waitlist",
+          billingAvailable,
+          packageCount: circlePackages.length,
+        },
+      });
+    }
     setWaitlistEmail((prev) => (prev.trim() ? prev : email.trim()));
     setWaitlistOpen(true);
-  }, [email]);
+  }, [billingAvailable, circlePackages.length, email, isCircleMember, userId]);
 
   const handlePurchaseCircle = useCallback(
     async (packageIdentifier?: string) => {
+      if (userId) {
+        void logMonetizationEvent({
+          userId,
+          eventName: "circle_paywall_cta_tap",
+          stage: "attempt",
+          packageIdentifier,
+          isCircleMember,
+          metadata: {
+            cta: "purchase_circle",
+            billingAvailable,
+            packageCount: circlePackages.length,
+          },
+        });
+      }
       setBillingActionBusy(true);
       try {
         const result = await purchaseCircle(packageIdentifier);
@@ -720,10 +772,23 @@ export default function ProfileScreen() {
         void refreshBilling();
       }
     },
-    [purchaseCircle, refreshBilling]
+    [billingAvailable, circlePackages.length, isCircleMember, purchaseCircle, refreshBilling, userId]
   );
 
   const handleRestoreCircle = useCallback(async () => {
+    if (userId) {
+      void logMonetizationEvent({
+        userId,
+        eventName: "circle_paywall_cta_tap",
+        stage: "attempt",
+        isCircleMember,
+        metadata: {
+          cta: "restore_circle",
+          billingAvailable,
+          packageCount: circlePackages.length,
+        },
+      });
+    }
     setBillingActionBusy(true);
     try {
       const result = await restoreCircle();
@@ -736,12 +801,42 @@ export default function ProfileScreen() {
       setBillingActionBusy(false);
       void refreshBilling();
     }
-  }, [refreshBilling, restoreCircle]);
+  }, [billingAvailable, circlePackages.length, isCircleMember, refreshBilling, restoreCircle, userId]);
+
+  const handleRefreshBilling = useCallback(async () => {
+    if (userId) {
+      void logMonetizationEvent({
+        userId,
+        eventName: "circle_paywall_cta_tap",
+        stage: "info",
+        isCircleMember,
+        metadata: {
+          cta: "refresh_status",
+          billingAvailable,
+          packageCount: circlePackages.length,
+        },
+      });
+    }
+    await refreshBilling();
+  }, [billingAvailable, circlePackages.length, isCircleMember, refreshBilling, userId]);
 
   const openBillingDebug = useCallback(() => {
+    if (userId) {
+      void logMonetizationEvent({
+        userId,
+        eventName: "billing_debug_open",
+        stage: "info",
+        isCircleMember,
+        metadata: {
+          source: "Profile",
+          billingAvailable,
+          packageCount: circlePackages.length,
+        },
+      });
+    }
     const navToUse = navigation.getParent?.() ?? navigation;
     (navToUse as any).navigate("BillingDebug" as keyof RootStackParamList);
-  }, [navigation]);
+  }, [billingAvailable, circlePackages.length, isCircleMember, navigation, userId]);
 
   const submitWaitlist = useCallback(async () => {
     const nextEmail = waitlistEmail.trim().toLowerCase();
@@ -1143,7 +1238,7 @@ export default function ProfileScreen() {
                 </Pressable>
                 <Pressable
                   style={[styles.btn, styles.btnGhost, { borderColor: c.border }, billingActionBusy && styles.disabled]}
-                  onPress={() => void refreshBilling()}
+                  onPress={() => void handleRefreshBilling()}
                   disabled={billingActionBusy}
                 >
                   <Text style={[styles.btnGhostText, { color: c.text }]}>

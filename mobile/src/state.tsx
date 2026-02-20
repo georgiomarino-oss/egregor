@@ -181,10 +181,46 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    void logMonetizationEvent({
+      userId: uid,
+      eventName: "billing_status_refresh",
+      stage: "attempt",
+      metadata: { source: "AppStateProvider.refreshBilling" },
+    });
+
     setBillingReady(false);
     const snapshot = await refreshBillingSnapshot(uid);
     applyBillingSnapshot(snapshot);
     setBillingReady(true);
+
+    if (snapshot.error) {
+      void logMonetizationEvent({
+        userId: uid,
+        eventName: "billing_status_refresh",
+        stage: "failure",
+        isCircleMember: snapshot.isCircleMember,
+        errorMessage: snapshot.error,
+        metadata: {
+          billingAvailable: snapshot.available,
+          billingConfigured: snapshot.configured,
+          packageCount: snapshot.packages.length,
+        },
+      });
+      return;
+    }
+
+    void logMonetizationEvent({
+      userId: uid,
+      eventName: "billing_status_refresh",
+      stage: "success",
+      isCircleMember: snapshot.isCircleMember,
+      metadata: {
+        billingAvailable: snapshot.available,
+        billingConfigured: snapshot.configured,
+        packageCount: snapshot.packages.length,
+        expiresAt: snapshot.expiresAt,
+      },
+    });
   };
 
   const purchaseCircle = async (packageIdentifier?: string): Promise<CircleActionResult> => {
