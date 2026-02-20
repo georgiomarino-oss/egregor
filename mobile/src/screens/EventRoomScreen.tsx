@@ -724,6 +724,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   }, [eventId, hasValidEventId, loadProfiles, logTelemetry]);
 
   const sendMessage = useCallback(async () => {
+    const targetEventId = eventId;
+    const isStale = () => activeEventIdRef.current !== targetEventId;
     const text = chatText.trim();
     if (!text) return;
     if (text.length > CHAT_MAX_CHARS) {
@@ -742,12 +744,13 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     setSending(true);
     try {
       const payload: EventMessageInsert = {
-        event_id: eventId,
+        event_id: targetEventId,
         user_id: uid,
         body: text,
       };
 
       const { error } = await supabase.from("event_messages").insert(payload);
+      if (isStale()) return;
       if (error) {
         const mapped = mapChatSendError(error.message);
         Alert.alert(mapped.title, mapped.body);
@@ -758,14 +761,16 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       shouldAutoScrollRef.current = true;
       setPendingMessageCount(0);
       setUnreadMarkerMessageId(null);
-      scheduleScrollToEnd(eventId, true);
+      scheduleScrollToEnd(targetEventId, true);
     } finally {
-      setSending(false);
+      if (!isStale()) setSending(false);
     }
   }, [chatText, eventId, hasValidEventId, scheduleScrollToEnd, ensureUserId]);
 
   const sendEnergyGift = useCallback(
     async (amount: number) => {
+      const targetEventId = eventId;
+      const isStale = () => activeEventIdRef.current !== targetEventId;
       if (!Number.isFinite(amount) || amount <= 0) return;
       if (!hasValidEventId) return;
 
@@ -778,12 +783,13 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setSendingEnergy(amount);
       try {
         const payload: EventMessageInsert = {
-          event_id: eventId,
+          event_id: targetEventId,
           user_id: uid,
           body: `Sent ${amount} energy to this circle.`,
         };
 
         const { error } = await supabase.from("event_messages").insert(payload);
+        if (isStale()) return;
         if (error) {
           const mapped = mapChatSendError(error.message);
           Alert.alert(mapped.title, mapped.body);
@@ -793,9 +799,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         shouldAutoScrollRef.current = true;
         setPendingMessageCount(0);
         setUnreadMarkerMessageId(null);
-        scheduleScrollToEnd(eventId, true);
+        scheduleScrollToEnd(targetEventId, true);
       } finally {
-        setSendingEnergy(null);
+        if (!isStale()) setSendingEnergy(null);
       }
     },
     [ensureUserId, eventId, hasValidEventId, scheduleScrollToEnd]
