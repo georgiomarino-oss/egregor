@@ -4,10 +4,12 @@ import { ActivityIndicator, Alert, Image, Pressable, StyleSheet, Text, TextInput
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../supabase/client";
+import { useAppState } from "../state";
 
 const KEY_AUTO_JOIN_GLOBAL = "prefs:autoJoinLive";
 
 export default function ProfileScreen() {
+  const { theme, setTheme } = useAppState();
   const [loading, setLoading] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
@@ -185,6 +187,33 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Appearance</Text>
+
+          <View style={styles.themeRow}>
+            <Pressable
+              style={[styles.themeBtn, theme === "light" && styles.themeBtnActive]}
+              onPress={() => setTheme("light")}
+            >
+              <Text style={[styles.themeBtnText, theme === "light" && styles.themeBtnTextActive]}>Light</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.themeBtn, theme === "dark" && styles.themeBtnActive]}
+              onPress={() => setTheme("dark")}
+            >
+              <Text style={[styles.themeBtnText, theme === "dark" && styles.themeBtnTextActive]}>Dark</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.themeBtn, theme === "cosmic" && styles.themeBtnActive]}
+              onPress={() => setTheme("cosmic")}
+            >
+              <Text style={[styles.themeBtnText, theme === "cosmic" && styles.themeBtnTextActive]}>Cosmic</Text>
+            </Pressable>
+          </View>
+
+          <Text style={styles.tip}>Theme applies to navigation chrome and core surfaces.</Text>
+        </View>
+
+        <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
 
           <Text style={styles.fieldLabel}>Display name</Text>
@@ -286,6 +315,23 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   sectionTitle: { color: "#DCE4FF", fontSize: 16, fontWeight: "700" },
+  themeRow: { flexDirection: "row", gap: 8 },
+  themeBtn: {
+    flex: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#3E4C78",
+    backgroundColor: "#0E1428",
+    paddingVertical: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  themeBtnActive: {
+    backgroundColor: "#5B8CFF",
+    borderColor: "#6EA1FF",
+  },
+  themeBtnText: { color: "#C8D3FF", fontWeight: "800" },
+  themeBtnTextActive: { color: "white" },
   fieldLabel: { color: "#B9C3E6", fontSize: 12, marginBottom: 4, marginTop: 2 },
 
   input: {

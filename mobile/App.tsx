@@ -15,6 +15,7 @@ import ProfileScreen from "./src/screens/ProfileScreen";
 
 import { AppStateProvider, useAppState } from "./src/state";
 import type { RootStackParamList, RootTabParamList } from "./src/types";
+import type { AppTheme } from "./src/state";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tabs = createBottomTabNavigator<RootTabParamList>();
@@ -34,14 +35,56 @@ function LoadingScreen() {
   );
 }
 
+const APP_THEME_COLORS: Record<
+  AppTheme,
+  {
+    background: string;
+    card: string;
+    text: string;
+    border: string;
+    primary: string;
+    tabInactive: string;
+  }
+> = {
+  cosmic: {
+    background: "#0B1020",
+    card: "#0B1020",
+    text: "#FFFFFF",
+    border: "#2A365E",
+    primary: "#5B8CFF",
+    tabInactive: "#93A3D9",
+  },
+  dark: {
+    background: "#0A0D14",
+    card: "#111827",
+    text: "#F8FAFC",
+    border: "#263244",
+    primary: "#60A5FA",
+    tabInactive: "#94A3B8",
+  },
+  light: {
+    background: "#F5F7FB",
+    card: "#FFFFFF",
+    text: "#0F172A",
+    border: "#D7E0F0",
+    primary: "#365FD9",
+    tabInactive: "#64748B",
+  },
+};
+
 function AuthedTabs() {
+  const { theme } = useAppState();
+  const c = APP_THEME_COLORS[theme];
+
   return (
     <Tabs.Navigator
       screenOptions={{
         headerShown: true,
-        tabBarStyle: { backgroundColor: "#0B1020" },
-        tabBarActiveTintColor: "#FFFFFF",
-        tabBarInactiveTintColor: "#93A3D9",
+        tabBarStyle: { backgroundColor: c.card, borderTopColor: c.border },
+        tabBarActiveTintColor: c.primary,
+        tabBarInactiveTintColor: c.tabInactive,
+        headerStyle: { backgroundColor: c.card },
+        headerTintColor: c.text,
       }}
     >
       <Tabs.Screen name="Events" component={EventsScreen} />
@@ -62,21 +105,22 @@ function AuthedTabs() {
 }
 
 function RootNav() {
-  const { user, initializing } = useAppState();
+  const { user, initializing, theme } = useAppState();
+  const c = APP_THEME_COLORS[theme];
 
   const navTheme = useMemo(
     () => ({
       ...DefaultTheme,
       colors: {
         ...DefaultTheme.colors,
-        background: "#0B1020",
-        card: "#0B1020",
-        text: "#FFFFFF",
-        border: "#2A365E",
-        primary: "#5B8CFF",
+        background: c.background,
+        card: c.card,
+        text: c.text,
+        border: c.border,
+        primary: c.primary,
       },
     }),
-    []
+    [c]
   );
 
   if (initializing) {
@@ -98,7 +142,12 @@ function RootNav() {
             <Stack.Screen
               name="EventRoom"
               component={EventRoomScreen}
-              options={{ headerShown: true, title: "Event Room" }}
+              options={{
+                headerShown: true,
+                title: "Event Room",
+                headerStyle: { backgroundColor: c.card },
+                headerTintColor: c.text,
+              }}
             />
           </>
         )}

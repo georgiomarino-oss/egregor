@@ -1,12 +1,18 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { Session, User } from "@supabase/supabase-js";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "./supabase/client";
+
+export type AppTheme = "light" | "dark" | "cosmic";
+const KEY_APP_THEME = "prefs:appTheme";
 
 export type AppStateContextValue = {
   initializing: boolean;
   session: Session | null;
   user: User | null;
   signedIn: boolean;
+  theme: AppTheme;
+  setTheme: (nextTheme: AppTheme) => Promise<void>;
   refreshSession: () => Promise<void>;
   signOut: () => Promise<void>;
 };
@@ -16,6 +22,7 @@ const AppStateContext = createContext<AppStateContextValue | undefined>(undefine
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [initializing, setInitializing] = useState(true);
   const [session, setSession] = useState<Session | null>(null);
+  const [theme, setThemeState] = useState<AppTheme>("cosmic");
 
   const refreshSession = async () => {
     const { data, error } = await supabase.auth.getSession();
@@ -59,6 +66,33 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(KEY_APP_THEME);
+        if (!mounted) return;
+        if (raw === "light" || raw === "dark" || raw === "cosmic") {
+          setThemeState(raw);
+        }
+      } catch {
+        // ignore and keep default
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const setTheme = async (nextTheme: AppTheme) => {
+    setThemeState(nextTheme);
+    try {
+      await AsyncStorage.setItem(KEY_APP_THEME, nextTheme);
+    } catch {
+      // ignore
+    }
+  };
+
   const signOut = async () => {
     const uid = session?.user?.id ?? null;
     if (uid) {
@@ -79,10 +113,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       session,
       user: session?.user ?? null,
       signedIn: !!session?.user,
+      theme,
+      setTheme,
       refreshSession,
       signOut,
     }),
-    [initializing, session]
+    [initializing, session, theme]
   );
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
