@@ -210,6 +210,19 @@ function removeMessageById(rows: EventMessageRow[], id: string): EventMessageRow
   return rows.filter((m: any) => String((m as any).id ?? "") !== id);
 }
 
+function mergeAndTrimMessages(
+  current: EventMessageRow[],
+  incoming: EventMessageRow[],
+  maxRows: number
+): EventMessageRow[] {
+  let merged = [...current];
+  for (const row of incoming) {
+    merged = upsertAndSortMessage(merged, row);
+  }
+  if (merged.length <= maxRows) return merged;
+  return merged.slice(merged.length - maxRows);
+}
+
 /**
  * Local preferences:
  * - Global: prefs:autoJoinLive (default true)
@@ -629,12 +642,15 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }
 
     const rows = (data ?? []) as EventMessageRow[];
-    setMessages(sortMessagesByCreatedAt(rows));
-    messageIdsRef.current = new Set(
-      rows
-        .map((m: any) => String((m as any)?.id ?? ""))
-        .filter((id: string) => !!id)
-    );
+    setMessages((prev) => {
+      const merged = mergeAndTrimMessages(prev, rows, 200);
+      messageIdsRef.current = new Set(
+        merged
+          .map((m: any) => String((m as any)?.id ?? ""))
+          .filter((id: string) => !!id)
+      );
+      return merged;
+    });
     if (shouldAutoScrollRef.current) {
       setPendingMessageCount(0);
       setUnreadMarkerMessageId(null);
@@ -1052,7 +1068,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           if (nextId) messageIdsRef.current.add(nextId);
 
           setMessages((prev) => {
-            const merged = upsertAndSortMessage(prev, nextRow);
+            const merged = mergeAndTrimMessages(prev, [nextRow], 200);
             const insertedIdx = merged.findIndex((m: any) => String((m as any).id ?? "") === nextId);
             const expectedTailIdx = Math.max(0, merged.length - 1);
 
