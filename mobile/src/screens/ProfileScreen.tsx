@@ -1,6 +1,6 @@
 // mobile/src/screens/ProfileScreen.tsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../supabase/client";
@@ -10,8 +10,27 @@ import type { Database } from "../types/db";
 
 const KEY_AUTO_JOIN_GLOBAL = "prefs:autoJoinLive";
 const KEY_JOURNAL = "journal:entries";
+const KEY_PROFILE_PREFS = "profile:prefs:v1";
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
 type JournalEntry = { id: string; createdAt: string; text: string };
+type ProfilePrefs = {
+  notifyLiveStart: boolean;
+  notifyNewsEvents: boolean;
+  notifyFriendInvites: boolean;
+  notifyStreakReminders: boolean;
+  voiceMode: boolean;
+  highContrast: boolean;
+  language: string;
+};
+const DEFAULT_PROFILE_PREFS: ProfilePrefs = {
+  notifyLiveStart: true,
+  notifyNewsEvents: true,
+  notifyFriendInvites: true,
+  notifyStreakReminders: true,
+  voiceMode: false,
+  highContrast: false,
+  language: "English",
+};
 
 function safeTimeMs(iso: string | null | undefined): number {
   if (!iso) return 0;
@@ -58,6 +77,7 @@ export default function ProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
+  const [savingPrefs, setSavingPrefs] = useState(false);
 
   const [userId, setUserId] = useState("");
   const [email, setEmail] = useState("");
@@ -69,6 +89,7 @@ export default function ProfileScreen() {
   const [intentionEnergy, setIntentionEnergy] = useState(0);
   const [journalText, setJournalText] = useState("");
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
+  const [prefs, setPrefs] = useState<ProfilePrefs>(DEFAULT_PROFILE_PREFS);
 
   const loadJournal = useCallback(async () => {
     try {
@@ -98,6 +119,28 @@ export default function ProfileScreen() {
 
   const saveJournal = useCallback(async (entries: JournalEntry[]) => {
     await AsyncStorage.setItem(KEY_JOURNAL, JSON.stringify(entries));
+  }, []);
+
+  const loadPrefs = useCallback(async () => {
+    try {
+      const raw = await AsyncStorage.getItem(KEY_PROFILE_PREFS);
+      if (!raw) {
+        setPrefs(DEFAULT_PROFILE_PREFS);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      setPrefs({
+        notifyLiveStart: !!parsed?.notifyLiveStart,
+        notifyNewsEvents: !!parsed?.notifyNewsEvents,
+        notifyFriendInvites: !!parsed?.notifyFriendInvites,
+        notifyStreakReminders: !!parsed?.notifyStreakReminders,
+        voiceMode: !!parsed?.voiceMode,
+        highContrast: !!parsed?.highContrast,
+        language: String(parsed?.language ?? DEFAULT_PROFILE_PREFS.language),
+      });
+    } catch {
+      setPrefs(DEFAULT_PROFILE_PREFS);
+    }
   }, []);
 
   const load = useCallback(async () => {
@@ -163,7 +206,8 @@ export default function ProfileScreen() {
   useEffect(() => {
     load();
     void loadJournal();
-  }, [load, loadJournal]);
+    void loadPrefs();
+  }, [load, loadJournal, loadPrefs]);
 
   const initials = useMemo(() => {
     const name = (displayName || email || "").trim();
@@ -288,6 +332,23 @@ export default function ProfileScreen() {
     }
   }, [journalEntries, saveJournal]);
 
+  const handleSavePrefs = useCallback(async () => {
+    setSavingPrefs(true);
+    try {
+      const payload: ProfilePrefs = {
+        ...prefs,
+        language: prefs.language.trim() || DEFAULT_PROFILE_PREFS.language,
+      };
+      await AsyncStorage.setItem(KEY_PROFILE_PREFS, JSON.stringify(payload));
+      setPrefs(payload);
+      Alert.alert("Saved", "Preferences updated.");
+    } catch (e: any) {
+      Alert.alert("Save failed", e?.message ?? "Could not save preferences.");
+    } finally {
+      setSavingPrefs(false);
+    }
+  }, [prefs]);
+
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
       <ScrollView style={styles.wrap} contentContainerStyle={styles.wrapContent}>
@@ -377,6 +438,69 @@ export default function ProfileScreen() {
               ))}
             </View>
           )}
+        </View>
+
+        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={[styles.sectionTitle, { color: c.text }]}>Preferences</Text>
+
+          <Text style={[styles.fieldLabel, { color: c.textMuted }]}>Notifications</Text>
+          <View style={[styles.prefRow, { borderColor: c.border, backgroundColor: c.cardAlt }]}>
+            <Text style={[styles.prefLabel, { color: c.text }]}>Live events starting</Text>
+            <Switch value={prefs.notifyLiveStart} onValueChange={(v) => setPrefs((p) => ({ ...p, notifyLiveStart: v }))} />
+          </View>
+          <View style={[styles.prefRow, { borderColor: c.border, backgroundColor: c.cardAlt }]}>
+            <Text style={[styles.prefLabel, { color: c.text }]}>News-triggered events</Text>
+            <Switch value={prefs.notifyNewsEvents} onValueChange={(v) => setPrefs((p) => ({ ...p, notifyNewsEvents: v }))} />
+          </View>
+          <View style={[styles.prefRow, { borderColor: c.border, backgroundColor: c.cardAlt }]}>
+            <Text style={[styles.prefLabel, { color: c.text }]}>Friend invites</Text>
+            <Switch value={prefs.notifyFriendInvites} onValueChange={(v) => setPrefs((p) => ({ ...p, notifyFriendInvites: v }))} />
+          </View>
+          <View style={[styles.prefRow, { borderColor: c.border, backgroundColor: c.cardAlt }]}>
+            <Text style={[styles.prefLabel, { color: c.text }]}>Streak reminders</Text>
+            <Switch value={prefs.notifyStreakReminders} onValueChange={(v) => setPrefs((p) => ({ ...p, notifyStreakReminders: v }))} />
+          </View>
+
+          <Text style={[styles.fieldLabel, { color: c.textMuted }]}>Accessibility</Text>
+          <View style={[styles.prefRow, { borderColor: c.border, backgroundColor: c.cardAlt }]}>
+            <Text style={[styles.prefLabel, { color: c.text }]}>Voice mode</Text>
+            <Switch value={prefs.voiceMode} onValueChange={(v) => setPrefs((p) => ({ ...p, voiceMode: v }))} />
+          </View>
+          <View style={[styles.prefRow, { borderColor: c.border, backgroundColor: c.cardAlt }]}>
+            <Text style={[styles.prefLabel, { color: c.text }]}>High contrast mode</Text>
+            <Switch value={prefs.highContrast} onValueChange={(v) => setPrefs((p) => ({ ...p, highContrast: v }))} />
+          </View>
+
+          <Text style={[styles.fieldLabel, { color: c.textMuted }]}>Preferred language</Text>
+          <TextInput
+            style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+            value={prefs.language}
+            onChangeText={(v) => setPrefs((p) => ({ ...p, language: v }))}
+            placeholder="English"
+            placeholderTextColor={c.textMuted}
+          />
+
+          <Pressable
+            style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, savingPrefs && styles.disabled]}
+            onPress={handleSavePrefs}
+            disabled={savingPrefs}
+          >
+            <Text style={styles.btnText}>{savingPrefs ? "Saving..." : "Save preferences"}</Text>
+          </Pressable>
+
+          <Text style={[styles.tip, { color: c.textMuted }]}>
+            These settings prepare notification, voice, and accessibility behavior across the app.
+          </Text>
+        </View>
+
+        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={[styles.sectionTitle, { color: c.text }]}>Egregor Circle</Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            Premium unlocks unlimited AI scripts, priority access, custom themes, and exclusive soundscapes.
+          </Text>
+          <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }]}>
+            <Text style={styles.btnText}>Join waitlist</Text>
+          </Pressable>
         </View>
 
         <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
@@ -533,6 +657,17 @@ const styles = StyleSheet.create({
   },
   statValue: { fontSize: 20, fontWeight: "900" },
   statLabel: { fontSize: 11, fontWeight: "700", textAlign: "center", marginTop: 2 },
+  prefRow: {
+    borderWidth: 1,
+    borderColor: "#2A365E",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  prefLabel: { fontSize: 13, fontWeight: "700" },
   themeRow: { flexDirection: "row", gap: 8 },
   themeBtn: {
     flex: 1,
