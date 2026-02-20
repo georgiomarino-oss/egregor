@@ -782,6 +782,53 @@ export default function EventsScreen() {
     ]);
   }, [attachEvent, updateEventScript]);
 
+  const deleteEvent = useCallback(
+    async (event: EventRow) => {
+      const {
+        data: { user },
+        error: userErr,
+      } = await supabase.auth.getUser();
+
+      if (userErr || !user) {
+        Alert.alert("Not signed in", "Please sign in first.");
+        return;
+      }
+      if (event.host_user_id !== user.id) {
+        Alert.alert("Not allowed", "Only the host can delete this event.");
+        return;
+      }
+
+      Alert.alert("Delete event?", `Delete "${event.title}"?`, [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            setLoading(true);
+            try {
+              const { error } = await supabase.from("events").delete().eq("id", event.id);
+              if (error) {
+                Alert.alert("Delete failed", error.message);
+                return;
+              }
+              if (selectedEventId === event.id) {
+                setSelectedEventId("");
+                setIsJoined(false);
+                setPresenceStatus("");
+                setPresenceError("");
+              }
+              await loadEvents();
+              Alert.alert("Deleted", "Event removed.");
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]);
+    },
+    [loadEvents, selectedEventId]
+  );
+
   const renderScriptRow = ({ item }: { item: ScriptRow }) => {
     const isSelected = !!attachEvent?.script_id && attachEvent.script_id === item.id;
 
@@ -933,6 +980,16 @@ export default function EventsScreen() {
                 <Text style={styles.smallBtnGhostText}>
                   {item.script_id ? "Change" : "Attach"}
                 </Text>
+              </Pressable>
+            ) : null}
+
+            {isHost ? (
+              <Pressable
+                onPress={() => deleteEvent(item)}
+                style={[styles.smallBtn, styles.smallBtnDanger, loading && styles.disabled]}
+                disabled={loading}
+              >
+                <Text style={styles.smallBtnText}>Delete</Text>
               </Pressable>
             ) : null}
           </View>
@@ -1313,6 +1370,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#3E4C78",
   },
+  smallBtnDanger: { backgroundColor: "#FB7185" },
   smallBtnText: { color: "white", fontWeight: "800" },
   smallBtnGhostText: { color: "#C8D3FF", fontWeight: "800" },
 
