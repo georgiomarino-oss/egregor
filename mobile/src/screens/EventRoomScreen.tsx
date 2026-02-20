@@ -1168,18 +1168,16 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
           if (eventType !== "INSERT") return;
 
-          setTimeout(() => {
-            if (shouldAutoScrollRef.current) {
-              scrollChatToEnd(true);
-              setPendingMessageCount(0);
-              setUnreadMarkerMessageId(null);
-            } else if (!isMine && insertedNew) {
-              setPendingMessageCount((count) => {
-                if (count === 0 && nextId) setUnreadMarkerMessageId(nextId);
-                return count + 1;
-              });
-            }
-          }, 30);
+          if (shouldAutoScrollRef.current) {
+            scheduleScrollToEnd(eventId, true);
+            setPendingMessageCount(0);
+            setUnreadMarkerMessageId(null);
+          } else if (!isMine && insertedNew) {
+            setPendingMessageCount((count) => {
+              if (count === 0 && nextId) setUnreadMarkerMessageId(nextId);
+              return count + 1;
+            });
+          }
         }
       )
       .subscribe((status) => {
@@ -1191,7 +1189,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       clearInterval(intervalId);
       supabase.removeChannel(ch);
     };
-  }, [eventId, hasValidEventId, loadMessages, loadProfiles, scrollChatToEnd, userId, logTelemetry]);
+  }, [eventId, hasValidEventId, loadMessages, loadProfiles, scheduleScrollToEnd, userId, logTelemetry]);
 
   const jumpToLatestMessages = useCallback(() => {
     setPendingMessageCount(0);
