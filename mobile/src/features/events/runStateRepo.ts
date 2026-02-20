@@ -1,4 +1,5 @@
 import { supabase } from "../../supabase/client";
+import type { Json } from "../../types/db";
 
 export type EventRunMode = "idle" | "running" | "paused" | "ended";
 
@@ -13,7 +14,7 @@ export type EventRunStateV1 = {
 
 export type EventRunStateRow = {
   event_id: string;
-  state: EventRunStateV1 | Record<string, any>;
+  state: Json;
   updated_at: string;
   created_at: string;
 };

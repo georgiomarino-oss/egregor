@@ -126,7 +126,7 @@ async function countMonetizationEvents(args: {
   stage?: string;
   metadataContains?: Record<string, unknown>;
 }) {
-  let query = (supabase as any)
+  let query = supabase
     .from("monetization_event_log")
     .select("id", { head: true, count: "exact" })
     .eq("user_id", args.userId)
@@ -216,8 +216,8 @@ export default function BillingDebugScreen() {
         aiSoloGuidanceSuccessCount,
         aiSoloGuidancePremiumSuccessCount,
       ] = await Promise.all([
-        supabase.rpc("is_circle_member" as any, { p_user_id: uid }),
-        (supabase as any)
+        supabase.rpc("is_circle_member", { p_user_id: uid }),
+        supabase
           .from("user_subscription_state")
           .select(
             "provider,entitlement_id,is_active,product_id,store,environment,expires_at,last_event_type,last_event_id,last_event_timestamp,updated_at"
@@ -225,7 +225,7 @@ export default function BillingDebugScreen() {
           .eq("user_id", uid)
           .order("updated_at", { ascending: false })
           .limit(20),
-        (supabase as any)
+        supabase
           .from("revenuecat_webhook_events")
           .select(
             "event_id,event_type,process_status,error_message,event_timestamp,product_id,store,environment,received_at,processed_at"
@@ -233,7 +233,7 @@ export default function BillingDebugScreen() {
           .eq("user_id", uid)
           .order("received_at", { ascending: false })
           .limit(30),
-        (supabase as any)
+        supabase
           .from("monetization_event_log")
           .select(
             "event_name,stage,provider,platform,package_identifier,entitlement_id,is_circle_member,error_message,created_at,metadata"

@@ -1,5 +1,6 @@
 import { Platform } from "react-native";
 import { supabase } from "../../supabase/client";
+import type { Json } from "../../types/db";
 
 export type MonetizationEventName =
   | "circle_purchase"
@@ -44,16 +45,16 @@ function clip(value: unknown, max: number) {
   return `${clean.slice(0, max - 1)}...`;
 }
 
-function safeMetadata(value: unknown): Record<string, unknown> {
+function safeMetadata(value: unknown): Json {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return value as Record<string, unknown>;
+  return value as Json;
 }
 
 export async function logMonetizationEvent(args: LogMonetizationEventArgs) {
   const userId = safeText(args.userId);
   if (!userId) return;
 
-  const { error } = await (supabase as any).from("monetization_event_log").insert({
+  const { error } = await supabase.from("monetization_event_log").insert({
     user_id: userId,
     event_name: args.eventName,
     stage: args.stage,

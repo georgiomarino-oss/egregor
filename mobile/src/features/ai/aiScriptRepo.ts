@@ -119,7 +119,7 @@ function mapQuotaRowToResult(row: QuotaRpcRow | null, mode: AiGenerationMode): A
 }
 
 async function invokeQuotaRpc(fn: "get_ai_generation_quota" | "consume_ai_generation_quota", mode: AiGenerationMode) {
-  const { data, error } = await supabase.rpc(fn as any, { p_mode: mode });
+  const { data, error } = await supabase.rpc(fn, { p_mode: mode });
   if (error) throw new Error(error.message || `${fn} failed`);
   const rows = Array.isArray(data) ? (data as QuotaRpcRow[]) : [];
   return mapQuotaRowToResult(rows[0] ?? null, mode);
