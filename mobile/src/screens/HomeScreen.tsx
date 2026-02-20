@@ -177,6 +177,17 @@ export default function HomeScreen() {
     });
   }, [events]);
 
+  const alertCount = useMemo(() => {
+    const now = Date.now();
+    const liveCount = liveEvents.length;
+    const soonCount = events.filter((e) => {
+      const start = safeTimeMs((e as any).start_time_utc);
+      if (!start || start <= now) return false;
+      return start - now <= 60 * 60 * 1000;
+    }).length;
+    return liveCount + soonCount;
+  }, [events, liveEvents]);
+
   const recommendedEvents = useMemo(() => {
     const now = Date.now();
     return [...events]
@@ -441,7 +452,9 @@ export default function HomeScreen() {
                 style={[styles.notifyBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
                 onPress={openNotifications}
               >
-                <Text style={[styles.notifyBtnText, { color: c.text }]}>Notifications</Text>
+                <Text style={[styles.notifyBtnText, { color: c.text }]}>
+                  Notifications {alertCount > 0 ? `(${alertCount})` : ""}
+                </Text>
               </Pressable>
             </View>
             <Text style={[styles.hero, { color: c.text }]}>{ui.hero}</Text>
