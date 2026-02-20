@@ -1,6 +1,7 @@
 // mobile/src/types.ts
 
 export type RootTabParamList = {
+  Home: undefined;
   Events: undefined;
   Scripts: undefined;
   Profile: undefined;

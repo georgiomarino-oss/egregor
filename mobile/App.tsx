@@ -8,6 +8,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import AuthScreen from "./src/screens/AuthScreen";
+import HomeScreen from "./src/screens/HomeScreen";
 import EventsScreen from "./src/screens/EventsScreen";
 import ScriptsScreen from "./src/screens/ScriptsScreen";
 import EventRoomScreen from "./src/screens/EventRoomScreen";
@@ -87,6 +88,7 @@ function AuthedTabs() {
         headerTintColor: c.text,
       }}
     >
+      <Tabs.Screen name="Home" component={HomeScreen} />
       <Tabs.Screen name="Events" component={EventsScreen} />
       <Tabs.Screen name="Scripts" component={ScriptsScreen} />
 
