@@ -21,6 +21,17 @@ import { getAppColors } from "../theme/appearance";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
+type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
+type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
+type CommunityFeedItem = {
+  id: string;
+  body: string;
+  createdAt: string;
+  eventId: string;
+  userId: string;
+  eventTitle: string;
+  displayName: string;
+};
 
 const ACTIVE_WINDOW_MS = 90_000;
 const HOME_RESYNC_MS = 30_000;
@@ -60,6 +71,12 @@ function buildSoloPrayer(intent: string) {
   ];
 }
 
+function truncate(text: string, max = 150) {
+  const clean = text.trim();
+  if (clean.length <= max) return clean;
+  return `${clean.slice(0, max - 1)}…`;
+}
+
 export default function HomeScreen() {
   const { theme } = useAppState();
   const c = useMemo(() => getAppColors(theme), [theme]);
@@ -70,6 +87,7 @@ export default function HomeScreen() {
   const [weeklyImpact, setWeeklyImpact] = useState(0);
   const [activeGlobalParticipants, setActiveGlobalParticipants] = useState(0);
   const [activeGlobalEvents, setActiveGlobalEvents] = useState(0);
+  const [feedItems, setFeedItems] = useState<CommunityFeedItem[]>([]);
   const [soloOpen, setSoloOpen] = useState(false);
   const [soloIntent, setSoloIntent] = useState("peace, healing, and grounded courage");
   const [soloSecondsLeft, setSoloSecondsLeft] = useState(180);
@@ -131,6 +149,54 @@ export default function HomeScreen() {
       );
       setActiveGlobalParticipants(activeRowsInWindow.length);
       setActiveGlobalEvents(new Set(activeRowsInWindow.map((r) => String((r as any).event_id ?? ""))).size);
+
+      const { data: feedRows } = await supabase
+        .from("event_messages")
+        .select("id,event_id,user_id,body,created_at")
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      const messages = (feedRows ?? []) as Pick<EventMessageRow, "id" | "event_id" | "user_id" | "body" | "created_at">[];
+      const eventIds = Array.from(new Set(messages.map((m) => String((m as any).event_id ?? "")).filter(Boolean)));
+      const userIds = Array.from(new Set(messages.map((m) => String((m as any).user_id ?? "")).filter(Boolean)));
+
+      const [{ data: feedEvents }, { data: feedProfiles }] = await Promise.all([
+        eventIds.length
+          ? supabase.from("events").select("id,title").in("id", eventIds)
+          : Promise.resolve({ data: [] as Pick<EventRow, "id" | "title">[] }),
+        userIds.length
+          ? supabase.from("profiles").select("id,display_name").in("id", userIds)
+          : Promise.resolve({ data: [] as Pick<ProfileRow, "id" | "display_name">[] }),
+      ]);
+
+      const eventTitleById: Record<string, string> = {};
+      for (const e of ((feedEvents ?? []) as Pick<EventRow, "id" | "title">[])) {
+        eventTitleById[String((e as any).id ?? "")] = String((e as any).title ?? "Event");
+      }
+      const displayNameById: Record<string, string> = {};
+      for (const p of ((feedProfiles ?? []) as Pick<ProfileRow, "id" | "display_name">[])) {
+        const name = String((p as any).display_name ?? "").trim();
+        displayNameById[String((p as any).id ?? "")] = name || shortId(String((p as any).id ?? ""));
+      }
+
+      setFeedItems(
+        messages
+          .filter((m) => String((m as any).body ?? "").trim().length > 0)
+          .map((m) => {
+            const eventId = String((m as any).event_id ?? "");
+            const userId = String((m as any).user_id ?? "");
+            return {
+              id: String((m as any).id ?? ""),
+              body: String((m as any).body ?? ""),
+              createdAt: String((m as any).created_at ?? ""),
+              eventId,
+              userId,
+              eventTitle: eventTitleById[eventId] ?? "Live circle",
+              displayName: displayNameById[userId] ?? shortId(userId),
+            };
+          })
+          .slice(0, 6)
+      );
     } finally {
       setLoading(false);
     }
@@ -255,6 +321,34 @@ export default function HomeScreen() {
             <Text style={[styles.liveMeta, { color: c.textMuted }]}>
               Live presence across {activeGlobalEvents} event{activeGlobalEvents === 1 ? "" : "s"} (last 90 seconds).
             </Text>
+
+            <View style={[styles.sectionCard, { backgroundColor: c.card, borderColor: c.border }]}>
+              <Text style={[styles.sectionTitle, { color: c.text }]}>Community Feed</Text>
+              <Text style={[styles.sectionMeta, { color: c.textMuted }]}>
+                Recent shared intentions from live circles.
+              </Text>
+              {feedItems.length === 0 ? (
+                <Text style={[styles.sectionMeta, { color: c.textMuted, marginTop: 8 }]}>
+                  No public shares yet.
+                </Text>
+              ) : (
+                <View style={{ gap: 8, marginTop: 8 }}>
+                  {feedItems.map((item) => (
+                    <Pressable
+                      key={item.id}
+                      style={[styles.feedCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}
+                      onPress={() => openEventRoom(item.eventId)}
+                    >
+                      <Text style={[styles.feedMeta, { color: c.textMuted }]}>
+                        {item.displayName} in {item.eventTitle} •{" "}
+                        {item.createdAt ? new Date(item.createdAt).toLocaleTimeString() : "now"}
+                      </Text>
+                      <Text style={[styles.feedBody, { color: c.text }]}>{truncate(item.body, 160)}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+            </View>
 
             <View style={[styles.sectionCard, { backgroundColor: c.chip, borderColor: c.border }]}>
               <Text style={[styles.sectionTitle, { color: c.chipText }]}>Recommended Events</Text>
@@ -394,6 +488,14 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { fontSize: 15, fontWeight: "800" },
   sectionMeta: { fontSize: 12, marginTop: 4 },
+  feedCard: {
+    borderRadius: 10,
+    borderWidth: 1,
+    padding: 10,
+    gap: 4,
+  },
+  feedMeta: { fontSize: 11 },
+  feedBody: { fontSize: 13, lineHeight: 19 },
   eventCard: {
     marginHorizontal: 16,
     marginTop: 10,
