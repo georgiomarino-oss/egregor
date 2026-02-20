@@ -245,6 +245,7 @@ const HEARTBEAT_MS = 10_000;
 const PRESENCE_RESYNC_MS = 60_000;
 const CHAT_RESYNC_MS = 60_000;
 const RUN_STATE_RESYNC_MS = 60_000;
+const CHAT_MAX_CHARS = 1000;
 
 
 // Chat: how close to bottom counts as “near bottom”
@@ -514,6 +515,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   const sendMessage = useCallback(async () => {
     const text = chatText.trim();
     if (!text) return;
+    if (text.length > CHAT_MAX_CHARS) {
+      Alert.alert("Message too long", `Keep messages under ${CHAT_MAX_CHARS} characters.`);
+      return;
+    }
 
     const {
       data: { user },
@@ -1588,6 +1593,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             style={styles.chatInput}
             placeholder="Message…"
             placeholderTextColor="#6B7BB2"
+            maxLength={CHAT_MAX_CHARS}
             multiline
           />
           <Pressable
