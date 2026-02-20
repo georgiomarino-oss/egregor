@@ -647,6 +647,13 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }
   }, []);
 
+  const scheduleScrollToEnd = useCallback((targetEventId: string, animated = true) => {
+    setTimeout(() => {
+      if (activeEventIdRef.current !== targetEventId) return;
+      scrollChatToEnd(animated);
+    }, 30);
+  }, [scrollChatToEnd]);
+
   const onChatScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
     chatScrollOffsetYRef.current = contentOffset.y;
@@ -736,11 +743,11 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       shouldAutoScrollRef.current = true;
       setPendingMessageCount(0);
       setUnreadMarkerMessageId(null);
-      setTimeout(() => scrollChatToEnd(true), 30);
+      scheduleScrollToEnd(eventId, true);
     } finally {
       setSending(false);
     }
-  }, [chatText, eventId, hasValidEventId, scrollChatToEnd, ensureUserId]);
+  }, [chatText, eventId, hasValidEventId, scheduleScrollToEnd, ensureUserId]);
 
   const sendEnergyGift = useCallback(
     async (amount: number) => {
@@ -771,12 +778,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         shouldAutoScrollRef.current = true;
         setPendingMessageCount(0);
         setUnreadMarkerMessageId(null);
-        setTimeout(() => scrollChatToEnd(true), 30);
+        scheduleScrollToEnd(eventId, true);
       } finally {
         setSendingEnergy(null);
       }
     },
-    [ensureUserId, eventId, hasValidEventId, scrollChatToEnd]
+    [ensureUserId, eventId, hasValidEventId, scheduleScrollToEnd]
   );
 
   // ---- Load room ----
@@ -851,7 +858,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       if (isStale()) return;
       setLoading(false);
       // initial scroll only once; assume user wants latest
-      setTimeout(() => scrollChatToEnd(false), 50);
+      scheduleScrollToEnd(expectedEventId, false);
     } catch (e: any) {
       if (isStale()) return;
       setLoading(false);
@@ -864,7 +871,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     loadMessages,
     loadScriptById,
     loadProfiles,
-    scrollChatToEnd,
+    scheduleScrollToEnd,
   ]);
 
   useEffect(() => {
@@ -922,13 +929,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   }, [eventId]);
 
   useEffect(() => {
-    if (tickRef.current) clearInterval(tickRef.current);
+    if (tickRef.current) {
+      clearInterval(tickRef.current);
+      tickRef.current = null;
+    }
+    if (appState !== "active") return;
     tickRef.current = setInterval(() => setTick((t) => t + 1), 1000);
     return () => {
       if (tickRef.current) clearInterval(tickRef.current);
       tickRef.current = null;
     };
-  }, []);
+  }, [appState]);
 
   // Events row realtime
   useEffect(() => {
