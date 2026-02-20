@@ -21,6 +21,11 @@ type ScriptInsert = Database["public"]["Tables"]["scripts"]["Insert"];
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 
 const RESYNC_MS = 60_000;
+const SCRIPT_TITLE_MAX = 120;
+const SCRIPT_INTENTION_MAX = 2000;
+const SCRIPT_TONE_MAX = 40;
+const SCRIPT_DURATION_MIN = 1;
+const SCRIPT_DURATION_MAX = 240;
 
 function safeTimeMs(iso: string | null | undefined): number {
   if (!iso) return 0;
@@ -288,11 +293,30 @@ export default function ScriptsScreen() {
 
   const handleCreateScript = useCallback(async () => {
     const mins = Number(durationMinutes);
+    const titleText = title.trim();
+    const intentionText = intention.trim();
+    const toneText = tone.trim().toLowerCase();
 
-    if (!title.trim()) return Alert.alert("Validation", "Title is required.");
-    if (!intention.trim()) return Alert.alert("Validation", "Intention is required.");
-    if (!Number.isFinite(mins) || mins <= 0) {
-      return Alert.alert("Validation", "Duration must be a positive number.");
+    if (!titleText) return Alert.alert("Validation", "Title is required.");
+    if (titleText.length > SCRIPT_TITLE_MAX) {
+      return Alert.alert("Validation", `Title must be ${SCRIPT_TITLE_MAX} characters or fewer.`);
+    }
+    if (!intentionText) return Alert.alert("Validation", "Intention is required.");
+    if (intentionText.length > SCRIPT_INTENTION_MAX) {
+      return Alert.alert("Validation", `Intention must be ${SCRIPT_INTENTION_MAX} characters or fewer.`);
+    }
+    if (!toneText) return Alert.alert("Validation", "Tone is required.");
+    if (toneText.length > SCRIPT_TONE_MAX) {
+      return Alert.alert("Validation", `Tone must be ${SCRIPT_TONE_MAX} characters or fewer.`);
+    }
+    if (!/^[a-z][a-z0-9 _-]*$/.test(toneText)) {
+      return Alert.alert("Validation", "Tone can contain lowercase letters, numbers, spaces, '_' and '-'.");
+    }
+    if (!Number.isFinite(mins) || mins < SCRIPT_DURATION_MIN || mins > SCRIPT_DURATION_MAX) {
+      return Alert.alert(
+        "Validation",
+        `Duration must be between ${SCRIPT_DURATION_MIN} and ${SCRIPT_DURATION_MAX} minutes.`
+      );
     }
 
     const {
@@ -309,15 +333,15 @@ export default function ScriptsScreen() {
     try {
       const payload: ScriptInsert = {
         author_user_id: user.id as any,
-        title: title.trim(),
-        intention: intention.trim(),
+        title: titleText,
+        intention: intentionText,
         duration_minutes: mins as any,
-        tone: tone as any,
+        tone: toneText as any,
         content_json: {
-          title: title.trim(),
+          title: titleText,
           durationMinutes: mins,
-          tone,
-          sections: buildDefaultSections(mins, intention),
+          tone: toneText,
+          sections: buildDefaultSections(mins, intentionText),
         } as any,
       };
 
@@ -601,6 +625,7 @@ export default function ScriptsScreen() {
                 style={styles.input}
                 placeholder="Script title"
                 placeholderTextColor="#6B7BB2"
+                maxLength={SCRIPT_TITLE_MAX}
               />
 
               <Text style={styles.label}>Intention</Text>
@@ -611,6 +636,7 @@ export default function ScriptsScreen() {
                 multiline
                 placeholder="What is this script for?"
                 placeholderTextColor="#6B7BB2"
+                maxLength={SCRIPT_INTENTION_MAX}
               />
 
               <View style={styles.row}>
@@ -623,6 +649,7 @@ export default function ScriptsScreen() {
                     style={styles.input}
                     placeholder="20"
                     placeholderTextColor="#6B7BB2"
+                    maxLength={3}
                   />
                 </View>
 
@@ -634,6 +661,7 @@ export default function ScriptsScreen() {
                     style={styles.input}
                     placeholder="calm"
                     placeholderTextColor="#6B7BB2"
+                    maxLength={SCRIPT_TONE_MAX}
                   />
                 </View>
               </View>
@@ -660,7 +688,7 @@ export default function ScriptsScreen() {
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Attach Script to Event</Text>
               <Text style={styles.meta}>
-                Tap “Attach to event” on a script, then choose one of your hosted events.
+                Tap "Attach to event" on a script, then choose one of your hosted events.
               </Text>
             </View>
           </View>
@@ -696,7 +724,7 @@ export default function ScriptsScreen() {
               value={eventQuery}
               onChangeText={setEventQuery}
               style={styles.input}
-              placeholder="Search your events… (title, description, current script)"
+              placeholder="Search your events (title, description, current script)"
               placeholderTextColor="#6B7BB2"
             />
 
@@ -840,3 +868,4 @@ const styles = StyleSheet.create({
   eventTitle: { color: "white", fontSize: 14, fontWeight: "800" },
   eventMeta: { color: "#93A3D9", fontSize: 12, marginTop: 4 },
 });
+

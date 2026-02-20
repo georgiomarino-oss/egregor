@@ -100,6 +100,9 @@ function removeEventRow(rows: EventRow[], eventId: string): EventRow[] {
 }
 
 const EVENTS_RESYNC_MS = 60_000;
+const EVENT_TITLE_MAX = 120;
+const EVENT_INTENTION_MAX = 2000;
+const EVENT_DESCRIPTION_MAX = 4000;
 
 function formatWhenLabel(event: EventRow, nowMs: number) {
   const startMs = safeTimeMs((event as any).start_time_utc);
@@ -522,8 +525,16 @@ export default function EventsScreen() {
 
   const handleCreateEvent = useCallback(async () => {
     try {
-      if (!title.trim()) {
+      const titleText = title.trim();
+      const intentionText = intention.trim();
+      const descriptionText = description.trim();
+
+      if (!titleText) {
         Alert.alert("Validation", "Title is required.");
+        return;
+      }
+      if (titleText.length > EVENT_TITLE_MAX) {
+        Alert.alert("Validation", `Title must be ${EVENT_TITLE_MAX} characters or fewer.`);
         return;
       }
 
@@ -562,17 +573,24 @@ export default function EventsScreen() {
         return;
       }
 
-      const intentionText = intention.trim();
       if (!intentionText) {
         Alert.alert("Validation", "Intention is required.");
+        return;
+      }
+      if (intentionText.length > EVENT_INTENTION_MAX) {
+        Alert.alert("Validation", `Intention must be ${EVENT_INTENTION_MAX} characters or fewer.`);
+        return;
+      }
+      if (descriptionText.length > EVENT_DESCRIPTION_MAX) {
+        Alert.alert("Validation", `Description must be ${EVENT_DESCRIPTION_MAX} characters or fewer.`);
         return;
       }
 
       setLoading(true);
 
       const payload: Database["public"]["Tables"]["events"]["Insert"] = {
-        title: title.trim(),
-        description: description.trim() || null,
+        title: titleText,
+        description: descriptionText || null,
 
         intention: intentionText,
         intention_statement: intentionText,
@@ -1030,7 +1048,12 @@ export default function EventsScreen() {
               <Text style={styles.sectionTitle}>Create Event</Text>
 
               <Text style={styles.label}>Title</Text>
-              <TextInput style={styles.input} value={title} onChangeText={setTitle} />
+              <TextInput
+                style={styles.input}
+                value={title}
+                onChangeText={setTitle}
+                maxLength={EVENT_TITLE_MAX}
+              />
 
               <Text style={styles.label}>Intention</Text>
               <TextInput
@@ -1038,6 +1061,7 @@ export default function EventsScreen() {
                 value={intention}
                 onChangeText={setIntention}
                 multiline
+                maxLength={EVENT_INTENTION_MAX}
               />
 
               <Text style={styles.label}>Description</Text>
@@ -1046,6 +1070,7 @@ export default function EventsScreen() {
                 value={description}
                 onChangeText={setDescription}
                 multiline
+                maxLength={EVENT_DESCRIPTION_MAX}
               />
 
               <Text style={styles.label}>Start local (YYYY-MM-DDTHH:mm)</Text>
