@@ -12,6 +12,8 @@ const KEY_AUTO_JOIN_GLOBAL = "prefs:autoJoinLive";
 const KEY_JOURNAL = "journal:entries";
 const KEY_PROFILE_PREFS = "profile:prefs:v1";
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
+type EventRow = Database["public"]["Tables"]["events"]["Row"];
+type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
 type JournalEntry = { id: string; createdAt: string; text: string };
 const PROFILE_LANGUAGES = ["English", "Spanish", "Portuguese", "French"] as const;
 type ProfileLanguage = (typeof PROFILE_LANGUAGES)[number];
@@ -41,6 +43,20 @@ const DEFAULT_PROFILE_PREFS: ProfilePrefs = {
   voiceMode: false,
   highContrast: false,
   language: "English",
+};
+
+type CollectiveImpact = {
+  liveEventsNow: number;
+  activeParticipantsNow: number;
+  prayersWeek: number;
+  sharedIntentionsWeek: number;
+};
+
+const DEFAULT_COLLECTIVE_IMPACT: CollectiveImpact = {
+  liveEventsNow: 0,
+  activeParticipantsNow: 0,
+  prayersWeek: 0,
+  sharedIntentionsWeek: 0,
 };
 
 function safeTimeMs(iso: string | null | undefined): number {
@@ -101,6 +117,7 @@ export default function ProfileScreen() {
   const [journalText, setJournalText] = useState("");
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
   const [prefs, setPrefs] = useState<ProfilePrefs>(DEFAULT_PROFILE_PREFS);
+  const [collectiveImpact, setCollectiveImpact] = useState<CollectiveImpact>(DEFAULT_COLLECTIVE_IMPACT);
 
   const loadJournal = useCallback(async () => {
     try {
@@ -173,6 +190,7 @@ export default function ProfileScreen() {
         setStreakDays(0);
         setActiveDays30(0);
         setIntentionEnergy(0);
+        setCollectiveImpact(DEFAULT_COLLECTIVE_IMPACT);
         return;
       }
 
@@ -212,6 +230,51 @@ export default function ProfileScreen() {
       setStreakDays(computeStreakDays(distinctDayKeys));
       setActiveDays30(recentDays);
       setIntentionEnergy(distinctEventCount);
+
+      const nowMs = Date.now();
+      const weekAgoIso = new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const activeCutoffIso = new Date(nowMs - 90_000).toISOString();
+
+      const [{ data: allEvents }, { count: prayersWeekCount }, { data: activePresenceRows }, { count: sharedIntentionsCount }] =
+        await Promise.all([
+          supabase
+            .from("events")
+            .select("id,start_time_utc,end_time_utc")
+            .limit(300),
+          supabase
+            .from("event_presence")
+            .select("*", { count: "exact", head: true })
+            .gte("last_seen_at", weekAgoIso),
+          supabase
+            .from("event_presence")
+            .select("event_id,user_id,last_seen_at")
+            .gte("last_seen_at", activeCutoffIso)
+            .limit(5000),
+          supabase
+            .from("event_messages")
+            .select("*", { count: "exact", head: true })
+            .gte("created_at", weekAgoIso),
+        ]);
+
+      const eventsRows = (allEvents ?? []) as Pick<EventRow, "id" | "start_time_utc" | "end_time_utc">[];
+      const liveEventsNow = eventsRows.filter((e) => {
+        const startMs = safeTimeMs(String((e as any).start_time_utc ?? ""));
+        const endMs = safeTimeMs(String((e as any).end_time_utc ?? ""));
+        return startMs > 0 && startMs <= nowMs && (endMs <= 0 || nowMs <= endMs);
+      }).length;
+
+      const activeRows = (activePresenceRows ?? []) as Pick<PresenceRow, "event_id" | "user_id" | "last_seen_at">[];
+      const activeParticipantsNow = activeRows.filter((r) => {
+        const ts = safeTimeMs(String((r as any).last_seen_at ?? ""));
+        return ts > 0 && nowMs - ts <= 90_000;
+      }).length;
+
+      setCollectiveImpact({
+        liveEventsNow,
+        activeParticipantsNow,
+        prayersWeek: prayersWeekCount ?? 0,
+        sharedIntentionsWeek: sharedIntentionsCount ?? 0,
+      });
     } finally {
       setLoading(false);
     }
@@ -417,6 +480,33 @@ export default function ProfileScreen() {
           </View>
           <Text style={[styles.tip, { color: c.textMuted }]}>
             Stats are derived from your room presence activity.
+          </Text>
+        </View>
+
+        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={[styles.sectionTitle, { color: c.text }]}>Collective Impact</Text>
+          <View style={styles.statsRow}>
+            <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+              <Text style={[styles.statValue, { color: c.text }]}>{collectiveImpact.liveEventsNow}</Text>
+              <Text style={[styles.statLabel, { color: c.textMuted }]}>Live circles now</Text>
+            </View>
+            <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+              <Text style={[styles.statValue, { color: c.text }]}>{collectiveImpact.activeParticipantsNow}</Text>
+              <Text style={[styles.statLabel, { color: c.textMuted }]}>Active now (90s)</Text>
+            </View>
+          </View>
+          <View style={styles.statsRow}>
+            <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+              <Text style={[styles.statValue, { color: c.text }]}>{collectiveImpact.prayersWeek}</Text>
+              <Text style={[styles.statLabel, { color: c.textMuted }]}>Prayers this week</Text>
+            </View>
+            <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+              <Text style={[styles.statValue, { color: c.text }]}>{collectiveImpact.sharedIntentionsWeek}</Text>
+              <Text style={[styles.statLabel, { color: c.textMuted }]}>Shared intentions (7d)</Text>
+            </View>
+          </View>
+          <Text style={[styles.tip, { color: c.textMuted }]}>
+            Snapshot based on global events, presence, and chat activity.
           </Text>
         </View>
 
