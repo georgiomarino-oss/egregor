@@ -177,7 +177,7 @@ export default function NotificationsScreen() {
               </Pressable>
             </View>
             <Text style={[styles.meta, { color: c.textMuted }]}>
-              {unreadCount} unread • live circles, reminders, and community updates.
+              {unreadCount} unread - live circles, reminders, and community updates.
             </Text>
           </View>
         }

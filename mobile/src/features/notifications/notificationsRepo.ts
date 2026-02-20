@@ -5,6 +5,7 @@ import type { Database } from "../../types/db";
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
 type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
+type UserNotificationReadRow = Database["public"]["Tables"]["user_notification_reads"]["Row"];
 
 export type NotificationItem = {
   id: string;
@@ -25,6 +26,10 @@ type ProfilePrefs = {
 
 const KEY_PROFILE_PREFS = "profile:prefs:v1";
 const KEY_NOTIFICATIONS_READ = "notifications:read:v1";
+const READ_IDS_CACHE_MS = 20_000;
+
+let readIdsCache: string[] = [];
+let readIdsCacheAt = 0;
 
 const DEFAULT_PREFS: ProfilePrefs = {
   notifyLiveStart: true,
@@ -67,6 +72,25 @@ async function loadPrefs(): Promise<ProfilePrefs> {
   } catch {
     return DEFAULT_PREFS;
   }
+}
+
+async function getCurrentUserId(): Promise<string> {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  return String(user?.id ?? "").trim();
+}
+
+function normalizeIds(ids: string[]) {
+  return Array.from(new Set(ids.filter(Boolean))).slice(0, 500);
+}
+
+function sameIds(a: string[], b: string[]) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 export async function listNotifications(): Promise<NotificationItem[]> {
@@ -221,21 +245,89 @@ export async function listNotifications(): Promise<NotificationItem[]> {
   return next.slice(0, 40);
 }
 
-export async function readNotificationIds(): Promise<string[]> {
+async function readLocalNotificationIds(): Promise<string[]> {
   try {
     const raw = await AsyncStorage.getItem(KEY_NOTIFICATIONS_READ);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.map((v) => String(v)).filter(Boolean);
+    return normalizeIds(parsed.map((v) => String(v)));
   } catch {
     return [];
   }
 }
 
-async function writeNotificationIds(ids: string[]) {
-  const uniq = Array.from(new Set(ids.filter(Boolean))).slice(0, 300);
+async function writeLocalNotificationIds(ids: string[]) {
+  const uniq = normalizeIds(ids);
   await AsyncStorage.setItem(KEY_NOTIFICATIONS_READ, JSON.stringify(uniq));
+}
+
+export async function readNotificationIds(forceFresh = false): Promise<string[]> {
+  const now = Date.now();
+  if (!forceFresh && now - readIdsCacheAt <= READ_IDS_CACHE_MS) {
+    return readIdsCache;
+  }
+
+  const local = await readLocalNotificationIds();
+  const uid = await getCurrentUserId();
+  if (!uid) {
+    readIdsCache = local;
+    readIdsCacheAt = now;
+    return local;
+  }
+
+  const { data, error } = await supabase
+    .from("user_notification_reads")
+    .select("notification_id,read_at,user_id")
+    .eq("user_id", uid)
+    .order("read_at", { ascending: false })
+    .limit(500);
+
+  if (error) {
+    readIdsCache = local;
+    readIdsCacheAt = now;
+    return local;
+  }
+
+  const remote = ((data ?? []) as UserNotificationReadRow[])
+    .map((r) => String(r.notification_id ?? "").trim())
+    .filter(Boolean);
+  const merged = normalizeIds([...remote, ...local]);
+
+  if (!sameIds(merged, local)) {
+    try {
+      await writeLocalNotificationIds(merged);
+    } catch {
+      // ignore local cache write errors
+    }
+  }
+
+  readIdsCache = merged;
+  readIdsCacheAt = now;
+  return merged;
+}
+
+async function writeNotificationIds(ids: string[]) {
+  const uniq = normalizeIds(ids);
+  await writeLocalNotificationIds(uniq);
+
+  const uid = await getCurrentUserId();
+  if (uid && uniq.length > 0) {
+    const rows = uniq.map((notificationId) => ({
+      user_id: uid,
+      notification_id: notificationId,
+      read_at: new Date().toISOString(),
+    }));
+    const { error } = await supabase
+      .from("user_notification_reads")
+      .upsert(rows, { onConflict: "user_id,notification_id" });
+    if (error) {
+      console.log("[notifications] read sync failed", error.message);
+    }
+  }
+
+  readIdsCache = uniq;
+  readIdsCacheAt = Date.now();
 }
 
 export async function markNotificationRead(id: string) {
