@@ -183,6 +183,7 @@ export default function EventsScreen() {
   // Presence (quick join from list header)
   const [selectedEventId, setSelectedEventId] = useState<string>("");
   const [isJoined, setIsJoined] = useState(false);
+  const [joinedEventId, setJoinedEventId] = useState<string>("");
   const [presenceStatus, setPresenceStatus] = useState("");
   const [presenceError, setPresenceError] = useState("");
   const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
@@ -233,8 +234,8 @@ export default function EventsScreen() {
     [events, selectedEventId]
   );
   const joinedEvent = useMemo(
-    () => (isJoined && selectedEventId ? events.find((e) => e.id === selectedEventId) ?? null : null),
-    [events, isJoined, selectedEventId]
+    () => (joinedEventId ? events.find((e) => e.id === joinedEventId) ?? null : null),
+    [events, joinedEventId]
   );
 
   const attachEvent = useMemo(
@@ -387,19 +388,20 @@ export default function EventsScreen() {
       return;
     }
     if (selectedEventId !== lastSelectedEventId) {
-      if (isJoined && myUserId && lastSelectedEventId) {
+      if (joinedEventId && myUserId && lastSelectedEventId && joinedEventId === lastSelectedEventId) {
         void supabase
           .from("event_presence")
           .delete()
           .eq("event_id", lastSelectedEventId)
           .eq("user_id", myUserId);
         setPresenceStatus("Left previous live event after selection change.");
+        setJoinedEventId("");
       }
       setIsJoined(false);
       setPresenceError("");
       setLastSelectedEventId(selectedEventId);
     }
-  }, [selectedEventId, lastSelectedEventId, isJoined, myUserId]);
+  }, [selectedEventId, lastSelectedEventId, joinedEventId, myUserId]);
 
   useEffect(() => {
     if (!selectedEventId && events.length > 0) {
@@ -409,6 +411,7 @@ export default function EventsScreen() {
     if (selectedEventId && !events.some((r) => r.id === selectedEventId)) {
       setSelectedEventId(events[0]?.id ?? "");
       setIsJoined(false);
+      if (joinedEventId === selectedEventId) setJoinedEventId("");
     }
     if (attachOpen && attachEventId && !events.some((r) => r.id === attachEventId)) {
       setAttachOpen(false);
@@ -418,7 +421,7 @@ export default function EventsScreen() {
       setEditOpen(false);
       setEditEventId("");
     }
-  }, [events, selectedEventId, attachOpen, attachEventId, editOpen, editEventId]);
+  }, [events, selectedEventId, attachOpen, attachEventId, editOpen, editEventId, joinedEventId]);
 
   useEffect(() => {
     if (!selectedEventId || !myUserId) {
@@ -437,7 +440,10 @@ export default function EventsScreen() {
         .maybeSingle();
 
       if (cancelled || error) return;
-      setIsJoined(!!data);
+      const joined = !!data;
+      setIsJoined(joined);
+      if (joined) setJoinedEventId(selectedEventId);
+      else if (joinedEventId === selectedEventId) setJoinedEventId("");
     };
 
     void loadSelectedJoinState();
@@ -461,9 +467,11 @@ export default function EventsScreen() {
 
           if (eventType === "DELETE") {
             setIsJoined(false);
+            if (joinedEventId === selectedEventId) setJoinedEventId("");
             return;
           }
           setIsJoined(true);
+          setJoinedEventId(selectedEventId);
         }
       )
       .subscribe();
@@ -472,7 +480,7 @@ export default function EventsScreen() {
       cancelled = true;
       supabase.removeChannel(channel);
     };
-  }, [selectedEventId, myUserId]);
+  }, [selectedEventId, myUserId, joinedEventId]);
 
   // Realtime updates from events table
   useEffect(() => {
@@ -542,19 +550,19 @@ export default function EventsScreen() {
 
   // Heartbeat while joined (presence only)
   useEffect(() => {
-    if (!isJoined || !selectedEventId) return;
+    if (!isJoined || !joinedEventId) return;
     if (appState !== "active") return;
 
     const id = setInterval(async () => {
       try {
-        await upsertPresence(selectedEventId);
+        await upsertPresence(joinedEventId);
       } catch {
         // best-effort
       }
     }, 10_000);
 
     return () => clearInterval(id);
-  }, [isJoined, selectedEventId, upsertPresence, appState]);
+  }, [isJoined, joinedEventId, upsertPresence, appState]);
 
   const handleCreateEvent = useCallback(async () => {
     try {
@@ -670,21 +678,26 @@ export default function EventsScreen() {
         return;
       }
 
+      if (joinedEventId && joinedEventId !== selectedEventId && myUserId) {
+        await supabase.from("event_presence").delete().eq("event_id", joinedEventId).eq("user_id", myUserId);
+      }
       await upsertPresence(selectedEventId);
 
       setIsJoined(true);
+      setJoinedEventId(selectedEventId);
       setPresenceStatus("Joined live.");
     } catch (e: any) {
       setPresenceError(e?.message ?? "Failed to join");
     }
-  }, [selectedEventId, upsertPresence]);
+  }, [selectedEventId, upsertPresence, joinedEventId, myUserId]);
 
   const handleLeave = useCallback(async () => {
     try {
       setPresenceError("");
       setPresenceStatus("");
 
-      if (!selectedEventId) return;
+      const targetEventId = joinedEventId || selectedEventId;
+      if (!targetEventId) return;
 
       const { data } = await supabase.auth.getUser();
       const user = data.user;
@@ -697,7 +710,7 @@ export default function EventsScreen() {
       const { error } = await supabase
         .from("event_presence")
         .delete()
-        .eq("event_id", selectedEventId)
+        .eq("event_id", targetEventId)
         .eq("user_id", user.id);
 
       if (error) {
@@ -706,11 +719,12 @@ export default function EventsScreen() {
       }
 
       setIsJoined(false);
+      if (joinedEventId === targetEventId) setJoinedEventId("");
       setPresenceStatus("Left live.");
     } catch (e: any) {
       setPresenceError(e?.message ?? "Failed to leave");
     }
-  }, [selectedEventId]);
+  }, [selectedEventId, joinedEventId]);
 
   const openRoom = useCallback(
     (eventId: string) => {
