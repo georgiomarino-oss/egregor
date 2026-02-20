@@ -1,6 +1,6 @@
 // mobile/src/screens/ProfileScreen.tsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../supabase/client";
@@ -13,10 +13,12 @@ const KEY_JOURNAL = "journal:entries";
 const KEY_PROFILE_PREFS = "profile:prefs:v1";
 const KEY_SUPPORT_TOTAL = "support:total:v1";
 const KEY_DAILY_INTENTION = "onboarding:intention:v1";
+const KEY_CIRCLE_WAITLIST = "circle:waitlist:v1";
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
 type JournalEntry = { id: string; createdAt: string; text: string };
+type CircleWaitlistEntry = { id: string; createdAt: string; email: string; note: string };
 const PROFILE_LANGUAGES = ["English", "Spanish", "Portuguese", "French"] as const;
 type ProfileLanguage = (typeof PROFILE_LANGUAGES)[number];
 
@@ -122,6 +124,10 @@ export default function ProfileScreen() {
   const [collectiveImpact, setCollectiveImpact] = useState<CollectiveImpact>(DEFAULT_COLLECTIVE_IMPACT);
   const [supportTotalUsd, setSupportTotalUsd] = useState(0);
   const [dailyIntention, setDailyIntention] = useState("peace and clarity");
+  const [waitlistOpen, setWaitlistOpen] = useState(false);
+  const [waitlistEmail, setWaitlistEmail] = useState("");
+  const [waitlistNote, setWaitlistNote] = useState("");
+  const [savingWaitlist, setSavingWaitlist] = useState(false);
 
   const loadJournal = useCallback(async () => {
     try {
@@ -196,6 +202,29 @@ export default function ProfileScreen() {
       setDailyIntention("peace and clarity");
     }
   }, []);
+
+  const loadWaitlistDraft = useCallback(async () => {
+    try {
+      const raw = await AsyncStorage.getItem(KEY_CIRCLE_WAITLIST);
+      if (!raw) {
+        setWaitlistEmail(email.trim());
+        setWaitlistNote("");
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        setWaitlistEmail(email.trim());
+        setWaitlistNote("");
+        return;
+      }
+      const latest = parsed[0] as Partial<CircleWaitlistEntry>;
+      setWaitlistEmail(String(latest?.email ?? email).trim());
+      setWaitlistNote(String(latest?.note ?? "").trim());
+    } catch {
+      setWaitlistEmail(email.trim());
+      setWaitlistNote("");
+    }
+  }, [email]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -309,7 +338,14 @@ export default function ProfileScreen() {
     void loadPrefs();
     void loadSupportTotal();
     void loadDailyIntention();
-  }, [load, loadJournal, loadPrefs, loadSupportTotal, loadDailyIntention]);
+    void loadWaitlistDraft();
+  }, [load, loadJournal, loadPrefs, loadSupportTotal, loadDailyIntention, loadWaitlistDraft]);
+
+  useEffect(() => {
+    if (!waitlistEmail.trim() && email.trim()) {
+      setWaitlistEmail(email.trim());
+    }
+  }, [email, waitlistEmail]);
 
   const initials = useMemo(() => {
     const name = (displayName || email || "").trim();
@@ -478,6 +514,45 @@ export default function ProfileScreen() {
       Alert.alert("Save failed", e?.message ?? "Could not save daily intention.");
     }
   }, [dailyIntention]);
+
+  const openWaitlist = useCallback(() => {
+    setWaitlistEmail((prev) => (prev.trim() ? prev : email.trim()));
+    setWaitlistOpen(true);
+  }, [email]);
+
+  const submitWaitlist = useCallback(async () => {
+    const nextEmail = waitlistEmail.trim().toLowerCase();
+    const nextNote = waitlistNote.trim();
+
+    if (!nextEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
+      Alert.alert("Validation", "Enter a valid email address.");
+      return;
+    }
+    if (nextNote.length > 240) {
+      Alert.alert("Validation", "Note must be 240 characters or fewer.");
+      return;
+    }
+
+    setSavingWaitlist(true);
+    try {
+      const raw = await AsyncStorage.getItem(KEY_CIRCLE_WAITLIST);
+      const entries = raw ? (JSON.parse(raw) as CircleWaitlistEntry[]) : [];
+      const next: CircleWaitlistEntry = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        createdAt: new Date().toISOString(),
+        email: nextEmail,
+        note: nextNote,
+      };
+      const merged = [next, ...(Array.isArray(entries) ? entries : [])].slice(0, 50);
+      await AsyncStorage.setItem(KEY_CIRCLE_WAITLIST, JSON.stringify(merged));
+      setWaitlistOpen(false);
+      Alert.alert("You're on the list", "We'll notify you as soon as Egregor Circle opens.");
+    } catch (e: any) {
+      Alert.alert("Save failed", e?.message ?? "Could not save waitlist entry.");
+    } finally {
+      setSavingWaitlist(false);
+    }
+  }, [waitlistEmail, waitlistNote]);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
@@ -690,7 +765,7 @@ export default function ProfileScreen() {
           <Text style={[styles.meta, { color: c.textMuted }]}>
             Premium unlocks unlimited AI scripts, priority access, custom themes, and exclusive soundscapes.
           </Text>
-          <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }]}>
+          <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }]} onPress={openWaitlist}>
             <Text style={styles.btnText}>Join waitlist</Text>
           </Pressable>
         </View>
@@ -809,6 +884,58 @@ export default function ProfileScreen() {
           {loading ? <ActivityIndicator /> : null}
         </View>
       </ScrollView>
+
+      <Modal visible={waitlistOpen} transparent animationType="slide" onRequestClose={() => setWaitlistOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border }]}>
+            <Text style={[styles.sectionTitle, { color: c.text }]}>Egregor Circle Waitlist</Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>
+              Share your email to get early access to premium themes, soundscapes, and priority events.
+            </Text>
+
+            <Text style={[styles.fieldLabel, { color: c.textMuted }]}>Email</Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+              value={waitlistEmail}
+              onChangeText={setWaitlistEmail}
+              placeholder="you@example.com"
+              placeholderTextColor={c.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+            />
+
+            <Text style={[styles.fieldLabel, { color: c.textMuted }]}>What feature excites you most? (optional)</Text>
+            <TextInput
+              style={[styles.input, styles.journalInput, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+              value={waitlistNote}
+              onChangeText={setWaitlistNote}
+              placeholder="Custom cosmic themes, voice guidance, unlimited scripts..."
+              placeholderTextColor={c.textMuted}
+              maxLength={240}
+              multiline
+            />
+            <Text style={[styles.meta, { color: c.textMuted }]}>{waitlistNote.trim().length}/240</Text>
+
+            <View style={styles.row}>
+              <Pressable
+                style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, savingWaitlist && styles.disabled]}
+                onPress={submitWaitlist}
+                disabled={savingWaitlist}
+              >
+                <Text style={styles.btnText}>{savingWaitlist ? "Saving..." : "Join waitlist"}</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.btn, styles.btnGhost, { borderColor: c.border }, savingWaitlist && styles.disabled]}
+                onPress={() => setWaitlistOpen(false)}
+                disabled={savingWaitlist}
+              >
+                <Text style={[styles.btnGhostText, { color: c.text }]}>Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -923,6 +1050,24 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 4,
+  },
+  row: {
+    flexDirection: "row",
+    gap: 10,
+    flexWrap: "wrap",
+    marginTop: 8,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(3, 6, 12, 0.6)",
+    justifyContent: "flex-end",
+    padding: 16,
+  },
+  modalCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 14,
+    gap: 8,
   },
 
   btn: {
