@@ -226,6 +226,17 @@ export default function ScriptsScreen() {
   }, [refreshAll]);
 
   useEffect(() => {
+    if (attachOpen && attachScriptId && !scripts.some((s) => s.id === attachScriptId)) {
+      setAttachOpen(false);
+      setAttachScriptId("");
+    }
+    if (editOpen && editScriptId && !scripts.some((s) => s.id === editScriptId)) {
+      setEditOpen(false);
+      setEditScriptId("");
+    }
+  }, [scripts, attachOpen, attachScriptId, editOpen, editScriptId]);
+
+  useEffect(() => {
     let disposed = false;
     const resync = () => {
       if (disposed) return;
