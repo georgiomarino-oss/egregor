@@ -3,6 +3,8 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  AppState,
+  AppStateStatus,
   FlatList,
   Modal,
   Pressable,
@@ -63,6 +65,21 @@ function safeTimeMs(iso: string | null | undefined): number {
   const t = new Date(iso).getTime();
   return Number.isFinite(t) ? t : 0;
 }
+
+function upsertEventRow(rows: EventRow[], next: EventRow): EventRow[] {
+  const idx = rows.findIndex((r) => r.id === next.id);
+  if (idx < 0) return [...rows, next];
+  const copy = [...rows];
+  copy[idx] = next;
+  return copy;
+}
+
+function removeEventRow(rows: EventRow[], eventId: string): EventRow[] {
+  if (!eventId) return rows;
+  return rows.filter((r) => r.id !== eventId);
+}
+
+const EVENTS_RESYNC_MS = 60_000;
 
 function formatWhenLabel(event: EventRow, nowMs: number) {
   const startMs = safeTimeMs((event as any).start_time_utc);
@@ -128,6 +145,7 @@ export default function EventsScreen() {
   const [isJoined, setIsJoined] = useState(false);
   const [presenceStatus, setPresenceStatus] = useState("");
   const [presenceError, setPresenceError] = useState("");
+  const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
 
   // Filters
   const [upcomingOnly, setUpcomingOnly] = useState(true);
@@ -282,20 +300,7 @@ export default function EventsScreen() {
 
     // Fetch host profiles for display
     void loadProfiles(rows.map((r) => (r as any).host_user_id as string));
-
-    // keep selection stable
-    if (!selectedEventId && rows.length > 0) {
-      setSelectedEventId(rows[0].id);
-    } else if (selectedEventId && !rows.some((r) => r.id === selectedEventId)) {
-      setSelectedEventId(rows[0]?.id ?? "");
-    }
-
-    // If modal is open and the event disappeared due to RLS / delete, close it
-    if (attachOpen && attachEventId && !rows.some((r) => r.id === attachEventId)) {
-      setAttachOpen(false);
-      setAttachEventId("");
-    }
-  }, [attachEventId, attachOpen, selectedEventId, loadProfiles]);
+  }, [loadProfiles]);
 
   const refreshAll = useCallback(async () => {
     setLoading(true);
@@ -310,19 +315,82 @@ export default function EventsScreen() {
     refreshAll();
   }, [refreshAll]);
 
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (next) => {
+      setAppState(next);
+    });
+    return () => {
+      sub.remove();
+    };
+  }, []);
+
+  const [lastSelectedEventId, setLastSelectedEventId] = useState<string>("");
+  useEffect(() => {
+    if (!lastSelectedEventId) {
+      setLastSelectedEventId(selectedEventId);
+      return;
+    }
+    if (selectedEventId !== lastSelectedEventId) {
+      setIsJoined(false);
+      setPresenceStatus("");
+      setPresenceError("");
+      setLastSelectedEventId(selectedEventId);
+    }
+  }, [selectedEventId, lastSelectedEventId]);
+
+  useEffect(() => {
+    if (!selectedEventId && events.length > 0) {
+      setSelectedEventId(events[0].id);
+      return;
+    }
+    if (selectedEventId && !events.some((r) => r.id === selectedEventId)) {
+      setSelectedEventId(events[0]?.id ?? "");
+      setIsJoined(false);
+    }
+    if (attachOpen && attachEventId && !events.some((r) => r.id === attachEventId)) {
+      setAttachOpen(false);
+      setAttachEventId("");
+    }
+  }, [events, selectedEventId, attachOpen, attachEventId]);
+
   // Realtime updates from events table
   useEffect(() => {
+    let disposed = false;
+    const resync = () => {
+      if (disposed) return;
+      void loadEvents();
+    };
+
+    resync();
+    const intervalId = setInterval(resync, EVENTS_RESYNC_MS);
+
     const channel = supabase
       .channel("events:list")
-      .on("postgres_changes", { event: "*", schema: "public", table: "events" }, async () => {
-        await loadEvents();
+      .on("postgres_changes", { event: "*", schema: "public", table: "events" }, (payload) => {
+        const eventType = String((payload as any).eventType ?? "");
+        const next = ((payload as any).new ?? null) as EventRow | null;
+        const prev = ((payload as any).old ?? null) as EventRow | null;
+
+        setEvents((rows) => {
+          if (eventType === "DELETE") {
+            const eventId = String((prev as any)?.id ?? "");
+            return removeEventRow(rows, eventId);
+          }
+          if (!next) return rows;
+          return upsertEventRow(rows, next);
+        });
+
+        const hostUserId = String((next as any)?.host_user_id ?? (prev as any)?.host_user_id ?? "");
+        if (hostUserId) void loadProfiles([hostUserId]);
       })
       .subscribe();
 
     return () => {
+      disposed = true;
+      clearInterval(intervalId);
       supabase.removeChannel(channel);
     };
-  }, [loadEvents]);
+  }, [loadEvents, loadProfiles]);
 
   // Presence upsert (heartbeat-safe): NEVER send created_at from the client
   const upsertPresence = useCallback(async (eventId: string) => {
@@ -350,6 +418,7 @@ export default function EventsScreen() {
   // Heartbeat while joined (presence only)
   useEffect(() => {
     if (!isJoined || !selectedEventId) return;
+    if (appState !== "active") return;
 
     const id = setInterval(async () => {
       try {
@@ -360,7 +429,7 @@ export default function EventsScreen() {
     }, 10_000);
 
     return () => clearInterval(id);
-  }, [isJoined, selectedEventId, upsertPresence]);
+  }, [isJoined, selectedEventId, upsertPresence, appState]);
 
   const handleCreateEvent = useCallback(async () => {
     try {
