@@ -68,6 +68,8 @@ Scope: `mobile/src/screens/EventRoomScreen.tsx`
 - Expected: no navigation crash; route params still use `eventId`.
 - Delete a hosted event from Events tab.
 - Expected: confirmation prompt appears and host-only delete succeeds.
+- Edit a hosted event from Events tab.
+- Expected: host-only edit succeeds and updated fields render in EventRoom.
 
 ## Quick Pass/Fail Log
 - Date:

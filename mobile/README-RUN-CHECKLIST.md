@@ -76,6 +76,7 @@ Minimum pass criteria:
 - Confirm generated section durations match chosen duration.
 - Edit script title/intention/duration/tone and confirm changes persist.
 - Attach/replace script on hosted event.
+- Edit a hosted event (title/timezone/timing/intention) and confirm changes persist.
 - Attempt delete on attached script (should block with guidance).
 - Delete an un-attached script (should succeed).
 - Delete a hosted event from Events tab (should require host and confirmation).
