@@ -1163,13 +1163,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   }, [scrollChatToEnd]);
 
   useEffect(() => {
+    if (isLeavingLive) {
+      setIsJoined(false);
+      return;
+    }
     if (!userId) {
       setIsJoined(false);
       return;
     }
     const joined = presenceRows.some((r) => r.user_id === userId);
     setIsJoined((prev) => (prev === joined ? prev : joined));
-  }, [presenceRows, userId]);
+  }, [presenceRows, userId, isLeavingLive]);
 
   // Helper: upsert presence, preserving joined_at if it already exists
   const upsertPresencePreserveJoinedAt = useCallback(
