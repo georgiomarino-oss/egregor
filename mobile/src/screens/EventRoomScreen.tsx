@@ -352,6 +352,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
   // Auth user
   const [userId, setUserId] = useState<string>("");
+  const userIdRef = useRef("");
+  useEffect(() => {
+    userIdRef.current = userId;
+  }, [userId]);
 
   // Presence
   const [presenceRows, setPresenceRows] = useState<PresenceRow[]>([]);
@@ -1171,7 +1175,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           if (!nextRow) return;
 
           const rowUserId = String((nextRow as any).user_id ?? "");
-          const isMine = !!userId && rowUserId === userId;
+          const currentUserId = userIdRef.current;
+          const isMine = !!currentUserId && rowUserId === currentUserId;
           const insertedNew = !!nextId && !messageIdsRef.current.has(nextId);
           if (nextId) messageIdsRef.current.add(nextId);
 
@@ -1218,7 +1223,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       clearInterval(intervalId);
       supabase.removeChannel(ch);
     };
-  }, [eventId, hasValidEventId, loadMessages, loadProfiles, scheduleScrollToEnd, userId, logTelemetry]);
+  }, [eventId, hasValidEventId, loadMessages, loadProfiles, scheduleScrollToEnd, logTelemetry]);
 
   const jumpToLatestMessages = useCallback(() => {
     setPendingMessageCount(0);
