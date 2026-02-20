@@ -396,6 +396,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     return name.length > 0 ? name : shortId(id);
   }, []);
 
+  const ensureUserId = useCallback(async () => {
+    if (userId) return userId;
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser();
+    if (error || !user) return "";
+    setUserId(user.id);
+    return user.id;
+  }, [userId]);
+
   const loadProfiles = useCallback(async (ids: string[]) => {
     const uniq = Array.from(new Set(ids.filter(Boolean)));
     if (uniq.length === 0) return;
@@ -523,18 +534,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       return;
     }
 
-    let uid = userId;
+    const uid = await ensureUserId();
     if (!uid) {
-      const {
-        data: { user },
-        error: userErr,
-      } = await supabase.auth.getUser();
-      if (userErr || !user) {
-        Alert.alert("Not signed in", "Please sign in first.");
-        return;
-      }
-      uid = user.id;
-      setUserId(uid);
+      Alert.alert("Not signed in", "Please sign in first.");
+      return;
     }
 
     if (!hasValidEventId) return;
@@ -560,7 +563,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     } finally {
       setSending(false);
     }
-  }, [chatText, eventId, hasValidEventId, scrollChatToEnd, userId]);
+  }, [chatText, eventId, hasValidEventId, scrollChatToEnd, ensureUserId]);
 
   // ---- Load room ----
   const loadEventRoom = useCallback(async () => {
@@ -941,9 +944,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           data: { user },
         } = await supabase.auth.getUser();
 
-        if (!user || cancelled) return;
+        const uid = user?.id ?? (await ensureUserId());
+        if (!uid || cancelled) return;
 
-        await upsertPresencePreserveJoinedAt(user.id);
+        await upsertPresencePreserveJoinedAt(uid);
         if (cancelled) return;
 
         setIsJoined(true);
@@ -967,6 +971,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     isJoined,
     loadPresence,
     upsertPresencePreserveJoinedAt,
+    ensureUserId,
   ]);
 
   // Heartbeat while joined — only when app is active
@@ -1046,13 +1051,14 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         data: { user },
         error,
       } = await supabase.auth.getUser();
+      const uid = user?.id ?? (await ensureUserId());
 
-      if (error || !user) {
+      if (error || !uid) {
         Alert.alert("Not signed in", "Please sign in first.");
         return;
       }
 
-      await upsertPresencePreserveJoinedAt(user.id);
+      await upsertPresencePreserveJoinedAt(uid);
 
       setIsJoined(true);
       setPresenceMsg("✅ You joined live.");
@@ -1062,7 +1068,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     } catch (e: any) {
       setPresenceErr(e?.message ?? "Failed to join live.");
     }
-  }, [eventId, hasValidEventId, loadPresence, upsertPresencePreserveJoinedAt]);
+  }, [eventId, hasValidEventId, loadPresence, upsertPresencePreserveJoinedAt, ensureUserId]);
 
   const handleLeaveLive = useCallback(async () => {
     if (!hasValidEventId) return;
@@ -1074,8 +1080,9 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       const {
         data: { user },
       } = await supabase.auth.getUser();
+      const uid = user?.id ?? (await ensureUserId());
 
-      if (!user) {
+      if (!uid) {
         setPresenceErr("Not signed in.");
         return;
       }
@@ -1084,7 +1091,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         .from("event_presence")
         .delete()
         .eq("event_id", eventId)
-        .eq("user_id", user.id);
+        .eq("user_id", uid);
 
       if (error) {
         setPresenceErr(error.message);
@@ -1099,7 +1106,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     } catch (e: any) {
       setPresenceErr(e?.message ?? "Failed to leave.");
     }
-  }, [eventId, hasValidEventId, loadPresence]);
+  }, [eventId, hasValidEventId, loadPresence, ensureUserId]);
 
   const handleToggleAutoJoinGlobal = useCallback(async (next: boolean) => {
     setAutoJoinGlobalEnabled(next);
