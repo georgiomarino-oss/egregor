@@ -22,6 +22,7 @@ type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
 type JournalEntry = { id: string; createdAt: string; text: string };
 type CircleWaitlistEntry = { id: string; createdAt: string; email: string; note: string };
 type SocialCircle = { id: string; name: string; intention: string; createdAt: string };
+type RhythmDay = { label: string; value: number };
 const PROFILE_LANGUAGES = ["English", "Spanish", "Portuguese", "French"] as const;
 type ProfileLanguage = (typeof PROFILE_LANGUAGES)[number];
 
@@ -65,6 +66,7 @@ const DEFAULT_COLLECTIVE_IMPACT: CollectiveImpact = {
   prayersWeek: 0,
   sharedIntentionsWeek: 0,
 };
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
 function safeTimeMs(iso: string | null | undefined): number {
   if (!iso) return 0;
@@ -137,6 +139,9 @@ export default function ProfileScreen() {
   const [soloSessionsWeek, setSoloSessionsWeek] = useState(0);
   const [soloMinutesWeek, setSoloMinutesWeek] = useState(0);
   const [soloRecent, setSoloRecent] = useState<SoloHistoryEntry[]>([]);
+  const [rhythmByDay, setRhythmByDay] = useState<RhythmDay[]>(
+    WEEKDAY_LABELS.map((label) => ({ label, value: 0 }))
+  );
 
   const loadJournal = useCallback(async () => {
     try {
@@ -331,6 +336,17 @@ export default function ProfileScreen() {
       setStreakDays(computeStreakDays(distinctDayKeys));
       setActiveDays30(recentDays);
       setIntentionEnergy(distinctEventCount);
+      const cadenceCutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+      const counts = new Map<string, number>();
+      for (const label of WEEKDAY_LABELS) counts.set(label, 0);
+      for (const r of rows) {
+        const iso = String((r as any).last_seen_at ?? (r as any).joined_at ?? "");
+        const ms = safeTimeMs(iso);
+        if (!ms || ms < cadenceCutoff) continue;
+        const label = WEEKDAY_LABELS[new Date(ms).getDay()];
+        counts.set(label, (counts.get(label) ?? 0) + 1);
+      }
+      setRhythmByDay(WEEKDAY_LABELS.map((label) => ({ label, value: counts.get(label) ?? 0 })));
 
       const nowMs = Date.now();
       const weekAgoIso = new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -714,6 +730,28 @@ export default function ProfileScreen() {
           <Text style={[styles.tip, { color: c.textMuted }]}>
             Stats are derived from your room presence activity.
           </Text>
+        </View>
+
+        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={[styles.sectionTitle, { color: c.text }]}>Weekly Rhythm</Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            Presence activity over the last 14 days by weekday.
+          </Text>
+          <View style={{ gap: 6 }}>
+            {rhythmByDay.map((d) => {
+              const max = Math.max(1, ...rhythmByDay.map((x) => x.value));
+              const pct = Math.max(6, Math.round((d.value / max) * 100));
+              return (
+                <View key={d.label} style={styles.row}>
+                  <Text style={[styles.meta, { color: c.textMuted, width: 34 }]}>{d.label}</Text>
+                  <View style={[styles.rhythmTrack, { borderColor: c.border, backgroundColor: c.cardAlt }]}>
+                    <View style={[styles.rhythmFill, { backgroundColor: c.primary, width: `${pct}%` }]} />
+                  </View>
+                  <Text style={[styles.meta, { color: c.text, width: 24, textAlign: "right" }]}>{d.value}</Text>
+                </View>
+              );
+            })}
+          </View>
         </View>
 
         <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
@@ -1238,6 +1276,18 @@ const styles = StyleSheet.create({
     gap: 10,
     flexWrap: "wrap",
     marginTop: 8,
+    alignItems: "center",
+  },
+  rhythmTrack: {
+    flex: 1,
+    height: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  rhythmFill: {
+    height: "100%",
+    borderRadius: 999,
   },
   modalBackdrop: {
     flex: 1,
