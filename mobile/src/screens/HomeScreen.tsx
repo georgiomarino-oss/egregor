@@ -20,6 +20,10 @@ import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
+type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
+
+const ACTIVE_WINDOW_MS = 90_000;
+const HOME_RESYNC_MS = 30_000;
 
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -64,6 +68,8 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [weeklyImpact, setWeeklyImpact] = useState(0);
+  const [activeGlobalParticipants, setActiveGlobalParticipants] = useState(0);
+  const [activeGlobalEvents, setActiveGlobalEvents] = useState(0);
   const [soloOpen, setSoloOpen] = useState(false);
   const [soloIntent, setSoloIntent] = useState("peace, healing, and grounded courage");
   const [soloSecondsLeft, setSoloSecondsLeft] = useState(180);
@@ -111,6 +117,20 @@ export default function HomeScreen() {
         .gte("last_seen_at", weekAgoIso);
 
       setWeeklyImpact(count ?? 0);
+
+      const activeCutoffIso = new Date(Date.now() - ACTIVE_WINDOW_MS).toISOString();
+      const { data: activePresenceRows } = await supabase
+        .from("event_presence")
+        .select("event_id,user_id,last_seen_at")
+        .gte("last_seen_at", activeCutoffIso)
+        .limit(5000);
+
+      const activeRows = (activePresenceRows ?? []) as Pick<PresenceRow, "event_id" | "user_id" | "last_seen_at">[];
+      const activeRowsInWindow = activeRows.filter(
+        (r) => safeTimeMs((r as any).last_seen_at) >= Date.now() - ACTIVE_WINDOW_MS
+      );
+      setActiveGlobalParticipants(activeRowsInWindow.length);
+      setActiveGlobalEvents(new Set(activeRowsInWindow.map((r) => String((r as any).event_id ?? ""))).size);
     } finally {
       setLoading(false);
     }
@@ -119,6 +139,10 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       void loadHome();
+      const id = setInterval(() => {
+        void loadHome();
+      }, HOME_RESYNC_MS);
+      return () => clearInterval(id);
     }, [loadHome])
   );
 
@@ -218,7 +242,9 @@ export default function HomeScreen() {
                 <Text style={[styles.metricLabel, { color: c.textMuted }]}>Live circles</Text>
               </View>
               <View style={[styles.metricCard, { backgroundColor: c.card, borderColor: c.border }]}>
-                <Text style={[styles.metricValue, { color: c.text }]}>{activeNow}</Text>
+                <Text style={[styles.metricValue, { color: c.text }]}>
+                  {activeGlobalParticipants || activeNow}
+                </Text>
                 <Text style={[styles.metricLabel, { color: c.textMuted }]}>Active now</Text>
               </View>
               <View style={[styles.metricCard, { backgroundColor: c.card, borderColor: c.border }]}>
@@ -226,6 +252,9 @@ export default function HomeScreen() {
                 <Text style={[styles.metricLabel, { color: c.textMuted }]}>Prayers this week</Text>
               </View>
             </View>
+            <Text style={[styles.liveMeta, { color: c.textMuted }]}>
+              Live presence across {activeGlobalEvents} event{activeGlobalEvents === 1 ? "" : "s"} (last 90 seconds).
+            </Text>
 
             <View style={[styles.sectionCard, { backgroundColor: c.chip, borderColor: c.border }]}>
               <Text style={[styles.sectionTitle, { color: c.chipText }]}>Recommended Events</Text>
@@ -356,6 +385,7 @@ const styles = StyleSheet.create({
   },
   metricValue: { fontSize: 22, fontWeight: "900" },
   metricLabel: { fontSize: 12, fontWeight: "700" },
+  liveMeta: { fontSize: 12, marginTop: 4 },
   sectionCard: {
     borderRadius: 12,
     borderWidth: 1,
