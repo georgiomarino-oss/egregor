@@ -1116,7 +1116,6 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         user_id: uid,
         last_seen_at: now,
         joined_at: existing?.joined_at ?? (existing ? null : now),
-        created_at: existing?.created_at ?? now,
       };
 
       if (existing && existing.joined_at) (payload as any).joined_at = existing.joined_at;
@@ -1686,8 +1685,15 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
         <Text style={[styles.meta, { color: c.textMuted }]}>Total: <Text style={{ fontWeight: "900", color: c.text }}>{presenceRows.length}</Text> | Active now:{" "}<Text style={{ fontWeight: "900", color: c.text }}>{activeCount}</Text></Text>
 
-        <Text style={[styles.meta, { color: c.textMuted }]}>{new Date((event as any).start_time_utc).toLocaleString()}{" -> "}{new Date((event as any).end_time_utc).toLocaleString()} (
-          {(event as any).timezone ?? "UTC"})
+        <Text style={[styles.meta, { color: c.textMuted }]}>
+          {(event as any).start_time_utc
+            ? new Date((event as any).start_time_utc).toLocaleString()
+            : "Unknown start"}
+          {" -> "}
+          {(event as any).end_time_utc
+            ? new Date((event as any).end_time_utc).toLocaleString()
+            : "Open ended"}{" "}
+          ({(event as any).timezone ?? "UTC"})
         </Text>
 
         <View style={[styles.heartPulseWrap, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
