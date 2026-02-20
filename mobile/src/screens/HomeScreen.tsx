@@ -158,6 +158,7 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [weeklyImpact, setWeeklyImpact] = useState(0);
+  const [previousWeeklyImpact, setPreviousWeeklyImpact] = useState(0);
   const [activeGlobalParticipants, setActiveGlobalParticipants] = useState(0);
   const [activeGlobalEvents, setActiveGlobalEvents] = useState(0);
   const [feedItems, setFeedItems] = useState<CommunityFeedItem[]>([]);
@@ -228,6 +229,15 @@ export default function HomeScreen() {
   const activeNow = useMemo(() => {
     return liveEvents.reduce((sum, e) => sum + Number((e as any).active_count_snapshot ?? 0), 0);
   }, [liveEvents]);
+  const impactDeltaPct = useMemo(() => {
+    if (previousWeeklyImpact <= 0) return weeklyImpact > 0 ? 100 : 0;
+    return Math.round(((weeklyImpact - previousWeeklyImpact) / previousWeeklyImpact) * 100);
+  }, [weeklyImpact, previousWeeklyImpact]);
+  const impactDeltaLabel = useMemo(() => {
+    if (impactDeltaPct > 0) return `+${impactDeltaPct}% vs last week`;
+    if (impactDeltaPct < 0) return `${impactDeltaPct}% vs last week`;
+    return "No change vs last week";
+  }, [impactDeltaPct]);
 
   const soloLines = useMemo(() => buildSoloPrayer(soloIntent, preferredLanguage), [soloIntent, preferredLanguage]);
   const breathGuide = useMemo(() => {
@@ -294,12 +304,21 @@ export default function HomeScreen() {
       setEvents((eventRows ?? []) as EventRow[]);
 
       const weekAgoIso = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-      const { count } = await supabase
-        .from("event_presence")
-        .select("*", { count: "exact", head: true })
-        .gte("last_seen_at", weekAgoIso);
+      const twoWeeksAgoIso = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+      const [{ count: thisWeekCount }, { count: prevWeekCount }] = await Promise.all([
+        supabase
+          .from("event_presence")
+          .select("*", { count: "exact", head: true })
+          .gte("last_seen_at", weekAgoIso),
+        supabase
+          .from("event_presence")
+          .select("*", { count: "exact", head: true })
+          .gte("last_seen_at", twoWeeksAgoIso)
+          .lt("last_seen_at", weekAgoIso),
+      ]);
 
-      setWeeklyImpact(count ?? 0);
+      setWeeklyImpact(thisWeekCount ?? 0);
+      setPreviousWeeklyImpact(prevWeekCount ?? 0);
 
       const activeCutoffIso = new Date(Date.now() - ACTIVE_WINDOW_MS).toISOString();
       const { data: activePresenceRows } = await supabase
@@ -559,6 +578,7 @@ export default function HomeScreen() {
             <Text style={[styles.liveMeta, { color: c.textMuted }]}>
               Live presence across {activeGlobalEvents} event{activeGlobalEvents === 1 ? "" : "s"} (last 90 seconds).
             </Text>
+            <Text style={[styles.liveMeta, { color: c.textMuted }]}>{impactDeltaLabel}</Text>
 
             <View style={[styles.sectionCard, { backgroundColor: c.card, borderColor: c.border }]}>
               <Text style={[styles.sectionTitle, { color: c.text }]}>{ui.communityFeed}</Text>
