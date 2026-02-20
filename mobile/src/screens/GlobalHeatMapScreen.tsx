@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Switch, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -95,6 +95,8 @@ export default function GlobalHeatMapScreen() {
     Oceania: [],
     Global: [],
   });
+  const heatLoadInFlightRef = useRef(false);
+  const queuedHeatLoadRef = useRef(false);
 
   const openEventRoom = useCallback(
     (eventId: string) => {
@@ -109,6 +111,12 @@ export default function GlobalHeatMapScreen() {
   );
 
   const loadHeatData = useCallback(async () => {
+    if (heatLoadInFlightRef.current) {
+      queuedHeatLoadRef.current = true;
+      return;
+    }
+
+    heatLoadInFlightRef.current = true;
     setLoading(true);
     try {
       const now = Date.now();
@@ -207,12 +215,26 @@ export default function GlobalHeatMapScreen() {
       setManifestationsByRegion(manifests);
     } finally {
       setLoading(false);
+      heatLoadInFlightRef.current = false;
+      if (queuedHeatLoadRef.current) {
+        queuedHeatLoadRef.current = false;
+        void loadHeatData();
+      }
     }
   }, [heatWindow]);
 
   useFocusEffect(
     useCallback(() => {
       let disposed = false;
+      let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
+      const scheduleRefresh = () => {
+        if (disposed || refreshTimeout) return;
+        refreshTimeout = setTimeout(() => {
+          refreshTimeout = null;
+          if (disposed) return;
+          void loadHeatData();
+        }, 1200);
+      };
       const run = async () => {
         if (disposed) return;
         const raw = await AsyncStorage.getItem(KEY_LOCATION_OPT_IN);
@@ -223,9 +245,19 @@ export default function GlobalHeatMapScreen() {
       const id = setInterval(() => {
         void loadHeatData();
       }, HEATMAP_RESYNC_MS);
+
+      const realtime = supabase
+        .channel("heatmap:global")
+        .on("postgres_changes", { event: "*", schema: "public", table: "event_presence" }, scheduleRefresh)
+        .on("postgres_changes", { event: "*", schema: "public", table: "events" }, scheduleRefresh)
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "event_messages" }, scheduleRefresh)
+        .subscribe();
+
       return () => {
         disposed = true;
         clearInterval(id);
+        if (refreshTimeout) clearTimeout(refreshTimeout);
+        supabase.removeChannel(realtime);
       };
     }, [loadHeatData])
   );
