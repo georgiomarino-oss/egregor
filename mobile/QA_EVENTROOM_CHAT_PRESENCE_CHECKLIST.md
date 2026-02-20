@@ -72,6 +72,10 @@ Build/Commit: `b91c599`
   - Messages remain sorted by `created_at`.
   - Reconnected inserts land in correct order.
   - Messages over 1000 chars are rejected with validation feedback.
+- Trigger DB burst limit by sending > 8 messages within 10 seconds from one user.
+- Expected:
+  - Send is rejected with friendly "Slow down" feedback.
+  - After waiting a few seconds, sends succeed again.
 - Status: NOT RUN
 - Notes:
 

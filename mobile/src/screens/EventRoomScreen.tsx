@@ -247,6 +247,32 @@ const CHAT_RESYNC_MS = 60_000;
 const RUN_STATE_RESYNC_MS = 60_000;
 const CHAT_MAX_CHARS = 1000;
 
+function mapChatSendError(message: string) {
+  const m = String(message ?? "").toLowerCase();
+  if (m.includes("too many messages")) {
+    return {
+      title: "Slow down",
+      body: "You are sending messages too quickly. Please wait a few seconds and try again.",
+    };
+  }
+  if (m.includes("cannot be empty")) {
+    return {
+      title: "Empty message",
+      body: "Type a message before sending.",
+    };
+  }
+  if (m.includes("exceeds 1000 characters")) {
+    return {
+      title: "Message too long",
+      body: `Keep messages under ${CHAT_MAX_CHARS} characters.`,
+    };
+  }
+  return {
+    title: "Send failed",
+    body: message || "Unknown error",
+  };
+}
+
 
 // Chat: how close to bottom counts as “near bottom”
 const CHAT_BOTTOM_THRESHOLD_PX = 120;
@@ -588,7 +614,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
       const { error } = await supabase.from("event_messages").insert(payload);
       if (error) {
-        Alert.alert("Send failed", error.message);
+        const mapped = mapChatSendError(error.message);
+        Alert.alert(mapped.title, mapped.body);
         return;
       }
 
