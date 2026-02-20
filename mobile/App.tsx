@@ -9,6 +9,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import AuthScreen from "./src/screens/AuthScreen";
 import HomeScreen from "./src/screens/HomeScreen";
+import GlobalHeatMapScreen from "./src/screens/GlobalHeatMapScreen";
 import EventsScreen from "./src/screens/EventsScreen";
 import ScriptsScreen from "./src/screens/ScriptsScreen";
 import EventRoomScreen from "./src/screens/EventRoomScreen";
@@ -52,6 +53,7 @@ function AuthedTabs() {
       }}
     >
       <Tabs.Screen name="Home" component={HomeScreen} />
+      <Tabs.Screen name="Global" component={GlobalHeatMapScreen} options={{ title: "Global" }} />
       <Tabs.Screen name="Events" component={EventsScreen} />
       <Tabs.Screen name="Scripts" component={ScriptsScreen} />
 
