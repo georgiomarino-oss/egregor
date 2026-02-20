@@ -28,6 +28,8 @@ const SCRIPT_INTENTION_MAX = 2000;
 const SCRIPT_TONE_MAX = 40;
 const SCRIPT_DURATION_MIN = 1;
 const SCRIPT_DURATION_MAX = 240;
+const SCRIPT_LANGUAGES = ["English", "Spanish", "Portuguese", "French"] as const;
+type ScriptLanguage = (typeof SCRIPT_LANGUAGES)[number];
 
 function safeTimeMs(iso: string | null | undefined): number {
   if (!iso) return 0;
@@ -73,7 +75,54 @@ function removeEventRow(rows: EventRow[], eventId: string): EventRow[] {
   return rows.filter((r) => r.id !== eventId);
 }
 
-function buildDefaultSections(durationMinutes: number, intentionText: string) {
+function normalizeLanguage(value: string): ScriptLanguage {
+  const raw = value.trim().toLowerCase();
+  if (raw.startsWith("span")) return "Spanish";
+  if (raw.startsWith("port")) return "Portuguese";
+  if (raw.startsWith("fren")) return "French";
+  return "English";
+}
+
+function toneHint(tone: string) {
+  const t = tone.trim().toLowerCase();
+  if (t.includes("uplift")) return "uplifting";
+  if (t.includes("focus")) return "focused";
+  if (t.includes("gentle") || t.includes("soft")) return "gentle";
+  return "calm";
+}
+
+function sectionCopy(name: "arrival" | "intention" | "silence" | "closing", intentionText: string, tone: string, language: ScriptLanguage) {
+  const vibe = toneHint(tone);
+  if (language === "Spanish") {
+    if (name === "arrival") return `Respira y llega con energia ${vibe}.`;
+    if (name === "intention") return intentionText.trim();
+    if (name === "silence") return "Sostiene la intencion en silencio y presencia.";
+    return "Regresa con gratitud y cierra suavemente.";
+  }
+  if (language === "Portuguese") {
+    if (name === "arrival") return `Respire e chegue com energia ${vibe}.`;
+    if (name === "intention") return intentionText.trim();
+    if (name === "silence") return "Sustente a intencao em silencio e presenca.";
+    return "Retorne com gratidao e encerre com suavidade.";
+  }
+  if (language === "French") {
+    if (name === "arrival") return `Respirez et arrivez avec une energie ${vibe}.`;
+    if (name === "intention") return intentionText.trim();
+    if (name === "silence") return "Maintenez l'intention en silence et en presence.";
+    return "Revenez avec gratitude et terminez en douceur.";
+  }
+  if (name === "arrival") return `Take a breath and arrive in a ${vibe} tone.`;
+  if (name === "intention") return intentionText.trim();
+  if (name === "silence") return "Hold the intention in silence and presence.";
+  return "Return gently with gratitude and close the circle.";
+}
+
+function buildDefaultSections(
+  durationMinutes: number,
+  intentionText: string,
+  tone: string,
+  language: ScriptLanguage
+) {
   const mins = Math.max(1, Math.round(durationMinutes));
 
   if (mins <= 3) {
@@ -106,10 +155,10 @@ function buildDefaultSections(durationMinutes: number, intentionText: string) {
   }
 
   return [
-    { name: "Arrival", minutes: arrival, text: "Take a breath and arrive." },
-    { name: "Intention", minutes: intention, text: intentionText.trim() },
-    { name: "Silence", minutes: silence, text: "Hold the intention in silence." },
-    { name: "Closing", minutes: closing, text: "Gently return and close." },
+    { name: "Arrival", minutes: arrival, text: sectionCopy("arrival", intentionText, tone, language) },
+    { name: "Intention", minutes: intention, text: sectionCopy("intention", intentionText, tone, language) },
+    { name: "Silence", minutes: silence, text: sectionCopy("silence", intentionText, tone, language) },
+    { name: "Closing", minutes: closing, text: sectionCopy("closing", intentionText, tone, language) },
   ];
 }
 
@@ -127,6 +176,7 @@ export default function ScriptsScreen() {
   );
   const [durationMinutes, setDurationMinutes] = useState("20");
   const [tone, setTone] = useState("calm");
+  const [scriptLanguage, setScriptLanguage] = useState<ScriptLanguage>("English");
 
   const [scripts, setScripts] = useState<ScriptRow[]>([]);
   const [myEvents, setMyEvents] = useState<EventRow[]>([]);
@@ -141,6 +191,7 @@ export default function ScriptsScreen() {
   const [editIntention, setEditIntention] = useState("");
   const [editDurationMinutes, setEditDurationMinutes] = useState("20");
   const [editTone, setEditTone] = useState("calm");
+  const [editLanguage, setEditLanguage] = useState<ScriptLanguage>("English");
 
   const scriptsById = useMemo(() => {
     const map: Record<string, ScriptRow> = {};
@@ -177,6 +228,18 @@ export default function ScriptsScreen() {
       return t.includes(q) || d.includes(q) || currentTitle.toLowerCase().includes(q);
     });
   }, [myEvents, eventQuery, scriptsById]);
+
+  const previewCreateSections = useMemo(() => {
+    const mins = Number(durationMinutes);
+    if (!Number.isFinite(mins) || mins < SCRIPT_DURATION_MIN || mins > SCRIPT_DURATION_MAX) return [];
+    return buildDefaultSections(mins, intention.trim() || "Collective peace.", tone, scriptLanguage);
+  }, [durationMinutes, intention, tone, scriptLanguage]);
+
+  const previewEditSections = useMemo(() => {
+    const mins = Number(editDurationMinutes);
+    if (!Number.isFinite(mins) || mins < SCRIPT_DURATION_MIN || mins > SCRIPT_DURATION_MAX) return [];
+    return buildDefaultSections(mins, editIntention.trim() || "Collective peace.", editTone, editLanguage);
+  }, [editDurationMinutes, editIntention, editTone, editLanguage]);
 
   const loadScripts = useCallback(async () => {
     const { data, error } = await supabase
@@ -375,7 +438,8 @@ export default function ScriptsScreen() {
           title: titleText,
           durationMinutes: mins,
           tone: toneText,
-          sections: buildDefaultSections(mins, intentionText),
+          language: scriptLanguage,
+          sections: buildDefaultSections(mins, intentionText, toneText, scriptLanguage),
         } as any,
       };
 
@@ -393,7 +457,7 @@ export default function ScriptsScreen() {
     } finally {
       setLoading(false);
     }
-  }, [durationMinutes, intention, refreshAll, title, tone]);
+  }, [durationMinutes, intention, refreshAll, scriptLanguage, title, tone]);
 
   const openAttachForScript = useCallback(
     async (scriptId: string) => {
@@ -411,6 +475,7 @@ export default function ScriptsScreen() {
     setEditIntention(String((script as any).intention ?? ""));
     setEditDurationMinutes(String((script as any).duration_minutes ?? "20"));
     setEditTone(String((script as any).tone ?? "calm"));
+    setEditLanguage(normalizeLanguage(String((script as any)?.content_json?.language ?? "English")));
     setEditOpen(true);
   }, []);
 
@@ -455,7 +520,8 @@ export default function ScriptsScreen() {
           title: titleText,
           durationMinutes: mins,
           tone: toneText,
-          sections: buildDefaultSections(mins, intentionText),
+          language: editLanguage,
+          sections: buildDefaultSections(mins, intentionText, toneText, editLanguage),
         },
       };
 
@@ -471,7 +537,7 @@ export default function ScriptsScreen() {
     } finally {
       setLoading(false);
     }
-  }, [editDurationMinutes, editIntention, editTitle, editTone, editingScript, refreshAll]);
+  }, [editDurationMinutes, editIntention, editLanguage, editTitle, editTone, editingScript, refreshAll]);
 
   const handleDeleteScript = useCallback(
     async (script: ScriptRow) => {
@@ -516,6 +582,7 @@ export default function ScriptsScreen() {
       const nextIntention = String((script as any).intention ?? "").trim();
       const nextTone = String((script as any).tone ?? "calm").trim().toLowerCase();
       const nextDuration = Number((script as any).duration_minutes ?? 20);
+      const nextLanguage = normalizeLanguage(String((script as any)?.content_json?.language ?? "English"));
 
       const {
         data: { user },
@@ -538,7 +605,8 @@ export default function ScriptsScreen() {
             title: nextTitle,
             durationMinutes: nextDuration,
             tone: nextTone,
-            sections: buildDefaultSections(nextDuration, nextIntention || "Copied script intention."),
+            language: nextLanguage,
+            sections: buildDefaultSections(nextDuration, nextIntention || "Copied script intention.", nextTone, nextLanguage),
           } as any,
         };
 
@@ -841,6 +909,39 @@ export default function ScriptsScreen() {
                 </View>
               </View>
 
+              <Text style={[styles.label, { color: c.textMuted }]}>Language</Text>
+              <View style={styles.row}>
+                {SCRIPT_LANGUAGES.map((lang) => {
+                  const on = scriptLanguage === lang;
+                  return (
+                    <Pressable
+                      key={lang}
+                      onPress={() => setScriptLanguage(lang)}
+                      style={[
+                        styles.btn,
+                        on ? [styles.btnPrimary, { backgroundColor: c.primary }] : [styles.btnGhost, { borderColor: c.border }],
+                      ]}
+                    >
+                      <Text style={on ? styles.btnText : [styles.btnGhostText, { color: c.textMuted }]}>{lang}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <Text style={[styles.label, { color: c.textMuted }]}>Section preview</Text>
+              <View style={[styles.section, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+                {previewCreateSections.map((s, idx) => (
+                  <View key={`${s.name}-${idx}`} style={{ marginBottom: 8 }}>
+                    <Text style={[styles.meta, { color: c.text }]}>
+                      {idx + 1}. {s.name} ({s.minutes}m)
+                    </Text>
+                    <Text style={[styles.meta, { color: c.textMuted }]} numberOfLines={2}>
+                      {s.text}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+
               <View style={styles.row}>
                 <Pressable
                   onPress={handleCreateScript}
@@ -984,6 +1085,39 @@ export default function ScriptsScreen() {
                   maxLength={SCRIPT_TONE_MAX}
                 />
               </View>
+            </View>
+
+            <Text style={[styles.label, { color: c.textMuted }]}>Language</Text>
+            <View style={styles.row}>
+              {SCRIPT_LANGUAGES.map((lang) => {
+                const on = editLanguage === lang;
+                return (
+                  <Pressable
+                    key={lang}
+                    onPress={() => setEditLanguage(lang)}
+                    style={[
+                      styles.btn,
+                      on ? [styles.btnPrimary, { backgroundColor: c.primary }] : [styles.btnGhost, { borderColor: c.border }],
+                    ]}
+                  >
+                    <Text style={on ? styles.btnText : [styles.btnGhostText, { color: c.textMuted }]}>{lang}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Text style={[styles.label, { color: c.textMuted }]}>Section preview</Text>
+            <View style={[styles.section, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+              {previewEditSections.map((s, idx) => (
+                <View key={`${s.name}-${idx}`} style={{ marginBottom: 8 }}>
+                  <Text style={[styles.meta, { color: c.text }]}>
+                    {idx + 1}. {s.name} ({s.minutes}m)
+                  </Text>
+                  <Text style={[styles.meta, { color: c.textMuted }]} numberOfLines={2}>
+                    {s.text}
+                  </Text>
+                </View>
+              ))}
             </View>
 
             <View style={styles.row}>
