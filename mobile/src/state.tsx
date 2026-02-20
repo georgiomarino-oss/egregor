@@ -60,6 +60,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = async () => {
+    const uid = session?.user?.id ?? null;
+    if (uid) {
+      try {
+        await supabase.from("event_presence").delete().eq("user_id", uid);
+      } catch {
+        // best effort: auth signout should still proceed
+      }
+    }
     await supabase.auth.signOut();
     // session will be cleared by onAuthStateChange; this is just belt-and-braces
     setSession(null);
