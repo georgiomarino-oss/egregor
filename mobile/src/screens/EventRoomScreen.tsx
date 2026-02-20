@@ -491,6 +491,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     }
   }, []);
 
+  const chatChars = chatText.length;
+
   const loadMessages = useCallback(async () => {
     if (!hasValidEventId) {
       setMessages([]);
@@ -1623,15 +1625,20 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             </Pressable>
           ) : null}
 
-          <TextInput
-            value={chatText}
-            onChangeText={setChatText}
-            style={styles.chatInput}
-            placeholder="Message…"
-            placeholderTextColor="#6B7BB2"
-            maxLength={CHAT_MAX_CHARS}
-            multiline
-          />
+          <View style={{ flex: 1 }}>
+            <TextInput
+              value={chatText}
+              onChangeText={setChatText}
+              style={styles.chatInput}
+              placeholder="Message…"
+              placeholderTextColor="#6B7BB2"
+              maxLength={CHAT_MAX_CHARS}
+              multiline
+            />
+            <Text style={[styles.chatCounter, chatChars > CHAT_MAX_CHARS * 0.9 && styles.chatCounterWarn]}>
+              {chatChars}/{CHAT_MAX_CHARS}
+            </Text>
+          </View>
           <Pressable
             onPress={sendMessage}
             disabled={sending || !chatText.trim()}
@@ -1818,7 +1825,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   chatInput: {
-    flex: 1,
     minHeight: 44,
     maxHeight: 120,
     backgroundColor: "#0E1428",
@@ -1828,6 +1834,16 @@ const styles = StyleSheet.create({
     color: "white",
     paddingHorizontal: 12,
     paddingVertical: 10,
+  },
+  chatCounter: {
+    color: "#6B7BB2",
+    fontSize: 11,
+    textAlign: "right",
+    marginTop: 4,
+    paddingRight: 2,
+  },
+  chatCounterWarn: {
+    color: "#FBBF24",
   },
   chatSend: {
     backgroundColor: "#5B8CFF",
