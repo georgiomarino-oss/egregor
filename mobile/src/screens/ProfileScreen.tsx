@@ -13,6 +13,17 @@ const KEY_JOURNAL = "journal:entries";
 const KEY_PROFILE_PREFS = "profile:prefs:v1";
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
 type JournalEntry = { id: string; createdAt: string; text: string };
+const PROFILE_LANGUAGES = ["English", "Spanish", "Portuguese", "French"] as const;
+type ProfileLanguage = (typeof PROFILE_LANGUAGES)[number];
+
+function normalizeProfileLanguage(value: string): ProfileLanguage {
+  const raw = value.trim().toLowerCase();
+  if (raw.startsWith("span")) return "Spanish";
+  if (raw.startsWith("port")) return "Portuguese";
+  if (raw.startsWith("fren")) return "French";
+  return "English";
+}
+
 type ProfilePrefs = {
   notifyLiveStart: boolean;
   notifyNewsEvents: boolean;
@@ -20,7 +31,7 @@ type ProfilePrefs = {
   notifyStreakReminders: boolean;
   voiceMode: boolean;
   highContrast: boolean;
-  language: string;
+  language: ProfileLanguage;
 };
 const DEFAULT_PROFILE_PREFS: ProfilePrefs = {
   notifyLiveStart: true,
@@ -136,7 +147,7 @@ export default function ProfileScreen() {
         notifyStreakReminders: !!parsed?.notifyStreakReminders,
         voiceMode: !!parsed?.voiceMode,
         highContrast: !!parsed?.highContrast,
-        language: String(parsed?.language ?? DEFAULT_PROFILE_PREFS.language),
+        language: normalizeProfileLanguage(String(parsed?.language ?? DEFAULT_PROFILE_PREFS.language)),
       };
       setPrefs(nextPrefs);
       void setHighContrast(nextPrefs.highContrast);
@@ -340,7 +351,7 @@ export default function ProfileScreen() {
     try {
       const payload: ProfilePrefs = {
         ...prefs,
-        language: prefs.language.trim() || DEFAULT_PROFILE_PREFS.language,
+        language: normalizeProfileLanguage(prefs.language),
       };
       await AsyncStorage.setItem(KEY_PROFILE_PREFS, JSON.stringify(payload));
       setPrefs(payload);
@@ -482,13 +493,26 @@ export default function ProfileScreen() {
           </View>
 
           <Text style={[styles.fieldLabel, { color: c.textMuted }]}>Preferred language</Text>
-          <TextInput
-            style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
-            value={prefs.language}
-            onChangeText={(v) => setPrefs((p) => ({ ...p, language: v }))}
-            placeholder="English"
-            placeholderTextColor={c.textMuted}
-          />
+          <View style={styles.langRow}>
+            {PROFILE_LANGUAGES.map((lang) => {
+              const on = prefs.language === lang;
+              return (
+                <Pressable
+                  key={lang}
+                  onPress={() => setPrefs((p) => ({ ...p, language: lang }))}
+                  style={[
+                    styles.themeBtn,
+                    { borderColor: c.border, backgroundColor: c.cardAlt, flexBasis: "48%" },
+                    on && [styles.themeBtnActive, { backgroundColor: c.primary, borderColor: c.primary }],
+                  ]}
+                >
+                  <Text style={[styles.themeBtnText, { color: c.textMuted }, on && styles.themeBtnTextActive]}>
+                    {lang}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
 
           <Pressable
             style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, savingPrefs && styles.disabled]}
@@ -679,6 +703,7 @@ const styles = StyleSheet.create({
   },
   prefLabel: { fontSize: 13, fontWeight: "700" },
   themeRow: { flexDirection: "row", gap: 8 },
+  langRow: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
   themeBtn: {
     flex: 1,
     borderRadius: 10,
