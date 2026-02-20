@@ -1234,6 +1234,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     if (!hasValidEventId) return;
     if (!autoJoinGlobalLoaded || !joinPrefLoaded) return;
     if (!autoJoinGlobalEnabled) return;
+    if (isJoiningLive) return;
     if (!shouldAutoJoinForEvent) return;
     if (isLeavingLive) return;
     if (isJoined) return;
@@ -1267,6 +1268,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     autoJoinGlobalLoaded,
     joinPrefLoaded,
     autoJoinGlobalEnabled,
+    isJoiningLive,
     shouldAutoJoinForEvent,
     isLeavingLive,
     isJoined,
