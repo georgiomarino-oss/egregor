@@ -16,6 +16,7 @@ import EventsScreen from "./src/screens/EventsScreen";
 import ScriptsScreen from "./src/screens/ScriptsScreen";
 import EventRoomScreen from "./src/screens/EventRoomScreen";
 import ProfileScreen from "./src/screens/ProfileScreen";
+import NotificationsScreen from "./src/screens/NotificationsScreen";
 
 import { AppStateProvider, useAppState } from "./src/state";
 import type { RootStackParamList, RootTabParamList } from "./src/types";
@@ -157,6 +158,16 @@ function RootNav() {
         ) : (
           <>
             <Stack.Screen name="RootTabs" component={AuthedTabs} />
+            <Stack.Screen
+              name="Notifications"
+              component={NotificationsScreen}
+              options={{
+                headerShown: true,
+                title: "Notifications",
+                headerStyle: { backgroundColor: c.card },
+                headerTintColor: c.text,
+              }}
+            />
             <Stack.Screen
               name="EventRoom"
               component={EventRoomScreen}

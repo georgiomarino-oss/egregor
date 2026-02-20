@@ -12,5 +12,6 @@ export type RootStackParamList = {
   Auth: undefined;
   Onboarding: undefined;
   RootTabs: undefined;
+  Notifications: undefined;
   EventRoom: { eventId: string };
 };

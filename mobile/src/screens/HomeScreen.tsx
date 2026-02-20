@@ -385,6 +385,11 @@ export default function HomeScreen() {
     openEventRoom(live.id);
   }, [liveEvents, openEventRoom]);
 
+  const openNotifications = useCallback(() => {
+    const navToUse = navigation.getParent?.() ?? navigation;
+    (navToUse as any).navigate("Notifications" as keyof RootStackParamList);
+  }, [navigation]);
+
   React.useEffect(() => {
     if (!soloOpen) return;
     if (!soloRunning) return;
@@ -430,7 +435,15 @@ export default function HomeScreen() {
         refreshControl={<RefreshControl refreshing={loading} onRefresh={loadHome} tintColor={c.primary} />}
         ListHeaderComponent={
           <View style={styles.content}>
-            <Text style={[styles.kicker, { color: c.textMuted }]}>EGREGOR</Text>
+            <View style={styles.headerRow}>
+              <Text style={[styles.kicker, { color: c.textMuted }]}>EGREGOR</Text>
+              <Pressable
+                style={[styles.notifyBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+                onPress={openNotifications}
+              >
+                <Text style={[styles.notifyBtnText, { color: c.text }]}>Notifications</Text>
+              </Pressable>
+            </View>
             <Text style={[styles.hero, { color: c.text }]}>{ui.hero}</Text>
             <Text style={[styles.subtitle, { color: c.text }]}>{ui.subtitle}</Text>
             <View style={[styles.sectionCard, { backgroundColor: c.cardAlt, borderColor: c.border, marginTop: 0 }]}>
@@ -630,6 +643,14 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   kicker: { fontSize: 11, letterSpacing: 2, fontWeight: "800" },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  notifyBtn: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  notifyBtnText: { fontSize: 11, fontWeight: "800" },
   hero: { fontSize: 30, fontWeight: "900", lineHeight: 36 },
   subtitle: { fontSize: 14, lineHeight: 20, marginBottom: 6 },
   row: { flexDirection: "row", gap: 10 },
