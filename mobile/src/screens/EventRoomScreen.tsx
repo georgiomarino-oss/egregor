@@ -755,6 +755,34 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     };
   }, [eventId, hasValidEventId]);
 
+  // Attached script realtime (script edits while room is open)
+  useEffect(() => {
+    if (!hasValidEventId) return;
+    const scriptId = scriptDbRow?.id ?? null;
+    if (!scriptId) return;
+
+    const channel = supabase
+      .channel(`event-script:${eventId}:${scriptId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "scripts", filter: `id=eq.${scriptId}` },
+        async (payload) => {
+          const eventType = String((payload as any).eventType ?? "");
+          if (eventType === "DELETE") {
+            setScriptDbRow(null);
+            setScript(null);
+            return;
+          }
+          await loadScriptById(scriptId);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [eventId, hasValidEventId, scriptDbRow?.id, loadScriptById]);
+
   // Presence realtime
   useEffect(() => {
     if (!hasValidEventId) return;
