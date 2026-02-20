@@ -116,12 +116,27 @@ function computeStreakDays(dayKeys: string[]): number {
 }
 
 export default function ProfileScreen() {
-  const { theme, highContrast, setTheme, setHighContrast } = useAppState();
+  const {
+    theme,
+    highContrast,
+    setTheme,
+    setHighContrast,
+    billingReady,
+    billingAvailable,
+    billingError,
+    isCircleMember,
+    circleExpiresAt,
+    circlePackages,
+    refreshBilling,
+    purchaseCircle,
+    restoreCircle,
+  } = useAppState();
   const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
   const [loading, setLoading] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingPrefs, setSavingPrefs] = useState(false);
+  const [billingActionBusy, setBillingActionBusy] = useState(false);
 
   const [userId, setUserId] = useState("");
   const [email, setEmail] = useState("");
@@ -686,6 +701,41 @@ export default function ProfileScreen() {
     setWaitlistOpen(true);
   }, [email]);
 
+  const handlePurchaseCircle = useCallback(
+    async (packageIdentifier?: string) => {
+      setBillingActionBusy(true);
+      try {
+        const result = await purchaseCircle(packageIdentifier);
+        if (!result.ok) {
+          if (result.message !== "Purchase cancelled.") {
+            Alert.alert("Purchase not completed", result.message);
+          }
+          return;
+        }
+        Alert.alert("Egregor Circle active", result.message);
+      } finally {
+        setBillingActionBusy(false);
+        void refreshBilling();
+      }
+    },
+    [purchaseCircle, refreshBilling]
+  );
+
+  const handleRestoreCircle = useCallback(async () => {
+    setBillingActionBusy(true);
+    try {
+      const result = await restoreCircle();
+      if (!result.ok) {
+        Alert.alert("Restore finished", result.message);
+        return;
+      }
+      Alert.alert("Restore successful", result.message);
+    } finally {
+      setBillingActionBusy(false);
+      void refreshBilling();
+    }
+  }, [refreshBilling, restoreCircle]);
+
   const submitWaitlist = useCallback(async () => {
     const nextEmail = waitlistEmail.trim().toLowerCase();
     const nextNote = waitlistNote.trim();
@@ -1040,9 +1090,81 @@ export default function ProfileScreen() {
           <Text style={[styles.meta, { color: c.textMuted }]}>
             Premium unlocks unlimited AI scripts, priority access, custom themes, and exclusive soundscapes.
           </Text>
-          <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }]} onPress={openWaitlist}>
-            <Text style={styles.btnText}>Join waitlist</Text>
-          </Pressable>
+          {!billingReady ? (
+            <Text style={[styles.meta, { color: c.textMuted }]}>Loading billing status...</Text>
+          ) : billingAvailable ? (
+            <>
+              <Text style={[styles.meta, { color: c.textMuted }]}>
+                {isCircleMember
+                  ? `Status: Active${circleExpiresAt ? ` until ${new Date(circleExpiresAt).toLocaleDateString()}` : ""}`
+                  : "Status: Free tier"}
+              </Text>
+              {circlePackages.length > 0 ? (
+                <View style={{ gap: 8 }}>
+                  {circlePackages.map((pkg) => (
+                    <Pressable
+                      key={pkg.identifier}
+                      style={[
+                        styles.btn,
+                        styles.btnPrimary,
+                        { backgroundColor: c.primary },
+                        billingActionBusy && styles.disabled,
+                      ]}
+                      onPress={() => handlePurchaseCircle(pkg.identifier)}
+                      disabled={billingActionBusy}
+                    >
+                      <Text style={styles.btnText}>
+                        {pkg.title}
+                        {pkg.priceString ? ` - ${pkg.priceString}` : ""}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : (
+                <Pressable
+                  style={[
+                    styles.btn,
+                    styles.btnPrimary,
+                    { backgroundColor: c.primary },
+                    billingActionBusy && styles.disabled,
+                  ]}
+                  onPress={() => handlePurchaseCircle()}
+                  disabled={billingActionBusy}
+                >
+                  <Text style={styles.btnText}>Activate Circle</Text>
+                </Pressable>
+              )}
+              <View style={styles.row}>
+                <Pressable
+                  style={[styles.btn, styles.btnGhost, { borderColor: c.border }, billingActionBusy && styles.disabled]}
+                  onPress={handleRestoreCircle}
+                  disabled={billingActionBusy}
+                >
+                  <Text style={[styles.btnGhostText, { color: c.text }]}>Restore purchases</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.btn, styles.btnGhost, { borderColor: c.border }, billingActionBusy && styles.disabled]}
+                  onPress={() => void refreshBilling()}
+                  disabled={billingActionBusy}
+                >
+                  <Text style={[styles.btnGhostText, { color: c.text }]}>
+                    {billingActionBusy ? "Working..." : "Refresh status"}
+                  </Text>
+                </Pressable>
+              </View>
+            </>
+          ) : (
+            <>
+              <Text style={[styles.meta, { color: c.textMuted }]}>
+                {billingError?.trim()
+                  ? `Billing not configured on this build. ${billingError}`
+                  : "Billing is not configured on this build yet."}
+              </Text>
+              <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }]} onPress={openWaitlist}>
+                <Text style={styles.btnText}>Join waitlist</Text>
+              </Pressable>
+            </>
+          )}
         </View>
 
         <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>

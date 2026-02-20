@@ -21,6 +21,12 @@ import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
 import { getUnreadNotificationCount } from "../features/notifications/notificationsRepo";
 import {
+  consumeAiGenerationQuota,
+  generateSoloGuidance,
+  getAiQuotaSnapshot,
+  type AiQuotaResult,
+} from "../features/ai/aiScriptRepo";
+import {
   appendSoloHistory,
   getSoloHistoryStats,
   listSoloHistory,
@@ -157,7 +163,7 @@ function truncate(text: string, max = 150) {
 }
 
 export default function HomeScreen() {
-  const { theme, highContrast } = useAppState();
+  const { theme, highContrast, user, isCircleMember } = useAppState();
   const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
   const navigation = useNavigation<any>();
 
@@ -185,6 +191,9 @@ export default function HomeScreen() {
   const [soloMinutesWeek, setSoloMinutesWeek] = useState(0);
   const [lastSoloAt, setLastSoloAt] = useState<string | null>(null);
   const [soloRecent, setSoloRecent] = useState<SoloHistoryEntry[]>([]);
+  const [soloAiLines, setSoloAiLines] = useState<string[] | null>(null);
+  const [soloGeneratingAi, setSoloGeneratingAi] = useState(false);
+  const [soloAiQuota, setSoloAiQuota] = useState<AiQuotaResult | null>(null);
   const homeLoadInFlightRef = useRef(false);
   const homeLoadQueuedRef = useRef(false);
 
@@ -253,7 +262,14 @@ export default function HomeScreen() {
     return "No change vs last week";
   }, [impactDeltaPct]);
 
-  const soloLines = useMemo(() => buildSoloPrayer(soloIntent, preferredLanguage), [soloIntent, preferredLanguage]);
+  const defaultSoloLines = useMemo(
+    () => buildSoloPrayer(soloIntent, preferredLanguage),
+    [soloIntent, preferredLanguage]
+  );
+  const soloLines = useMemo(
+    () => (soloAiLines && soloAiLines.length > 0 ? soloAiLines : defaultSoloLines),
+    [defaultSoloLines, soloAiLines]
+  );
   const selectedDurationSeconds = useMemo(() => soloDurationMin * 60, [soloDurationMin]);
   const breathGuide = useMemo(() => {
     const elapsed = Math.max(0, selectedDurationSeconds - soloSecondsLeft);
@@ -416,6 +432,20 @@ export default function HomeScreen() {
     await Promise.all([loadHome(), refreshUnreadNotifications(), refreshSoloStats()]);
   }, [loadHome, refreshUnreadNotifications, refreshSoloStats]);
 
+  const refreshSoloAiQuota = useCallback(async () => {
+    const uid = String(user?.id ?? "").trim();
+    if (!uid) {
+      setSoloAiQuota(null);
+      return;
+    }
+    const quota = await getAiQuotaSnapshot({
+      userId: uid,
+      mode: "solo_guidance",
+      isPremium: isCircleMember,
+    });
+    setSoloAiQuota(quota);
+  }, [isCircleMember, user?.id]);
+
   useFocusEffect(
     useCallback(() => {
       let disposed = false;
@@ -527,6 +557,63 @@ export default function HomeScreen() {
 
     return () => clearInterval(id);
   }, [soloOpen, soloRunning, soloDurationMin]);
+
+  React.useEffect(() => {
+    if (!soloOpen) return;
+    void refreshSoloAiQuota();
+  }, [soloOpen, refreshSoloAiQuota]);
+
+  const handleGenerateSoloAi = useCallback(async () => {
+    const uid = String(user?.id ?? "").trim();
+    if (!uid) {
+      Alert.alert("Not signed in", "Please sign in to generate AI solo guidance.");
+      return;
+    }
+
+    const quota = await consumeAiGenerationQuota({
+      userId: uid,
+      mode: "solo_guidance",
+      isPremium: isCircleMember,
+    });
+    setSoloAiQuota(quota);
+    if (!quota.allowed) {
+      Alert.alert(
+        "Daily AI limit reached",
+        `Free tier allows ${quota.limit ?? 0} AI solo guidance generations per day. Upgrade to Egregor Circle for unlimited AI guidance.`
+      );
+      return;
+    }
+
+    setSoloGeneratingAi(true);
+    try {
+      const generated = await generateSoloGuidance({
+        intention: soloIntent.trim() || "peace and healing",
+        durationMinutes: soloDurationMin,
+        tone: breathMode === "Deep" ? "focused" : "calm",
+        language: preferredLanguage,
+      });
+      setSoloAiLines(generated.lines);
+      Alert.alert(
+        "Guidance ready",
+        generated.source === "openai"
+          ? "Generated with OpenAI. Start whenever you are ready."
+          : "Generated with local fallback. Start whenever you are ready."
+      );
+    } catch (e: any) {
+      Alert.alert("Could not generate guidance", e?.message ?? "Please try again.");
+    } finally {
+      setSoloGeneratingAi(false);
+      void refreshSoloAiQuota();
+    }
+  }, [
+    breathMode,
+    isCircleMember,
+    preferredLanguage,
+    refreshSoloAiQuota,
+    soloDurationMin,
+    soloIntent,
+    user?.id,
+  ]);
 
   React.useEffect(() => {
     if (!soloCompletionTick) return;
@@ -780,7 +867,10 @@ export default function HomeScreen() {
 
             <TextInput
               value={soloIntent}
-              onChangeText={setSoloIntent}
+              onChangeText={(next) => {
+                setSoloIntent(next);
+                setSoloAiLines(null);
+              }}
               placeholder="What intention are you holding right now?"
               placeholderTextColor={c.textMuted}
               style={[styles.modalInput, { color: c.text, borderColor: c.border, backgroundColor: c.cardAlt }]}
@@ -826,6 +916,25 @@ export default function HomeScreen() {
                 <Text style={[styles.secondaryBtnText, { color: c.text }]}>Reset</Text>
               </Pressable>
             </View>
+
+            <Pressable
+              style={[
+                styles.secondaryBtn,
+                { borderColor: c.border, backgroundColor: c.cardAlt, marginTop: 10 },
+                soloGeneratingAi && { opacity: 0.5 },
+              ]}
+              onPress={handleGenerateSoloAi}
+              disabled={soloGeneratingAi}
+            >
+              <Text style={[styles.secondaryBtnText, { color: c.text }]}>
+                {soloGeneratingAi ? "Generating..." : "Generate AI guidance"}
+              </Text>
+            </Pressable>
+            <Text style={[styles.modalMeta, { color: c.textMuted }]}>
+              {isCircleMember
+                ? "Egregor Circle: unlimited AI solo guidance."
+                : `Free AI solo guidance today: ${soloAiQuota?.usedToday ?? 0}/${soloAiQuota?.limit ?? 2}`}
+            </Text>
 
             <Pressable
               style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt, marginTop: 10 }]}

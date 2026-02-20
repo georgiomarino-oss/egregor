@@ -36,8 +36,8 @@ importers:
         specifier: ^8.0.10
         version: 8.0.10(expo@54.0.33(@babel/core@7.29.0)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))
       expo-location:
-        specifier: ~18.1.6
-        version: 18.1.6(expo@54.0.33(@babel/core@7.29.0)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))
+        specifier: ~19.0.8
+        version: 19.0.8(expo@54.0.33(@babel/core@7.29.0)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))
       expo-notifications:
         specifier: ^0.32.16
         version: 0.32.16(expo@54.0.33(@babel/core@7.29.0)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
@@ -53,6 +53,9 @@ importers:
       react-native-gesture-handler:
         specifier: ~2.28.0
         version: 2.28.0(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
+      react-native-purchases:
+        specifier: ^9.10.3
+        version: 9.10.3(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
       react-native-safe-area-context:
         specifier: ~5.6.0
         version: 5.6.2(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
@@ -868,6 +871,15 @@ packages:
   '@react-navigation/routers@7.5.3':
     resolution: {integrity: sha512-1tJHg4KKRJuQ1/EvJxatrMef3NZXEPzwUIUZ3n1yJ2t7Q97siwRtbynRpQG9/69ebbtiZ8W3ScOZF/OmhvM4Rg==}
 
+  '@revenuecat/purchases-js-hybrid-mappings@17.41.0':
+    resolution: {integrity: sha512-rjPX+k1ryiSu//hYpSPU0+M5rryVoNaMxr6raFDyc5bB1My2aCH4b7zUnVBiyGa6ZUayUMJtZxOsz/THzS4WqA==}
+
+  '@revenuecat/purchases-js@1.26.1':
+    resolution: {integrity: sha512-+RO6G/AW6/Tm7RFqz2sdkHBAAyV4T2Lj4KGQm8vVUvR8g9hxuDeenCAIKssAqAgLTyq8uqUl4dH6ncbCzHBA0g==}
+
+  '@revenuecat/purchases-typescript-internal@17.41.0':
+    resolution: {integrity: sha512-1UhQaQcHQ4TxTdMRXagWhN0ecFC61Wy6ula+aSHuUDLJwyKsMl4Dt4vocuo1Ja9o5Jc1Ty4AXx4MnqEnuLrr6A==}
+
   '@sinclair/typebox@0.27.10':
     resolution: {integrity: sha512-MTBk/3jGLNB2tVxv6uLlFh1iu64iYOQ2PbdOSK3NW8JZsmlaOh2q6sdtKowBhfw8QFLmYNzTW4/oK4uATIi6ZA==}
 
@@ -1496,8 +1508,8 @@ packages:
       expo: '*'
       react: '*'
 
-  expo-location@18.1.6:
-    resolution: {integrity: sha512-l5dQQ2FYkrBgNzaZN1BvSmdhhcztFOUucu2kEfDBMV4wSIuTIt/CKsho+F3RnAiWgvui1wb1WTTf80E8zq48hA==}
+  expo-location@19.0.8:
+    resolution: {integrity: sha512-H/FI75VuJ1coodJbbMu82pf+Zjess8X8Xkiv9Bv58ZgPKS/2ztjC1YO1/XMcGz7+s9DrbLuMIw22dFuP4HqneA==}
     peerDependencies:
       expo: '*'
 
@@ -2439,6 +2451,16 @@ packages:
     peerDependencies:
       react: '*'
       react-native: '*'
+
+  react-native-purchases@9.10.3:
+    resolution: {integrity: sha512-YMdueV9SNTT8bLeFN7pFe27tBMusUP6dXit7yU0opjN2XJw//bSJYrk1snBv8e33At2i6Yq1wNXyHipth8dBgg==}
+    peerDependencies:
+      react: '>= 16.6.3'
+      react-native: '>= 0.73.0'
+      react-native-web: '*'
+    peerDependenciesMeta:
+      react-native-web:
+        optional: true
 
   react-native-safe-area-context@5.6.2:
     resolution: {integrity: sha512-4XGqMNj5qjUTYywJqpdWZ9IG8jgkS3h06sfVjfw5yZQZfWnRFXczi0GnYyFyCc2EBps/qFmoCH8fez//WumdVg==}
@@ -4162,6 +4184,14 @@ snapshots:
     dependencies:
       nanoid: 3.3.11
 
+  '@revenuecat/purchases-js-hybrid-mappings@17.41.0':
+    dependencies:
+      '@revenuecat/purchases-js': 1.26.1
+
+  '@revenuecat/purchases-js@1.26.1': {}
+
+  '@revenuecat/purchases-typescript-internal@17.41.0': {}
+
   '@sinclair/typebox@0.27.10': {}
 
   '@sinonjs/commons@3.0.1':
@@ -4835,7 +4865,7 @@ snapshots:
       expo: 54.0.33(@babel/core@7.29.0)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
       react: 19.1.0
 
-  expo-location@18.1.6(expo@54.0.33(@babel/core@7.29.0)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)):
+  expo-location@19.0.8(expo@54.0.33(@babel/core@7.29.0)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)):
     dependencies:
       expo: 54.0.33(@babel/core@7.29.0)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
 
@@ -5983,6 +6013,13 @@ snapshots:
 
   react-native-is-edge-to-edge@1.2.1(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0):
     dependencies:
+      react: 19.1.0
+      react-native: 0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0)
+
+  react-native-purchases@9.10.3(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0):
+    dependencies:
+      '@revenuecat/purchases-js-hybrid-mappings': 17.41.0
+      '@revenuecat/purchases-typescript-internal': 17.41.0
       react: 19.1.0
       react-native: 0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0)
 

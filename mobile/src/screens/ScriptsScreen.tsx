@@ -17,6 +17,13 @@ import { supabase } from "../supabase/client";
 import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
 import type { Database } from "../types/db";
+import {
+  consumeAiGenerationQuota,
+  generateEventPrayerScript,
+  getAiQuotaSnapshot,
+  type AiQuotaResult,
+  type EventScriptSection,
+} from "../features/ai/aiScriptRepo";
 
 type ScriptRow = Database["public"]["Tables"]["scripts"]["Row"];
 type ScriptInsert = Database["public"]["Tables"]["scripts"]["Insert"];
@@ -164,9 +171,10 @@ function buildDefaultSections(
 
 export default function ScriptsScreen() {
   const navigation = useNavigation<any>();
-  const { theme, highContrast } = useAppState();
+  const { theme, highContrast, isCircleMember } = useAppState();
   const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
   const [loading, setLoading] = useState(false);
+  const [generatingAi, setGeneratingAi] = useState(false);
   const [myUserId, setMyUserId] = useState("");
 
   // Create script form
@@ -177,6 +185,8 @@ export default function ScriptsScreen() {
   const [durationMinutes, setDurationMinutes] = useState("20");
   const [tone, setTone] = useState("calm");
   const [scriptLanguage, setScriptLanguage] = useState<ScriptLanguage>("English");
+  const [createSectionsOverride, setCreateSectionsOverride] = useState<EventScriptSection[] | null>(null);
+  const [createAiQuota, setCreateAiQuota] = useState<AiQuotaResult | null>(null);
 
   const [scripts, setScripts] = useState<ScriptRow[]>([]);
   const [myEvents, setMyEvents] = useState<EventRow[]>([]);
@@ -230,10 +240,11 @@ export default function ScriptsScreen() {
   }, [myEvents, eventQuery, scriptsById]);
 
   const previewCreateSections = useMemo(() => {
+    if (createSectionsOverride?.length) return createSectionsOverride;
     const mins = Number(durationMinutes);
     if (!Number.isFinite(mins) || mins < SCRIPT_DURATION_MIN || mins > SCRIPT_DURATION_MAX) return [];
     return buildDefaultSections(mins, intention.trim() || "Collective peace.", tone, scriptLanguage);
-  }, [durationMinutes, intention, tone, scriptLanguage]);
+  }, [createSectionsOverride, durationMinutes, intention, tone, scriptLanguage]);
 
   const previewEditSections = useMemo(() => {
     const mins = Number(editDurationMinutes);
@@ -297,9 +308,30 @@ export default function ScriptsScreen() {
     }
   }, [loadMyHostedEvents, loadMyUserId, loadScripts]);
 
+  const refreshCreateAiQuota = useCallback(
+    async (targetUserId?: string) => {
+      const uid = String(targetUserId ?? myUserId).trim();
+      if (!uid) {
+        setCreateAiQuota(null);
+        return;
+      }
+      const quota = await getAiQuotaSnapshot({
+        userId: uid,
+        mode: "event_script",
+        isPremium: isCircleMember,
+      });
+      setCreateAiQuota(quota);
+    },
+    [isCircleMember, myUserId]
+  );
+
   useEffect(() => {
     refreshAll();
   }, [refreshAll]);
+
+  useEffect(() => {
+    void refreshCreateAiQuota(myUserId);
+  }, [myUserId, isCircleMember, refreshCreateAiQuota]);
 
   useEffect(() => {
     if (attachOpen && attachScriptId && !scripts.some((s) => s.id === attachScriptId)) {
@@ -439,7 +471,10 @@ export default function ScriptsScreen() {
           durationMinutes: mins,
           tone: toneText,
           language: scriptLanguage,
-          sections: buildDefaultSections(mins, intentionText, toneText, scriptLanguage),
+          sections:
+            createSectionsOverride?.length
+              ? createSectionsOverride
+              : buildDefaultSections(mins, intentionText, toneText, scriptLanguage),
         } as any,
       };
 
@@ -451,13 +486,93 @@ export default function ScriptsScreen() {
       }
 
       Alert.alert("Success", "Script created.");
+      setCreateSectionsOverride(null);
       await refreshAll();
     } catch (e: any) {
       Alert.alert("Create script failed", e?.message ?? "Unknown error");
     } finally {
       setLoading(false);
     }
-  }, [durationMinutes, intention, refreshAll, scriptLanguage, title, tone]);
+  }, [
+    createSectionsOverride,
+    durationMinutes,
+    intention,
+    refreshAll,
+    scriptLanguage,
+    title,
+    tone,
+  ]);
+
+  const handleGenerateAiScript = useCallback(async () => {
+    const mins = Number(durationMinutes);
+    const intentionText = intention.trim();
+    const toneText = tone.trim().toLowerCase() || "calm";
+
+    if (!intentionText) {
+      Alert.alert("Validation", "Add an intention first.");
+      return;
+    }
+    if (!Number.isFinite(mins) || mins < SCRIPT_DURATION_MIN || mins > SCRIPT_DURATION_MAX) {
+      Alert.alert(
+        "Validation",
+        `Duration must be between ${SCRIPT_DURATION_MIN} and ${SCRIPT_DURATION_MAX} minutes.`
+      );
+      return;
+    }
+
+    const {
+      data: { user },
+      error: userErr,
+    } = await supabase.auth.getUser();
+    if (userErr || !user) {
+      Alert.alert("Not signed in", "Please sign in first.");
+      return;
+    }
+
+    const quota = await consumeAiGenerationQuota({
+      userId: user.id,
+      mode: "event_script",
+      isPremium: isCircleMember,
+    });
+    setCreateAiQuota(quota);
+
+    if (!quota.allowed) {
+      const capText = quota.limit ? `${quota.limit}` : "your";
+      Alert.alert(
+        "Daily AI limit reached",
+        `Free tier allows ${capText} AI event scripts per day. Upgrade to Egregor Circle for unlimited generation.`
+      );
+      return;
+    }
+
+    setGeneratingAi(true);
+    try {
+      const generated = await generateEventPrayerScript({
+        intention: intentionText,
+        durationMinutes: mins,
+        tone: toneText,
+        language: scriptLanguage,
+      });
+
+      setTitle(generated.title);
+      setIntention(generated.intention);
+      setDurationMinutes(String(generated.durationMinutes));
+      setTone(generated.tone);
+      setScriptLanguage(normalizeLanguage(generated.language));
+      setCreateSectionsOverride(generated.sections);
+      Alert.alert(
+        "AI script ready",
+        generated.source === "openai"
+          ? "Generated with OpenAI. Review and create when ready."
+          : "Generated with local fallback. Review and create when ready."
+      );
+    } catch (e: any) {
+      Alert.alert("AI generation failed", e?.message ?? "Could not generate script.");
+    } finally {
+      setGeneratingAi(false);
+      void refreshCreateAiQuota(user.id);
+    }
+  }, [durationMinutes, intention, isCircleMember, refreshCreateAiQuota, scriptLanguage, tone]);
 
   const openAttachForScript = useCallback(
     async (scriptId: string) => {
@@ -862,7 +977,10 @@ export default function ScriptsScreen() {
               <Text style={[styles.label, { color: c.textMuted }]}>Title</Text>
               <TextInput
                 value={title}
-                onChangeText={setTitle}
+                onChangeText={(v) => {
+                  setTitle(v);
+                  setCreateSectionsOverride(null);
+                }}
                 style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
                 placeholder="Script title"
                 placeholderTextColor={c.textMuted}
@@ -873,7 +991,10 @@ export default function ScriptsScreen() {
               <Text style={[styles.label, { color: c.textMuted }]}>Intention</Text>
               <TextInput
                 value={intention}
-                onChangeText={setIntention}
+                onChangeText={(v) => {
+                  setIntention(v);
+                  setCreateSectionsOverride(null);
+                }}
                 style={[styles.input, styles.multi, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
                 multiline
                 placeholder="What is this script for?"
@@ -887,7 +1008,10 @@ export default function ScriptsScreen() {
                   <Text style={[styles.label, { color: c.textMuted }]}>Duration (minutes)</Text>
                   <TextInput
                     value={durationMinutes}
-                    onChangeText={setDurationMinutes}
+                    onChangeText={(v) => {
+                      setDurationMinutes(v);
+                      setCreateSectionsOverride(null);
+                    }}
                     keyboardType="numeric"
                     style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
                     placeholder="20"
@@ -900,7 +1024,10 @@ export default function ScriptsScreen() {
                   <Text style={[styles.label, { color: c.textMuted }]}>Tone</Text>
                   <TextInput
                     value={tone}
-                    onChangeText={setTone}
+                    onChangeText={(v) => {
+                      setTone(v);
+                      setCreateSectionsOverride(null);
+                    }}
                     style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
                     placeholder="calm"
                     placeholderTextColor={c.textMuted}
@@ -916,7 +1043,10 @@ export default function ScriptsScreen() {
                   return (
                     <Pressable
                       key={lang}
-                      onPress={() => setScriptLanguage(lang)}
+                      onPress={() => {
+                        setScriptLanguage(lang);
+                        setCreateSectionsOverride(null);
+                      }}
                       style={[
                         styles.btn,
                         on ? [styles.btnPrimary, { backgroundColor: c.primary }] : [styles.btnGhost, { borderColor: c.border }],
@@ -952,6 +1082,21 @@ export default function ScriptsScreen() {
                 </Pressable>
 
                 <Pressable
+                  onPress={handleGenerateAiScript}
+                  style={[
+                    styles.btn,
+                    styles.btnGhost,
+                    { borderColor: c.border },
+                    (loading || generatingAi) && styles.disabled,
+                  ]}
+                  disabled={loading || generatingAi}
+                >
+                  <Text style={[styles.btnGhostText, { color: c.textMuted }]}>
+                    {generatingAi ? "Generating..." : "Generate with AI"}
+                  </Text>
+                </Pressable>
+
+                <Pressable
                   onPress={refreshAll}
                   style={[styles.btn, styles.btnGhost, { borderColor: c.border }, loading && styles.disabled]}
                   disabled={loading}
@@ -959,6 +1104,11 @@ export default function ScriptsScreen() {
                   <Text style={[styles.btnGhostText, { color: c.textMuted }]}>Refresh</Text>
                 </Pressable>
               </View>
+              <Text style={[styles.meta, { color: c.textMuted }]}>
+                {isCircleMember
+                  ? "Egregor Circle: unlimited AI event script generation."
+                  : `Free AI event scripts today: ${createAiQuota?.usedToday ?? 0}/${createAiQuota?.limit ?? 3}`}
+              </Text>
             </View>
 
             <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
