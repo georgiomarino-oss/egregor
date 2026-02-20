@@ -1600,6 +1600,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           data={messages}
           keyExtractor={(m) => String((m as any).id)}
           renderItem={renderMsg}
+          refreshing={loading}
+          onRefresh={loadEventRoom}
           ListHeaderComponent={Header}
           contentContainerStyle={styles.content}
           onContentSizeChange={() => {

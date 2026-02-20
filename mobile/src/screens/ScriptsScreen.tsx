@@ -691,6 +691,8 @@ export default function ScriptsScreen() {
         keyExtractor={(item) => item.id}
         renderItem={renderScript}
         contentContainerStyle={styles.content}
+        refreshing={loading}
+        onRefresh={refreshAll}
         ListHeaderComponent={
           <View style={{ gap: 12 }}>
             <View style={styles.headerRow}>

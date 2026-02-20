@@ -1196,6 +1196,8 @@ export default function EventsScreen() {
         keyExtractor={(item) => item.id}
         renderItem={renderEvent}
         contentContainerStyle={styles.content}
+        refreshing={loading}
+        onRefresh={refreshAll}
         ListHeaderComponent={
           <View>
             <View style={styles.section}>
