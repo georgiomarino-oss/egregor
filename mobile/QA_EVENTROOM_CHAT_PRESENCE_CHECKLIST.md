@@ -58,6 +58,8 @@ Scope: `mobile/src/screens/EventRoomScreen.tsx`
 - Expected: list auto-scrolls to latest.
 - Scroll up (not near bottom), receive new messages.
 - Expected: list does not force-scroll to bottom.
+- While scrolled up, send your own message.
+- Expected: chat jumps to latest so your sent message is immediately visible.
 
 ## Navigation Safety
 - Enter EventRoom from Events screen.
