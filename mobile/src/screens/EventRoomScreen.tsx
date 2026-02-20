@@ -938,6 +938,12 @@ export default function EventRoomScreen({ route, navigation }: Props) {
   useEffect(() => {
     setPendingMessageCount(0);
     setUnreadMarkerMessageId(null);
+    setChatText("");
+    setSending(false);
+    setSendingEnergy(null);
+    setPresenceMsg("");
+    setPresenceErr("");
+    setRunErr("");
     shouldAutoScrollRef.current = true;
     chatContentHeightRef.current = 0;
     chatScrollOffsetYRef.current = 0;
