@@ -12,6 +12,7 @@ const KEY_AUTO_JOIN_GLOBAL = "prefs:autoJoinLive";
 const KEY_JOURNAL = "journal:entries";
 const KEY_PROFILE_PREFS = "profile:prefs:v1";
 const KEY_SUPPORT_TOTAL = "support:total:v1";
+const KEY_DAILY_INTENTION = "onboarding:intention:v1";
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
@@ -120,6 +121,7 @@ export default function ProfileScreen() {
   const [prefs, setPrefs] = useState<ProfilePrefs>(DEFAULT_PROFILE_PREFS);
   const [collectiveImpact, setCollectiveImpact] = useState<CollectiveImpact>(DEFAULT_COLLECTIVE_IMPACT);
   const [supportTotalUsd, setSupportTotalUsd] = useState(0);
+  const [dailyIntention, setDailyIntention] = useState("peace and clarity");
 
   const loadJournal = useCallback(async () => {
     try {
@@ -183,6 +185,15 @@ export default function ProfileScreen() {
       setSupportTotalUsd(Number.isFinite(parsed) && parsed > 0 ? parsed : 0);
     } catch {
       setSupportTotalUsd(0);
+    }
+  }, []);
+
+  const loadDailyIntention = useCallback(async () => {
+    try {
+      const raw = await AsyncStorage.getItem(KEY_DAILY_INTENTION);
+      setDailyIntention(raw?.trim() ? raw.trim() : "peace and clarity");
+    } catch {
+      setDailyIntention("peace and clarity");
     }
   }, []);
 
@@ -297,7 +308,8 @@ export default function ProfileScreen() {
     void loadJournal();
     void loadPrefs();
     void loadSupportTotal();
-  }, [load, loadJournal, loadPrefs, loadSupportTotal]);
+    void loadDailyIntention();
+  }, [load, loadJournal, loadPrefs, loadSupportTotal, loadDailyIntention]);
 
   const initials = useMemo(() => {
     const name = (displayName || email || "").trim();
@@ -451,6 +463,21 @@ export default function ProfileScreen() {
       Alert.alert("Could not record support", e?.message ?? "Please try again.");
     }
   }, [supportTotalUsd]);
+
+  const saveDailyIntention = useCallback(async () => {
+    const next = dailyIntention.trim();
+    if (!next) {
+      Alert.alert("Validation", "Please enter an intention.");
+      return;
+    }
+    try {
+      await AsyncStorage.setItem(KEY_DAILY_INTENTION, next);
+      setDailyIntention(next);
+      Alert.alert("Saved", "Daily intention updated.");
+    } catch (e: any) {
+      Alert.alert("Save failed", e?.message ?? "Could not save daily intention.");
+    }
+  }, [dailyIntention]);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
@@ -640,6 +667,22 @@ export default function ProfileScreen() {
           <Text style={[styles.tip, { color: c.textMuted }]}>
             These settings prepare notification, voice, and accessibility behavior across the app.
           </Text>
+        </View>
+
+        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={[styles.sectionTitle, { color: c.text }]}>Daily Intention</Text>
+          <TextInput
+            style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+            value={dailyIntention}
+            onChangeText={setDailyIntention}
+            placeholder="peace and clarity"
+            placeholderTextColor={c.textMuted}
+            maxLength={120}
+          />
+          <Text style={[styles.meta, { color: c.textMuted }]}>{dailyIntention.trim().length}/120</Text>
+          <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }]} onPress={saveDailyIntention}>
+            <Text style={styles.btnText}>Save daily intention</Text>
+          </Pressable>
         </View>
 
         <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
