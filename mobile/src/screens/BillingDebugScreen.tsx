@@ -39,6 +39,19 @@ type WebhookLogRow = {
   processed_at: string | null;
 };
 
+type MonetizationEventRow = {
+  event_name: string | null;
+  stage: string | null;
+  provider: string | null;
+  platform: string | null;
+  package_identifier: string | null;
+  entitlement_id: string | null;
+  is_circle_member: boolean | null;
+  error_message: string | null;
+  created_at: string | null;
+  metadata: Record<string, unknown> | null;
+};
+
 function clip(input: string, max: number) {
   const clean = String(input ?? "").replace(/\s+/g, " ").trim();
   if (clean.length <= max) return clean;
@@ -77,6 +90,7 @@ export default function BillingDebugScreen() {
   const [serverError, setServerError] = useState<string | null>(null);
   const [subscriptionRows, setSubscriptionRows] = useState<SubscriptionRow[]>([]);
   const [webhookRows, setWebhookRows] = useState<WebhookLogRow[]>([]);
+  const [monetizationRows, setMonetizationRows] = useState<MonetizationEventRow[]>([]);
   const [lastSyncAt, setLastSyncAt] = useState("");
   const loadInFlightRef = useRef(false);
   const queuedLoadRef = useRef(false);
@@ -96,11 +110,12 @@ export default function BillingDebugScreen() {
         setServerError("No authenticated user.");
         setSubscriptionRows([]);
         setWebhookRows([]);
+        setMonetizationRows([]);
         setLastSyncAt(new Date().toISOString());
         return;
       }
 
-      const [rpcResult, subResult, hookResult] = await Promise.all([
+      const [rpcResult, subResult, hookResult, monetizationResult] = await Promise.all([
         supabase.rpc("is_circle_member" as any, { p_user_id: uid }),
         (supabase as any)
           .from("user_subscription_state")
@@ -118,6 +133,14 @@ export default function BillingDebugScreen() {
           .eq("user_id", uid)
           .order("received_at", { ascending: false })
           .limit(30),
+        (supabase as any)
+          .from("monetization_event_log")
+          .select(
+            "event_name,stage,provider,platform,package_identifier,entitlement_id,is_circle_member,error_message,created_at,metadata"
+          )
+          .eq("user_id", uid)
+          .order("created_at", { ascending: false })
+          .limit(40),
       ]);
 
       const errors: string[] = [];
@@ -144,6 +167,16 @@ export default function BillingDebugScreen() {
       } else {
         const rows = Array.isArray(hookResult.data) ? (hookResult.data as WebhookLogRow[]) : [];
         setWebhookRows(rows);
+      }
+
+      if (monetizationResult.error) {
+        errors.push(`monetization_event_log: ${monetizationResult.error.message}`);
+        setMonetizationRows([]);
+      } else {
+        const rows = Array.isArray(monetizationResult.data)
+          ? (monetizationResult.data as MonetizationEventRow[])
+          : [];
+        setMonetizationRows(rows);
       }
 
       setServerError(errors.length ? errors.join(" | ") : null);
@@ -301,6 +334,56 @@ export default function BillingDebugScreen() {
                   {!!row.error_message && (
                     <Text style={[styles.warn, { color: "#FB7185" }]}>
                       error: {clip(safeText(row.error_message), 240)}
+                    </Text>
+                  )}
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+
+        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={[styles.sectionTitle, { color: c.text }]}>Client Monetization Events</Text>
+          {monetizationRows.length === 0 ? (
+            <Text style={[styles.meta, { color: c.textMuted }]}>
+              No monetization client events found yet.
+            </Text>
+          ) : (
+            <View style={{ gap: 8 }}>
+              {monetizationRows.map((row, idx) => (
+                <View
+                  key={`${safeText(row.created_at, "at")}-${safeText(row.event_name, "event")}-${idx}`}
+                  style={[styles.card, { backgroundColor: c.cardAlt, borderColor: c.border }]}
+                >
+                  <Text style={[styles.title, { color: c.text }]}>
+                    {safeText(row.event_name)} | {safeText(row.stage)}
+                  </Text>
+                  <Text style={[styles.meta, { color: c.textMuted }]}>
+                    provider={safeText(row.provider)} | platform={safeText(row.platform)}
+                  </Text>
+                  <Text style={[styles.meta, { color: c.textMuted }]}>
+                    package={safeText(row.package_identifier)} | entitlement=
+                    {safeText(row.entitlement_id)}
+                  </Text>
+                  <Text style={[styles.meta, { color: c.textMuted }]}>
+                    is_circle_member=
+                    {row.is_circle_member === null
+                      ? "-"
+                      : row.is_circle_member
+                        ? "true"
+                        : "false"}
+                  </Text>
+                  <Text style={[styles.meta, { color: c.textMuted }]}>
+                    at={row.created_at ? safeIso(row.created_at) : "-"}
+                  </Text>
+                  {!!row.error_message && (
+                    <Text style={[styles.warn, { color: "#FB7185" }]}>
+                      error: {clip(safeText(row.error_message), 220)}
+                    </Text>
+                  )}
+                  {row.metadata && (
+                    <Text style={[styles.meta, { color: c.textMuted }]}>
+                      metadata={clip(JSON.stringify(row.metadata), 220)}
                     </Text>
                   )}
                 </View>

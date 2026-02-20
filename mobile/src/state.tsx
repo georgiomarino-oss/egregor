@@ -9,6 +9,7 @@ import {
   restoreCircleMembership,
   type CirclePackage,
 } from "./features/billing/billingRepo";
+import { logMonetizationEvent } from "./features/billing/billingAnalyticsRepo";
 import { unregisterPushTokenForCurrentUser } from "./features/notifications/pushRepo";
 
 export type AppTheme = "light" | "dark" | "cosmic";
@@ -190,17 +191,65 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     const uid = session?.user?.id ?? "";
     if (!uid) return { ok: false, message: "Please sign in first." };
 
+    void logMonetizationEvent({
+      userId: uid,
+      eventName: "circle_purchase",
+      stage: "attempt",
+      packageIdentifier,
+      metadata: { source: "AppStateProvider.purchaseCircle" },
+    });
+
     setBillingReady(false);
     const snapshot = await purchaseCircleMembership({ userId: uid, packageIdentifier });
     applyBillingSnapshot(snapshot);
     setBillingReady(true);
 
     if (snapshot.error) {
+      const stage = snapshot.error === "Purchase cancelled." ? "cancelled" : "failure";
+      void logMonetizationEvent({
+        userId: uid,
+        eventName: "circle_purchase",
+        stage,
+        packageIdentifier,
+        isCircleMember: snapshot.isCircleMember,
+        errorMessage: snapshot.error,
+        metadata: {
+          billingAvailable: snapshot.available,
+          billingConfigured: snapshot.configured,
+          packageCount: snapshot.packages.length,
+        },
+      });
       return { ok: false, message: snapshot.error };
     }
     if (!snapshot.isCircleMember) {
+      const message = "Purchase did not activate Circle access yet.";
+      void logMonetizationEvent({
+        userId: uid,
+        eventName: "circle_purchase",
+        stage: "failure",
+        packageIdentifier,
+        isCircleMember: snapshot.isCircleMember,
+        errorMessage: message,
+        metadata: {
+          billingAvailable: snapshot.available,
+          billingConfigured: snapshot.configured,
+          packageCount: snapshot.packages.length,
+        },
+      });
       return { ok: false, message: "Purchase did not activate Circle access yet." };
     }
+
+    void logMonetizationEvent({
+      userId: uid,
+      eventName: "circle_purchase",
+      stage: "success",
+      packageIdentifier,
+      isCircleMember: snapshot.isCircleMember,
+      metadata: {
+        expiresAt: snapshot.expiresAt,
+        packageCount: snapshot.packages.length,
+      },
+    });
     return { ok: true, message: "Egregor Circle is now active." };
   };
 
@@ -208,17 +257,60 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     const uid = session?.user?.id ?? "";
     if (!uid) return { ok: false, message: "Please sign in first." };
 
+    void logMonetizationEvent({
+      userId: uid,
+      eventName: "circle_restore",
+      stage: "attempt",
+      metadata: { source: "AppStateProvider.restoreCircle" },
+    });
+
     setBillingReady(false);
     const snapshot = await restoreCircleMembership(uid);
     applyBillingSnapshot(snapshot);
     setBillingReady(true);
 
     if (snapshot.error) {
+      void logMonetizationEvent({
+        userId: uid,
+        eventName: "circle_restore",
+        stage: "failure",
+        isCircleMember: snapshot.isCircleMember,
+        errorMessage: snapshot.error,
+        metadata: {
+          billingAvailable: snapshot.available,
+          billingConfigured: snapshot.configured,
+          packageCount: snapshot.packages.length,
+        },
+      });
       return { ok: false, message: snapshot.error };
     }
     if (!snapshot.isCircleMember) {
-      return { ok: false, message: "No active Circle entitlement found to restore." };
+      const message = "No active Circle entitlement found to restore.";
+      void logMonetizationEvent({
+        userId: uid,
+        eventName: "circle_restore",
+        stage: "failure",
+        isCircleMember: snapshot.isCircleMember,
+        errorMessage: message,
+        metadata: {
+          billingAvailable: snapshot.available,
+          billingConfigured: snapshot.configured,
+          packageCount: snapshot.packages.length,
+        },
+      });
+      return { ok: false, message };
     }
+
+    void logMonetizationEvent({
+      userId: uid,
+      eventName: "circle_restore",
+      stage: "success",
+      isCircleMember: snapshot.isCircleMember,
+      metadata: {
+        expiresAt: snapshot.expiresAt,
+        packageCount: snapshot.packages.length,
+      },
+    });
     return { ok: true, message: "Circle purchase restored." };
   };
 

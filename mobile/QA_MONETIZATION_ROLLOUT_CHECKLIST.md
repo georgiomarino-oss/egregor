@@ -45,12 +45,16 @@ Baseline commit: `1201fe0`
    - `Packages loaded > 0`
    - Server/local membership values are consistent
    - `user_subscription_state` rows appear
+   - `Client Monetization Events` section shows `circle_purchase` and `circle_restore` events
 5. Execute purchase on device (sandbox/test account).
 6. Confirm:
    - Purchase succeeds
    - Membership becomes active
    - Webhook event status is `processed`
+   - A client event row appears with `event_name=circle_purchase` and `stage=success`
 7. Test `Restore purchases`.
+8. Confirm restore event appears:
+   - `event_name=circle_restore` with stage `success` or `failure` (with error details).
 
 ## AI Quota + Premium Unlock QA
 1. As free user, consume daily limit in:
