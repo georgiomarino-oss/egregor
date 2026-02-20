@@ -264,9 +264,19 @@ Deno.serve(async (req) => {
   }
 
   const cronToken = Deno.env.get("NEWS_AUTOGEN_CRON_TOKEN")?.trim() ?? "";
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY")?.trim() ?? "";
   if (cronToken) {
     const token = req.headers.get("x-egregor-cron-token")?.trim() ?? "";
-    if (token !== cronToken) {
+    const apikey = req.headers.get("apikey")?.trim() ?? "";
+    const authHeader = req.headers.get("authorization")?.trim() ?? "";
+    const bearer =
+      authHeader.toLowerCase().startsWith("bearer ")
+        ? authHeader.slice(7).trim()
+        : "";
+
+    const tokenOk = token === cronToken;
+    const schedulerAuthOk = !!anonKey && apikey === anonKey && bearer === anonKey;
+    if (!tokenOk && !schedulerAuthOk) {
       return jsonResponse(401, { error: "Unauthorized" });
     }
   }

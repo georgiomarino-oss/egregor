@@ -25,6 +25,11 @@ Supabase Edge Function scaffold to auto-create compassion events from world news
 alter database postgres set app.settings.news_autogen_cron_token = 'replace-with-same-token';
 ```
 
+- Runtime auth behavior:
+  - If `NEWS_AUTOGEN_CRON_TOKEN` is set, requests are accepted when either:
+    - `x-egregor-cron-token` matches, or
+    - both `Authorization: Bearer <SUPABASE_ANON_KEY>` and `apikey: <SUPABASE_ANON_KEY>` match.
+
 ## Request
 
 - Method: `POST`
