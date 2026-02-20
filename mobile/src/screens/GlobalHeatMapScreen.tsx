@@ -13,6 +13,7 @@ type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
 
 type RegionKey = "Americas" | "Europe" | "Asia" | "Africa" | "Oceania" | "Global";
+type HeatWindow = "90s" | "24h" | "7d";
 
 const KEY_LOCATION_OPT_IN = "prefs:locationOptIn";
 const ACTIVE_WINDOW_MS = 90_000;
@@ -47,6 +48,12 @@ function regionFromTimezone(tzRaw: string | null | undefined): RegionKey {
   return "Global";
 }
 
+function windowMs(window: HeatWindow) {
+  if (window === "24h") return 24 * 60 * 60 * 1000;
+  if (window === "7d") return 7 * 24 * 60 * 60 * 1000;
+  return ACTIVE_WINDOW_MS;
+}
+
 export default function GlobalHeatMapScreen() {
   const { theme, highContrast } = useAppState();
   const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
@@ -71,6 +78,7 @@ export default function GlobalHeatMapScreen() {
     Global: [],
   });
   const [selectedRegion, setSelectedRegion] = useState<RegionKey>("Americas");
+  const [heatWindow, setHeatWindow] = useState<HeatWindow>("90s");
 
   const openEventRoom = useCallback(
     (eventId: string) => {
@@ -87,7 +95,9 @@ export default function GlobalHeatMapScreen() {
   const loadHeatData = useCallback(async () => {
     setLoading(true);
     try {
-      const cutoffIso = new Date(Date.now() - ACTIVE_WINDOW_MS).toISOString();
+      const now = Date.now();
+      const selectedWindowMs = windowMs(heatWindow);
+      const cutoffIso = new Date(now - selectedWindowMs).toISOString();
       const [{ data: presenceRows }, { data: eventRows }] = await Promise.all([
         supabase
           .from("event_presence")
@@ -97,8 +107,8 @@ export default function GlobalHeatMapScreen() {
         supabase
           .from("events")
           .select("id,title,start_time_utc,end_time_utc,timezone,intention_statement")
-          .order("start_time_utc", { ascending: true })
-          .limit(200),
+          .order("start_time_utc", { ascending: false })
+          .limit(500),
       ]);
 
       const events = (eventRows ?? []) as EventRow[];
@@ -115,7 +125,7 @@ export default function GlobalHeatMapScreen() {
         Global: 0,
       };
       for (const p of presence) {
-        if (safeTimeMs((p as any).last_seen_at) < Date.now() - ACTIVE_WINDOW_MS) continue;
+        if (safeTimeMs((p as any).last_seen_at) < now - selectedWindowMs) continue;
         const event = eventById[String((p as any).event_id ?? "")];
         const region = regionFromTimezone((event as any)?.timezone ?? "");
         activeCounts[region] += 1;
@@ -130,12 +140,17 @@ export default function GlobalHeatMapScreen() {
         Oceania: [],
         Global: [],
       };
-      const now = Date.now();
       for (const e of events) {
         const start = safeTimeMs((e as any).start_time_utc);
         const end = safeTimeMs((e as any).end_time_utc);
-        const live = start > 0 && start <= now && (end <= 0 || now <= end);
-        if (!live) continue;
+        if (!start) continue;
+        const live = start <= now && (end <= 0 || now <= end);
+        const recent = start >= now - selectedWindowMs && start <= now;
+        if (heatWindow === "90s") {
+          if (!live) continue;
+        } else if (!recent) {
+          continue;
+        }
         const region = regionFromTimezone((e as any).timezone ?? "");
         liveByRegion[region].push(e);
       }
@@ -143,7 +158,7 @@ export default function GlobalHeatMapScreen() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [heatWindow]);
 
   useFocusEffect(
     useCallback(() => {
@@ -194,8 +209,26 @@ export default function GlobalHeatMapScreen() {
           <View style={{ gap: 12 }}>
             <Text style={[styles.h1, { color: c.text }]}>Global Heat Map</Text>
             <Text style={[styles.meta, { color: c.textMuted }]}>
-              Real-time collective intensity by world region (last 90 seconds).
+              Collective intensity by world region.
             </Text>
+            <View style={styles.row}>
+              {(["90s", "24h", "7d"] as HeatWindow[]).map((w) => {
+                const on = w === heatWindow;
+                return (
+                  <Pressable
+                    key={w}
+                    onPress={() => setHeatWindow(w)}
+                    style={[
+                      styles.windowChip,
+                      { borderColor: c.border, backgroundColor: on ? c.cardAlt : c.background },
+                      on && { borderColor: c.primary },
+                    ]}
+                  >
+                    <Text style={[styles.meta, { color: c.text }]}>{w === "90s" ? "Live 90s" : w}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
 
             <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
               <View style={styles.row}>
@@ -240,7 +273,9 @@ export default function GlobalHeatMapScreen() {
             <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
               <Text style={[styles.sectionTitle, { color: c.text }]}>Live Events in {selectedRegion}</Text>
               <Text style={[styles.meta, { color: c.textMuted }]}>
-                Tap any event to enter the synchronized room.
+                {heatWindow === "90s"
+                  ? "Tap any live event to enter the synchronized room."
+                  : `Events started in the selected ${heatWindow} window.`}
               </Text>
             </View>
           </View>
@@ -290,6 +325,12 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   regionTitle: { fontSize: 14, fontWeight: "800" },
+  windowChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
   track: {
     marginTop: 6,
     height: 8,
