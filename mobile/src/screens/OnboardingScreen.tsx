@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useRef } from "react";
-import { Animated, Easing, Pressable, StyleSheet, Text, View } from "react-native";
+import { Animated, Easing, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
 
 type Props = {
-  onComplete: () => void;
+  onComplete: (intention: string) => void;
 };
 
 export default function OnboardingScreen({ onComplete }: Props) {
@@ -61,6 +61,7 @@ export default function OnboardingScreen({ onComplete }: Props) {
     inputRange: [0, 1],
     outputRange: [0.4, 0.9],
   });
+  const [intention, setIntention] = React.useState("peace and clarity");
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top", "bottom"]}>
@@ -92,6 +93,25 @@ export default function OnboardingScreen({ onComplete }: Props) {
           Join live circles, focus your breath, and align your energy with people around the world.
         </Text>
 
+        <TextInput
+          value={intention}
+          onChangeText={setIntention}
+          placeholder="Type your intention..."
+          placeholderTextColor={c.textMuted}
+          style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+        />
+        <View style={styles.chipsRow}>
+          {["Healing", "Abundance", "Peace", "Love"].map((chip) => (
+            <Pressable
+              key={chip}
+              onPress={() => setIntention(chip)}
+              style={[styles.chip, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+            >
+              <Text style={[styles.chipText, { color: c.text }]}>{chip}</Text>
+            </Pressable>
+          ))}
+        </View>
+
         <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
           <Text style={[styles.cardTitle, { color: c.text }]}>How it works</Text>
           <Text style={[styles.cardBody, { color: c.textMuted }]}>
@@ -105,7 +125,10 @@ export default function OnboardingScreen({ onComplete }: Props) {
           </Text>
         </View>
 
-        <Pressable style={[styles.cta, { backgroundColor: c.primary }]} onPress={onComplete}>
+        <Pressable
+          style={[styles.cta, { backgroundColor: c.primary }]}
+          onPress={() => onComplete(intention.trim() || "peace and clarity")}
+        >
           <Text style={styles.ctaText}>Enter the temple</Text>
         </Pressable>
       </View>
@@ -149,6 +172,21 @@ const styles = StyleSheet.create({
   },
   cardTitle: { fontSize: 16, fontWeight: "800", marginBottom: 2 },
   cardBody: { fontSize: 13, lineHeight: 18 },
+  input: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 2,
+  },
+  chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  chip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  chipText: { fontSize: 11, fontWeight: "800" },
   cta: {
     marginTop: 12,
     borderRadius: 14,

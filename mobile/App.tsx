@@ -24,6 +24,7 @@ import { getAppColors } from "./src/theme/appearance";
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tabs = createBottomTabNavigator<RootTabParamList>();
 const KEY_ONBOARDING_DONE = "onboarding:done:v1";
+const KEY_DAILY_INTENTION = "onboarding:intention:v1";
 
 function LoadingScreen() {
   return (
@@ -106,10 +107,13 @@ function RootNav() {
     };
   }, [user]);
 
-  const completeOnboarding = useCallback(async () => {
+  const completeOnboarding = useCallback(async (intention: string) => {
     setOnboardingDone(true);
     try {
-      await AsyncStorage.setItem(KEY_ONBOARDING_DONE, "1");
+      await Promise.all([
+        AsyncStorage.setItem(KEY_ONBOARDING_DONE, "1"),
+        AsyncStorage.setItem(KEY_DAILY_INTENTION, intention.trim() || "peace and clarity"),
+      ]);
     } catch {
       // ignore
     }

@@ -37,6 +37,7 @@ type CommunityFeedItem = {
 const ACTIVE_WINDOW_MS = 90_000;
 const HOME_RESYNC_MS = 30_000;
 const KEY_PROFILE_PREFS = "profile:prefs:v1";
+const KEY_DAILY_INTENTION = "onboarding:intention:v1";
 type HomeLanguage = "English" | "Spanish" | "Portuguese" | "French";
 type AmbientPreset = "Silence" | "Rain" | "Singing Bowls" | "Binaural";
 type BreathMode = "Calm" | "Deep";
@@ -159,6 +160,7 @@ export default function HomeScreen() {
   const [activeGlobalEvents, setActiveGlobalEvents] = useState(0);
   const [feedItems, setFeedItems] = useState<CommunityFeedItem[]>([]);
   const [preferredLanguage, setPreferredLanguage] = useState<HomeLanguage>("English");
+  const [dailyIntention, setDailyIntention] = useState("peace and clarity");
   const [soloOpen, setSoloOpen] = useState(false);
   const [soloIntent, setSoloIntent] = useState("peace, healing, and grounded courage");
   const [soloSecondsLeft, setSoloSecondsLeft] = useState(180);
@@ -329,8 +331,16 @@ export default function HomeScreen() {
     useCallback(() => {
       let disposed = false;
       const run = async () => {
-        const raw = await AsyncStorage.getItem(KEY_PROFILE_PREFS);
+        const [raw, intentionRaw] = await Promise.all([
+          AsyncStorage.getItem(KEY_PROFILE_PREFS),
+          AsyncStorage.getItem(KEY_DAILY_INTENTION),
+        ]);
         if (disposed) return;
+        if (intentionRaw && intentionRaw.trim()) {
+          setDailyIntention(intentionRaw.trim());
+        } else {
+          setDailyIntention("peace and clarity");
+        }
         if (raw) {
           try {
             const parsed = JSON.parse(raw);
@@ -423,6 +433,10 @@ export default function HomeScreen() {
             <Text style={[styles.kicker, { color: c.textMuted }]}>EGREGOR</Text>
             <Text style={[styles.hero, { color: c.text }]}>{ui.hero}</Text>
             <Text style={[styles.subtitle, { color: c.text }]}>{ui.subtitle}</Text>
+            <View style={[styles.sectionCard, { backgroundColor: c.cardAlt, borderColor: c.border, marginTop: 0 }]}>
+              <Text style={[styles.sectionMeta, { color: c.textMuted, marginTop: 0 }]}>Today's intention</Text>
+              <Text style={[styles.sectionTitle, { color: c.text }]}>{dailyIntention}</Text>
+            </View>
 
             <View style={styles.row}>
               <Pressable style={[styles.primaryBtn, { backgroundColor: c.primary }]} onPress={joinLiveNow}>
