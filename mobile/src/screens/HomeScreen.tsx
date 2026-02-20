@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -175,6 +175,8 @@ export default function HomeScreen() {
   const [soloSessionsWeek, setSoloSessionsWeek] = useState(0);
   const [soloMinutesWeek, setSoloMinutesWeek] = useState(0);
   const [lastSoloAt, setLastSoloAt] = useState<string | null>(null);
+  const homeLoadInFlightRef = useRef(false);
+  const homeLoadQueuedRef = useRef(false);
 
   const liveEvents = useMemo(() => {
     const now = Date.now();
@@ -291,6 +293,12 @@ export default function HomeScreen() {
   }, [preferredLanguage]);
 
   const loadHome = useCallback(async () => {
+    if (homeLoadInFlightRef.current) {
+      homeLoadQueuedRef.current = true;
+      return;
+    }
+
+    homeLoadInFlightRef.current = true;
     setLoading(true);
     try {
       const { data: eventRows } = await supabase
@@ -383,12 +391,30 @@ export default function HomeScreen() {
       );
     } finally {
       setLoading(false);
+      homeLoadInFlightRef.current = false;
+      if (homeLoadQueuedRef.current) {
+        homeLoadQueuedRef.current = false;
+        void loadHome();
+      }
     }
   }, []);
+
+  const refreshHomeBundle = useCallback(async () => {
+    await Promise.all([loadHome(), refreshUnreadNotifications(), refreshSoloStats()]);
+  }, [loadHome, refreshUnreadNotifications, refreshSoloStats]);
 
   useFocusEffect(
     useCallback(() => {
       let disposed = false;
+      let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
+      const scheduleRefresh = () => {
+        if (disposed || refreshTimeout) return;
+        refreshTimeout = setTimeout(() => {
+          refreshTimeout = null;
+          if (disposed) return;
+          void refreshHomeBundle();
+        }, 1200);
+      };
       const run = async () => {
         const [raw, intentionRaw] = await Promise.all([
           AsyncStorage.getItem(KEY_PROFILE_PREFS),
@@ -410,21 +436,35 @@ export default function HomeScreen() {
         } else {
           setPreferredLanguage("English");
         }
-        if (!disposed) await loadHome();
-        if (!disposed) await refreshUnreadNotifications();
-        if (!disposed) await refreshSoloStats();
+        if (!disposed) await refreshHomeBundle();
       };
       void run();
       const id = setInterval(() => {
-        void loadHome();
-        void refreshUnreadNotifications();
-        void refreshSoloStats();
+        void refreshHomeBundle();
       }, HOME_RESYNC_MS);
+
+      const realtime = supabase
+        .channel("home:refresh")
+        .on("postgres_changes", { event: "*", schema: "public", table: "events" }, scheduleRefresh)
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "event_presence" },
+          scheduleRefresh
+        )
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "event_messages" },
+          scheduleRefresh
+        )
+        .subscribe();
+
       return () => {
         disposed = true;
         clearInterval(id);
+        if (refreshTimeout) clearTimeout(refreshTimeout);
+        supabase.removeChannel(realtime);
       };
-    }, [loadHome, refreshUnreadNotifications, refreshSoloStats])
+    }, [refreshHomeBundle])
   );
 
   const openEventRoom = useCallback(
@@ -520,7 +560,9 @@ export default function HomeScreen() {
         data={recommendedEvents}
         keyExtractor={(item) => item.id}
         renderItem={renderEvent}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={loadHome} tintColor={c.primary} />}
+        refreshControl={
+          <RefreshControl refreshing={loading} onRefresh={refreshHomeBundle} tintColor={c.primary} />
+        }
         ListHeaderComponent={
           <View style={styles.content}>
             <View style={styles.headerRow}>
