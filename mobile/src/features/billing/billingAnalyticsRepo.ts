@@ -5,6 +5,7 @@ import type { Json } from "../../types/db";
 export type MonetizationEventName =
   | "circle_purchase"
   | "circle_restore"
+  | "circle_membership_sync"
   | "billing_status_refresh"
   | "circle_paywall_view"
   | "circle_paywall_cta_tap"

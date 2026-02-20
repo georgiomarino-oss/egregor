@@ -72,6 +72,8 @@ type FunnelCounts = {
   aiSoloGuidanceAttempts: number;
   aiSoloGuidanceSuccess: number;
   aiSoloGuidancePremiumSuccess: number;
+  membershipSyncSuccess: number;
+  membershipSyncFailure: number;
 };
 
 const EMPTY_FUNNEL_COUNTS: FunnelCounts = {
@@ -93,6 +95,8 @@ const EMPTY_FUNNEL_COUNTS: FunnelCounts = {
   aiSoloGuidanceAttempts: 0,
   aiSoloGuidanceSuccess: 0,
   aiSoloGuidancePremiumSuccess: 0,
+  membershipSyncSuccess: 0,
+  membershipSyncFailure: 0,
 };
 
 function clip(input: string, max: number) {
@@ -215,6 +219,8 @@ export default function BillingDebugScreen() {
         aiSoloGuidanceAttemptCount,
         aiSoloGuidanceSuccessCount,
         aiSoloGuidancePremiumSuccessCount,
+        membershipSyncSuccessCount,
+        membershipSyncFailureCount,
       ] = await Promise.all([
         supabase.rpc("is_circle_member", { p_user_id: uid }),
         supabase
@@ -340,6 +346,16 @@ export default function BillingDebugScreen() {
             isPremium: true,
           },
         }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "circle_membership_sync",
+          stage: "success",
+        }),
+        countMonetizationEvents({
+          userId: uid,
+          eventName: "circle_membership_sync",
+          stage: "failure",
+        }),
       ]);
 
       const errors: string[] = [];
@@ -397,6 +413,8 @@ export default function BillingDebugScreen() {
         aiSoloGuidanceAttemptCount,
         aiSoloGuidanceSuccessCount,
         aiSoloGuidancePremiumSuccessCount,
+        membershipSyncSuccessCount,
+        membershipSyncFailureCount,
       ]
         .map((row) => row.error)
         .filter(Boolean);
@@ -423,6 +441,8 @@ export default function BillingDebugScreen() {
         aiSoloGuidanceAttempts: aiSoloGuidanceAttemptCount.count,
         aiSoloGuidanceSuccess: aiSoloGuidanceSuccessCount.count,
         aiSoloGuidancePremiumSuccess: aiSoloGuidancePremiumSuccessCount.count,
+        membershipSyncSuccess: membershipSyncSuccessCount.count,
+        membershipSyncFailure: membershipSyncFailureCount.count,
       });
 
       setServerError(errors.length ? errors.join(" | ") : null);
@@ -527,6 +547,10 @@ export default function BillingDebugScreen() {
           <Text style={[styles.meta, { color: c.textMuted }]}>
             Purchase conversion:{" "}
             {ratioLabel(funnelCounts.purchaseSuccess, funnelCounts.purchaseAttempts)}
+          </Text>
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            Membership sync: success {funnelCounts.membershipSyncSuccess} | failure{" "}
+            {funnelCounts.membershipSyncFailure}
           </Text>
           <Text style={[styles.meta, { color: c.textMuted }]}>
             Restore attempts: {funnelCounts.restoreAttempts} | success: {funnelCounts.restoreSuccess} |

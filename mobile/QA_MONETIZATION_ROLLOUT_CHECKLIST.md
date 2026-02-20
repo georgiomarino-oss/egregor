@@ -58,6 +58,7 @@ Baseline commit: `1201fe0`
    - `event_name=circle_restore` with stage `success` or `failure` (with error details).
 9. Confirm funnel math:
    - `Purchase conversion` and `Restore success rate` show expected ratios.
+   - `Membership sync` shows mostly success after purchase/restore.
 10. Confirm premium value realization counters:
    - `AI event-script generations` and `AI solo-guidance generations` increment after successful generations.
    - `premium success` counters increment after Circle is active.

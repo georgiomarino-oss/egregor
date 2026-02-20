@@ -15,6 +15,8 @@ import { unregisterPushTokenForCurrentUser } from "./features/notifications/push
 export type AppTheme = "light" | "dark" | "cosmic";
 const KEY_APP_THEME = "prefs:appTheme";
 const KEY_HIGH_CONTRAST = "prefs:highContrast";
+const MEMBERSHIP_SYNC_MAX_WAIT_MS = 12_000;
+const MEMBERSHIP_SYNC_POLL_MS = 1_500;
 
 export type CircleActionResult = {
   ok: boolean;
@@ -44,6 +46,39 @@ export type AppStateContextValue = {
 };
 
 const AppStateContext = createContext<AppStateContextValue | undefined>(undefined);
+
+function sleepMs(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForServerCircleMembership(args: {
+  userId: string;
+  shouldBeMember: boolean;
+  maxWaitMs?: number;
+  pollMs?: number;
+}) {
+  const start = Date.now();
+  const maxWaitMs = Math.max(1_000, args.maxWaitMs ?? MEMBERSHIP_SYNC_MAX_WAIT_MS);
+  const pollMs = Math.max(500, args.pollMs ?? MEMBERSHIP_SYNC_POLL_MS);
+  let lastError = "";
+
+  while (Date.now() - start <= maxWaitMs) {
+    const { data, error } = await supabase.rpc("is_circle_member", { p_user_id: args.userId });
+    if (!error) {
+      if (!!data === args.shouldBeMember) {
+        return { synced: true, waitedMs: Date.now() - start, error: "" };
+      }
+    } else {
+      lastError = String(error.message ?? "unknown error");
+    }
+
+    const elapsed = Date.now() - start;
+    if (elapsed >= maxWaitMs) break;
+    await sleepMs(Math.min(pollMs, maxWaitMs - elapsed));
+  }
+
+  return { synced: false, waitedMs: Date.now() - start, error: lastError };
+}
 
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [initializing, setInitializing] = useState(true);
@@ -286,6 +321,45 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         packageCount: snapshot.packages.length,
       },
     });
+
+    void logMonetizationEvent({
+      userId: uid,
+      eventName: "circle_membership_sync",
+      stage: "attempt",
+      packageIdentifier,
+      isCircleMember: snapshot.isCircleMember,
+      metadata: {
+        source: "purchase",
+        shouldBeMember: true,
+      },
+    });
+    const sync = await waitForServerCircleMembership({
+      userId: uid,
+      shouldBeMember: true,
+    });
+    void logMonetizationEvent({
+      userId: uid,
+      eventName: "circle_membership_sync",
+      stage: sync.synced ? "success" : "failure",
+      packageIdentifier,
+      isCircleMember: snapshot.isCircleMember,
+      errorMessage: sync.synced ? null : sync.error || "server membership not synced in wait window",
+      metadata: {
+        source: "purchase",
+        shouldBeMember: true,
+        waitedMs: sync.waitedMs,
+        maxWaitMs: MEMBERSHIP_SYNC_MAX_WAIT_MS,
+        pollMs: MEMBERSHIP_SYNC_POLL_MS,
+      },
+    });
+
+    if (!sync.synced) {
+      return {
+        ok: true,
+        message:
+          "Egregor Circle is active. Server sync may take up to a minute before unlimited AI appears.",
+      };
+    }
     return { ok: true, message: "Egregor Circle is now active." };
   };
 
@@ -347,6 +421,43 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         packageCount: snapshot.packages.length,
       },
     });
+
+    void logMonetizationEvent({
+      userId: uid,
+      eventName: "circle_membership_sync",
+      stage: "attempt",
+      isCircleMember: snapshot.isCircleMember,
+      metadata: {
+        source: "restore",
+        shouldBeMember: true,
+      },
+    });
+    const sync = await waitForServerCircleMembership({
+      userId: uid,
+      shouldBeMember: true,
+    });
+    void logMonetizationEvent({
+      userId: uid,
+      eventName: "circle_membership_sync",
+      stage: sync.synced ? "success" : "failure",
+      isCircleMember: snapshot.isCircleMember,
+      errorMessage: sync.synced ? null : sync.error || "server membership not synced in wait window",
+      metadata: {
+        source: "restore",
+        shouldBeMember: true,
+        waitedMs: sync.waitedMs,
+        maxWaitMs: MEMBERSHIP_SYNC_MAX_WAIT_MS,
+        pollMs: MEMBERSHIP_SYNC_POLL_MS,
+      },
+    });
+
+    if (!sync.synced) {
+      return {
+        ok: true,
+        message:
+          "Restore succeeded. Server sync may take up to a minute before unlimited AI appears.",
+      };
+    }
     return { ok: true, message: "Circle purchase restored." };
   };
 
