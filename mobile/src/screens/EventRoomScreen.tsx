@@ -1548,15 +1548,17 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       elapsedBeforePauseSec: number,
       resetTimer: boolean
     ) => {
+      const targetEventId = eventId;
       if (!hasValidEventId) return;
 
       const row = await setRunStateServerTime({
-        eventId,
+        eventId: targetEventId,
         mode,
         sectionIndex,
         elapsedBeforePauseSec,
         resetTimer,
       });
+      if (activeEventIdRef.current !== targetEventId) return;
 
       setRunState(normalizeRunState(row.state));
       setRunReady(true);
