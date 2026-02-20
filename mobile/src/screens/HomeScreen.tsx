@@ -6,6 +6,7 @@ import { supabase } from "../supabase/client";
 import type { Database } from "../types/db";
 import type { RootStackParamList } from "../types";
 import { useAppState } from "../state";
+import { getAppColors } from "../theme/appearance";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 
@@ -26,58 +27,9 @@ function shortId(id: string) {
   return `${id.slice(0, 6)}...${id.slice(-4)}`;
 }
 
-function themeColors(theme: "light" | "dark" | "cosmic") {
-  if (theme === "light") {
-    return {
-      safe: "#F5F7FB",
-      card: "#FFFFFF",
-      cardBorder: "#D7E0F0",
-      title: "#0F172A",
-      text: "#334155",
-      muted: "#64748B",
-      accent: "#365FD9",
-      accentText: "#FFFFFF",
-      chip: "#EEF3FF",
-      chipText: "#2848A8",
-      glowA: "#BFD0FF",
-      glowB: "#F6E2FF",
-    };
-  }
-  if (theme === "dark") {
-    return {
-      safe: "#0A0D14",
-      card: "#111827",
-      cardBorder: "#263244",
-      title: "#F8FAFC",
-      text: "#CBD5E1",
-      muted: "#94A3B8",
-      accent: "#60A5FA",
-      accentText: "#0B1020",
-      chip: "#162238",
-      chipText: "#A5C8FF",
-      glowA: "#1E3A8A",
-      glowB: "#4C1D95",
-    };
-  }
-  return {
-    safe: "#0B1020",
-    card: "#151C33",
-    cardBorder: "#2A365E",
-    title: "#FFFFFF",
-    text: "#D7E0FF",
-    muted: "#93A3D9",
-    accent: "#5B8CFF",
-    accentText: "#FFFFFF",
-    chip: "#121A31",
-    chipText: "#C8D3FF",
-    glowA: "#1D2D6B",
-    glowB: "#4B2A6D",
-  };
-}
-
 export default function HomeScreen() {
   const { theme } = useAppState();
-  const c = useMemo(() => themeColors(theme), [theme]);
+  const c = useMemo(() => getAppColors(theme), [theme]);
   const navigation = useNavigation<any>();
 
   const [loading, setLoading] = useState(false);
@@ -161,9 +113,9 @@ export default function HomeScreen() {
     const startMs = safeTimeMs((item as any).start_time_utc);
     const label = startMs ? new Date(startMs).toLocaleString() : "Unknown time";
     return (
-      <Pressable style={[styles.eventCard, { backgroundColor: c.card, borderColor: c.cardBorder }]} onPress={() => openEventRoom(item.id)}>
-        <Text style={[styles.eventTitle, { color: c.title }]}>{String((item as any).title ?? "Untitled")}</Text>
-        <Text style={[styles.eventMeta, { color: c.muted }]}>{label}</Text>
+      <Pressable style={[styles.eventCard, { backgroundColor: c.card, borderColor: c.border }]} onPress={() => openEventRoom(item.id)}>
+        <Text style={[styles.eventTitle, { color: c.text }]}>{String((item as any).title ?? "Untitled")}</Text>
+        <Text style={[styles.eventMeta, { color: c.textMuted }]}>{label}</Text>
         <Text style={[styles.eventMeta, { color: c.text }]}>
           {(item as any).intention_statement
             ? String((item as any).intention_statement)
@@ -174,7 +126,7 @@ export default function HomeScreen() {
   };
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: c.safe }]} edges={["top"]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
       <View style={[styles.glow, { backgroundColor: c.glowA, top: -80, right: -40 }]} />
       <View style={[styles.glow, { backgroundColor: c.glowB, bottom: 140, left: -60 }]} />
 
@@ -182,21 +134,21 @@ export default function HomeScreen() {
         data={recommendedEvents}
         keyExtractor={(item) => item.id}
         renderItem={renderEvent}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={loadHome} tintColor={c.accent} />}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={loadHome} tintColor={c.primary} />}
         ListHeaderComponent={
           <View style={styles.content}>
-            <Text style={[styles.kicker, { color: c.muted }]}>EGREGOR</Text>
-            <Text style={[styles.hero, { color: c.title }]}>What is your intention today?</Text>
+            <Text style={[styles.kicker, { color: c.textMuted }]}>EGREGOR</Text>
+            <Text style={[styles.hero, { color: c.text }]}>What is your intention today?</Text>
             <Text style={[styles.subtitle, { color: c.text }]}>
               Join a synchronized global circle or begin your own focused moment.
             </Text>
 
             <View style={styles.row}>
-              <Pressable style={[styles.primaryBtn, { backgroundColor: c.accent }]} onPress={joinLiveNow}>
-                <Text style={[styles.primaryBtnText, { color: c.accentText }]}>Join Live Now</Text>
+              <Pressable style={[styles.primaryBtn, { backgroundColor: c.primary }]} onPress={joinLiveNow}>
+                <Text style={[styles.primaryBtnText, { color: "#FFFFFF" }]}>Join Live Now</Text>
               </Pressable>
               <Pressable
-                style={[styles.secondaryBtn, { borderColor: c.cardBorder, backgroundColor: c.card }]}
+                style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.card }]}
                 onPress={() => navigation.navigate("Events")}
               >
                 <Text style={[styles.secondaryBtnText, { color: c.text }]}>Browse Events</Text>
@@ -204,23 +156,23 @@ export default function HomeScreen() {
             </View>
 
             <View style={styles.metricsRow}>
-              <View style={[styles.metricCard, { backgroundColor: c.card, borderColor: c.cardBorder }]}>
-                <Text style={[styles.metricValue, { color: c.title }]}>{liveEvents.length}</Text>
-                <Text style={[styles.metricLabel, { color: c.muted }]}>Live circles</Text>
+              <View style={[styles.metricCard, { backgroundColor: c.card, borderColor: c.border }]}>
+                <Text style={[styles.metricValue, { color: c.text }]}>{liveEvents.length}</Text>
+                <Text style={[styles.metricLabel, { color: c.textMuted }]}>Live circles</Text>
               </View>
-              <View style={[styles.metricCard, { backgroundColor: c.card, borderColor: c.cardBorder }]}>
-                <Text style={[styles.metricValue, { color: c.title }]}>{activeNow}</Text>
-                <Text style={[styles.metricLabel, { color: c.muted }]}>Active now</Text>
+              <View style={[styles.metricCard, { backgroundColor: c.card, borderColor: c.border }]}>
+                <Text style={[styles.metricValue, { color: c.text }]}>{activeNow}</Text>
+                <Text style={[styles.metricLabel, { color: c.textMuted }]}>Active now</Text>
               </View>
-              <View style={[styles.metricCard, { backgroundColor: c.card, borderColor: c.cardBorder }]}>
-                <Text style={[styles.metricValue, { color: c.title }]}>{weeklyImpact}</Text>
-                <Text style={[styles.metricLabel, { color: c.muted }]}>Prayers this week</Text>
+              <View style={[styles.metricCard, { backgroundColor: c.card, borderColor: c.border }]}>
+                <Text style={[styles.metricValue, { color: c.text }]}>{weeklyImpact}</Text>
+                <Text style={[styles.metricLabel, { color: c.textMuted }]}>Prayers this week</Text>
               </View>
             </View>
 
-            <View style={[styles.sectionCard, { backgroundColor: c.chip, borderColor: c.cardBorder }]}>
+            <View style={[styles.sectionCard, { backgroundColor: c.chip, borderColor: c.border }]}>
               <Text style={[styles.sectionTitle, { color: c.chipText }]}>Recommended Events</Text>
-              <Text style={[styles.sectionMeta, { color: c.muted }]}>
+              <Text style={[styles.sectionMeta, { color: c.textMuted }]}>
                 Tap any event below to enter the live room in sync.
               </Text>
             </View>
@@ -233,7 +185,7 @@ export default function HomeScreen() {
             </View>
           ) : (
             <View style={styles.empty}>
-              <Text style={{ color: c.muted }}>No events available yet.</Text>
+              <Text style={{ color: c.textMuted }}>No events available yet.</Text>
             </View>
           )
         }
