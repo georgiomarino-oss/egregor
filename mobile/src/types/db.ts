@@ -484,6 +484,7 @@ export type Database = {
           id: string
           kind: string
           metadata: Json
+          push_sent_at: string | null
           title: string | null
           user_id: string
         }
@@ -495,6 +496,7 @@ export type Database = {
           id?: string
           kind: string
           metadata?: Json
+          push_sent_at?: string | null
           title?: string | null
           user_id: string
         }
@@ -506,6 +508,7 @@ export type Database = {
           id?: string
           kind?: string
           metadata?: Json
+          push_sent_at?: string | null
           title?: string | null
           user_id?: string
         }
@@ -918,6 +921,10 @@ export type Database = {
         }
       }
       trigger_dispatch_chat_push_job: {
+        Args: Record<PropertyKey, never>
+        Returns: number
+      }
+      trigger_dispatch_notification_log_push_job: {
         Args: Record<PropertyKey, never>
         Returns: number
       }
