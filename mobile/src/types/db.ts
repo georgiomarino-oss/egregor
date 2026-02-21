@@ -837,6 +837,19 @@ export type Database = {
           streak_days: number
         }[]
       }
+      get_shared_manifestation_feed: {
+        Args: { p_limit?: number }
+        Returns: {
+          body: string
+          created_at: string
+          display_name: string
+          event_id: string
+          event_title: string
+          id: string
+          source: string
+          user_id: string
+        }[]
+      }
       is_circle_member: {
         Args: { p_user_id?: string }
         Returns: boolean

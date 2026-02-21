@@ -39,10 +39,11 @@ type CommunityFeedItem = {
   id: string;
   body: string;
   createdAt: string;
-  eventId: string;
+  eventId: string | null;
   userId: string;
   eventTitle: string;
   displayName: string;
+  source: "chat" | "journal";
 };
 type HomeDashboardSnapshotRow = {
   weekly_impact: number | null;
@@ -375,14 +376,17 @@ export default function HomeScreen() {
           feed.map((item) => {
             const row = item as Record<string, unknown>;
             const userId = String(row.userId ?? "");
+            const sourceRaw = String(row.source ?? "").trim().toLowerCase();
+            const source: "chat" | "journal" = sourceRaw === "journal" ? "journal" : "chat";
             return {
               id: String(row.id ?? ""),
               body: String(row.body ?? ""),
               createdAt: String(row.createdAt ?? ""),
-              eventId: String(row.eventId ?? ""),
+              eventId: row.eventId ? String(row.eventId) : null,
               userId,
               eventTitle: String(row.eventTitle ?? "Live circle"),
               displayName: String(row.displayName ?? shortId(userId)),
+              source,
             };
           })
         );
@@ -774,25 +778,48 @@ export default function HomeScreen() {
               ) : (
                 <>
                   <Text style={[styles.sectionMeta, { color: c.textMuted }]}>
-                    Recent shared intentions from live circles.
+                    Recent shared intentions from live circles and anonymous journal shares.
                   </Text>
                   {feedItems.length === 0 ? (
                     <Text style={[styles.sectionMeta, { color: c.textMuted, marginTop: 8 }]}>{ui.noShares}</Text>
                   ) : (
                     <View style={{ gap: 8, marginTop: 8 }}>
-                      {feedItems.map((item) => (
-                        <Pressable
-                          key={item.id}
-                          style={[styles.feedCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}
-                          onPress={() => openEventRoom(item.eventId)}
-                        >
-                          <Text style={[styles.feedMeta, { color: c.textMuted }]}>
-                            {item.displayName} in {item.eventTitle} -{" "}
-                            {item.createdAt ? new Date(item.createdAt).toLocaleTimeString() : "now"}
-                          </Text>
-                          <Text style={[styles.feedBody, { color: c.text }]}>{truncate(item.body, 160)}</Text>
-                        </Pressable>
-                      ))}
+                      {feedItems.map((item) => {
+                        const canOpenEvent = item.source === "chat" && !!item.eventId && isLikelyUuid(item.eventId);
+                        const metaPrefix =
+                          item.source === "journal"
+                            ? `${item.displayName} in ${item.eventTitle} (anonymous)`
+                            : `${item.displayName} in ${item.eventTitle}`;
+
+                        if (!canOpenEvent) {
+                          return (
+                            <View
+                              key={item.id}
+                              style={[styles.feedCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}
+                            >
+                              <Text style={[styles.feedMeta, { color: c.textMuted }]}>
+                                {metaPrefix} -{" "}
+                                {item.createdAt ? new Date(item.createdAt).toLocaleTimeString() : "now"}
+                              </Text>
+                              <Text style={[styles.feedBody, { color: c.text }]}>{truncate(item.body, 160)}</Text>
+                            </View>
+                          );
+                        }
+
+                        return (
+                          <Pressable
+                            key={item.id}
+                            style={[styles.feedCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}
+                            onPress={() => openEventRoom(item.eventId!)}
+                          >
+                            <Text style={[styles.feedMeta, { color: c.textMuted }]}>
+                              {metaPrefix} -{" "}
+                              {item.createdAt ? new Date(item.createdAt).toLocaleTimeString() : "now"}
+                            </Text>
+                            <Text style={[styles.feedBody, { color: c.text }]}>{truncate(item.body, 160)}</Text>
+                          </Pressable>
+                        );
+                      })}
                     </View>
                   )}
                 </>

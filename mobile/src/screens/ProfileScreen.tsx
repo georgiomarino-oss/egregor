@@ -18,8 +18,14 @@ const KEY_SUPPORT_TOTAL = "support:total:v1";
 const KEY_DAILY_INTENTION = "onboarding:intention:v1";
 const KEY_CIRCLE_WAITLIST = "circle:waitlist:v1";
 const KEY_MY_CIRCLES = "social:circles:v1";
-type JournalEntry = { id: string; createdAt: string; text: string };
-type JournalDbRow = { id: string | null; created_at: string | null; body: string | null };
+type JournalVisibility = "private" | "shared_anonymous";
+type JournalEntry = { id: string; createdAt: string; text: string; visibility: JournalVisibility };
+type JournalDbRow = {
+  id: string | null;
+  created_at: string | null;
+  body: string | null;
+  visibility: string | null;
+};
 type CircleWaitlistEntry = { id: string; createdAt: string; email: string; note: string };
 type SocialCircle = { id: string; name: string; intention: string; createdAt: string };
 type RhythmDay = { label: string; value: number };
@@ -48,6 +54,12 @@ function normalizeProfileLanguage(value: string): ProfileLanguage {
   if (raw.startsWith("port")) return "Portuguese";
   if (raw.startsWith("fren")) return "French";
   return "English";
+}
+
+function normalizeJournalVisibility(value: unknown): JournalVisibility {
+  return String(value ?? "").trim().toLowerCase() === "shared_anonymous"
+    ? "shared_anonymous"
+    : "private";
 }
 
 type ProfilePrefs = {
@@ -136,6 +148,7 @@ export default function ProfileScreen() {
   const [activeDays30, setActiveDays30] = useState(0);
   const [intentionEnergy, setIntentionEnergy] = useState(0);
   const [journalText, setJournalText] = useState("");
+  const [journalShareAnonymously, setJournalShareAnonymously] = useState(false);
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
   const [prefs, setPrefs] = useState<ProfilePrefs>(DEFAULT_PROFILE_PREFS);
   const [collectiveImpact, setCollectiveImpact] = useState<CollectiveImpact>(DEFAULT_COLLECTIVE_IMPACT);
@@ -169,7 +182,7 @@ export default function ProfileScreen() {
     if (uid) {
       const { data, error } = await supabase
         .from("manifestation_journal_entries")
-        .select("id,created_at,body")
+        .select("id,created_at,body,visibility")
         .eq("user_id", uid)
         .order("created_at", { ascending: false })
         .limit(200);
@@ -180,6 +193,7 @@ export default function ProfileScreen() {
             id: String(r.id ?? ""),
             createdAt: String(r.created_at ?? ""),
             text: String(r.body ?? ""),
+            visibility: normalizeJournalVisibility(r.visibility),
           }))
           .filter((r: JournalEntry) => !!r.id && !!r.text.trim());
         setJournalEntries(rows);
@@ -208,6 +222,7 @@ export default function ProfileScreen() {
           id: String(r?.id ?? ""),
           createdAt: String(r?.createdAt ?? ""),
           text: String(r?.text ?? ""),
+          visibility: normalizeJournalVisibility(r?.visibility),
         }))
         .filter((r: JournalEntry) => !!r.id && !!r.text.trim());
       rows.sort((a: JournalEntry, b: JournalEntry) => safeTimeMs(b.createdAt) - safeTimeMs(a.createdAt));
@@ -623,19 +638,21 @@ export default function ProfileScreen() {
       Alert.alert("Validation", "Journal entry must be 600 characters or fewer.");
       return;
     }
+    const visibility: JournalVisibility = journalShareAnonymously ? "shared_anonymous" : "private";
 
     if (userId) {
       setJournalText("");
       const { error } = await supabase.from("manifestation_journal_entries").insert({
         user_id: userId,
         body: text,
-        visibility: "private",
+        visibility,
       });
       if (error) {
         setJournalText(text);
         Alert.alert("Save failed", error.message);
         return;
       }
+      setJournalShareAnonymously(false);
       await loadJournal();
       return;
     }
@@ -644,16 +661,25 @@ export default function ProfileScreen() {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       createdAt: new Date().toISOString(),
       text,
+      visibility,
     };
     const entries = [next, ...journalEntries].slice(0, 200);
     setJournalEntries(entries);
     setJournalText("");
+    setJournalShareAnonymously(false);
     try {
       await saveJournalLocal(entries);
     } catch {
       Alert.alert("Save failed", "Could not save journal entry.");
     }
-  }, [journalEntries, journalText, loadJournal, saveJournalLocal, userId]);
+  }, [
+    journalEntries,
+    journalShareAnonymously,
+    journalText,
+    loadJournal,
+    saveJournalLocal,
+    userId,
+  ]);
 
   const deleteJournalEntry = useCallback(async (entryId: string) => {
     if (userId) {
@@ -1052,6 +1078,15 @@ export default function ProfileScreen() {
             multiline
             maxLength={600}
           />
+          <View style={[styles.prefRow, { borderColor: c.border, backgroundColor: c.cardAlt }]}>
+            <View style={{ flex: 1, paddingRight: 10 }}>
+              <Text style={[styles.prefLabel, { color: c.text }]}>Share anonymously to community feed</Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>
+                Your name stays hidden. Entry appears as Anonymous in Home feed.
+              </Text>
+            </View>
+            <Switch value={journalShareAnonymously} onValueChange={setJournalShareAnonymously} />
+          </View>
           <Text style={[styles.meta, { color: c.textMuted }]}>{journalText.trim().length}/600</Text>
           <Pressable style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }]} onPress={addJournalEntry}>
             <Text style={styles.btnText}>Add entry</Text>
@@ -1064,7 +1099,8 @@ export default function ProfileScreen() {
               {journalEntries.slice(0, 8).map((entry) => (
                 <View key={entry.id} style={[styles.journalCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
                   <Text style={[styles.meta, { color: c.textMuted }]}>
-                    {new Date(entry.createdAt).toLocaleString()}
+                    {new Date(entry.createdAt).toLocaleString()} -{" "}
+                    {entry.visibility === "shared_anonymous" ? "Shared anonymously" : "Private"}
                   </Text>
                   <Text style={[styles.journalBody, { color: c.text }]}>{entry.text}</Text>
                   <Pressable onPress={() => deleteJournalEntry(entry.id)} style={[styles.inlineDelete, { borderColor: c.border }]}>
