@@ -333,21 +333,42 @@ Deno.serve(async (req) => {
       });
     }
 
-    const articles = newsApiKey
-      ? await fetchNewsArticles({
+    let provider = "google_rss";
+    let providerWarning = "";
+    let articles: NewsArticle[] = [];
+
+    if (newsApiKey) {
+      try {
+        articles = await fetchNewsArticles({
           apiKey: newsApiKey,
           baseUrl: newsApiBaseUrl,
           query,
           language,
           pageSize,
           fromHours,
-        })
-      : await fetchGoogleNewsRssArticles({
+        });
+        provider = "news_api";
+      } catch (e) {
+        provider = "google_rss_fallback";
+        providerWarning =
+          e instanceof Error
+            ? `Primary news provider failed, fallback used: ${clip(e.message, 240)}`
+            : "Primary news provider failed, fallback used.";
+        articles = await fetchGoogleNewsRssArticles({
           query,
           language,
           pageSize,
           fromHours,
         });
+      }
+    } else {
+      articles = await fetchGoogleNewsRssArticles({
+        query,
+        language,
+        pageSize,
+        fromHours,
+      });
+    }
 
     const startIso = new Date(
       Date.now() + Math.max(0, startOffsetMinutes) * 60_000
@@ -402,6 +423,8 @@ Deno.serve(async (req) => {
       return jsonResponse(200, {
         ok: true,
         dryRun: true,
+        provider,
+        providerWarning: providerWarning || undefined,
         fetchedArticles: articles.length,
         dedupedCandidates: dedupedRows.length,
         preview: dedupedRows.slice(0, 5),
@@ -432,6 +455,8 @@ Deno.serve(async (req) => {
     if (toInsert.length === 0) {
       return jsonResponse(200, {
         ok: true,
+        provider,
+        providerWarning: providerWarning || undefined,
         fetchedArticles: articles.length,
         dedupedCandidates: dedupedRows.length,
         inserted: 0,
@@ -460,6 +485,8 @@ Deno.serve(async (req) => {
     if (insertedErr) {
       return jsonResponse(200, {
         ok: true,
+        provider,
+        providerWarning: providerWarning || undefined,
         fetchedArticles: articles.length,
         dedupedCandidates: dedupedRows.length,
         attemptedInsert: toInsert.length,
@@ -470,6 +497,8 @@ Deno.serve(async (req) => {
 
     return jsonResponse(200, {
       ok: true,
+      provider,
+      providerWarning: providerWarning || undefined,
       fetchedArticles: articles.length,
       dedupedCandidates: dedupedRows.length,
       attemptedInsert: toInsert.length,

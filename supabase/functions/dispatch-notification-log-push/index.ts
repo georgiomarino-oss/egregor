@@ -58,7 +58,7 @@ const DEFAULT_MAX_ROWS = 300;
 const DB_IN_CHUNK = 200;
 const EXPO_MAX_BATCH = 100;
 const EXPO_PUSH_ENDPOINT = "https://exp.host/--/api/v2/push/send";
-const PUSHABLE_KINDS = new Set(["live_soon", "live_now", "journal_shared"]);
+const PUSHABLE_KINDS = new Set(["live_soon", "live_now", "journal_shared", "news_alert"]);
 
 function jsonResponse(status: number, body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
@@ -95,6 +95,7 @@ function isExpoPushToken(token: string) {
 function fallbackTitle(kind: string) {
   if (kind === "live_now") return "Event is live now";
   if (kind === "live_soon") return "Event starts soon";
+  if (kind === "news_alert") return "Compassion alert event available";
   if (kind === "journal_shared") return "New anonymous manifestation shared";
   return "New notification";
 }
@@ -102,6 +103,7 @@ function fallbackTitle(kind: string) {
 function fallbackBody(kind: string) {
   if (kind === "live_now") return "Join now to sync with the active circle.";
   if (kind === "live_soon") return "Tap to open the room before the session begins.";
+  if (kind === "news_alert") return "A new crisis-support prayer circle is available. Tap to join.";
   if (kind === "journal_shared") return "A new shared manifestation has been added to the community feed.";
   return "Open Egregor to view details.";
 }
@@ -109,6 +111,7 @@ function fallbackBody(kind: string) {
 function kindToType(kind: string) {
   if (kind === "live_now") return "event_live_now";
   if (kind === "live_soon") return "event_live_soon";
+  if (kind === "news_alert") return "event_news_alert";
   if (kind === "journal_shared") return "community_journal";
   return "general";
 }

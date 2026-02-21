@@ -905,6 +905,15 @@ export type Database = {
         }
         Returns: number
       }
+      queue_news_event_notifications: {
+        Args: {
+          p_lookback_hours?: number
+          p_recent_participant_days?: number
+          p_max_events?: number
+          p_max_recipients_per_event?: number
+        }
+        Returns: number
+      }
       set_event_run_state: {
         Args: {
           p_elapsed_before_pause_sec?: number

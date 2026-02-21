@@ -156,6 +156,7 @@ export async function listNotifications(): Promise<NotificationItem[]> {
   const next: NotificationItem[] = [];
   const serverLiveEventIds = new Set<string>();
   const serverSoonEventIds = new Set<string>();
+  const serverNewsEventIds = new Set<string>();
 
   for (const row of server) {
     const id = String((row as any).id ?? "").trim();
@@ -204,6 +205,20 @@ export async function listNotifications(): Promise<NotificationItem[]> {
         kind: "live",
         title: rowTitle || "Event is live now",
         body: rowBody || "Join now to sync with the active circle.",
+        atIso: effectiveAtIso,
+        eventId: rowEventId || undefined,
+      });
+      continue;
+    }
+
+    if (kindRaw === "news_alert") {
+      if (!prefs.notifyNewsEvents) continue;
+      if (rowEventId) serverNewsEventIds.add(rowEventId);
+      next.push({
+        id,
+        kind: "news",
+        title: rowTitle || "Compassion alert event available",
+        body: rowBody || "A new crisis-support prayer circle is available. Tap to join.",
         atIso: effectiveAtIso,
         eventId: rowEventId || undefined,
       });
@@ -262,6 +277,7 @@ export async function listNotifications(): Promise<NotificationItem[]> {
 
   if (prefs.notifyNewsEvents) {
     for (const e of events) {
+      if (serverNewsEventIds.has(String((e as any).id ?? ""))) continue;
       const title = String((e as any).title ?? "").toLowerCase();
       const intention = String((e as any).intention_statement ?? "").toLowerCase();
       const looksLikeCrisis = crisisKeywords.some(
