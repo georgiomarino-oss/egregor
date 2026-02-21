@@ -170,10 +170,12 @@ export default function ProfileScreen() {
     refreshBilling,
     purchaseCircle,
     restoreCircle,
+    signOut,
   } = useAppState();
   const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
   const [loading, setLoading] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingPrefs, setSavingPrefs] = useState(false);
   const [billingActionBusy, setBillingActionBusy] = useState(false);
@@ -687,18 +689,99 @@ export default function ProfileScreen() {
         onPress: async () => {
           setSigningOut(true);
           try {
-            const { error } = await supabase.auth.signOut();
-            if (error) {
-              Alert.alert("Sign out failed", error.message);
-              return;
-            }
+            await signOut();
+          } catch (e: any) {
+            Alert.alert("Sign out failed", e?.message ?? "Please try again.");
           } finally {
             setSigningOut(false);
           }
         },
       },
     ]);
-  }, []);
+  }, [signOut]);
+
+  const runDeleteAccount = useCallback(async () => {
+    if (deletingAccount) return;
+    setDeletingAccount(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("delete-account", {
+        body: {},
+      });
+      if (error) throw new Error(error.message || "Could not delete account.");
+
+      const payload = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+      if (payload.ok !== true) {
+        throw new Error(String(payload.error ?? "Could not delete account."));
+      }
+
+      try {
+        const keys = await AsyncStorage.getAllKeys();
+        const removable = keys.filter(
+          (k) =>
+            k === KEY_AUTO_JOIN_GLOBAL ||
+            k.startsWith("joined:event:") ||
+            k === KEY_PROFILE_PREFS ||
+            k === KEY_JOURNAL ||
+            k === KEY_SUPPORT_TOTAL ||
+            k === KEY_DAILY_INTENTION ||
+            k === KEY_CIRCLE_WAITLIST ||
+            k === KEY_MY_CIRCLES
+        );
+        if (removable.length > 0) await AsyncStorage.multiRemove(removable);
+      } catch {
+        // best effort local cleanup
+      }
+
+      try {
+        await signOut();
+      } catch {
+        const { error: fallbackSignOutError } = await supabase.auth.signOut();
+        if (fallbackSignOutError) {
+          throw new Error(fallbackSignOutError.message || "Account removed but sign out failed.");
+        }
+      }
+
+      Alert.alert(
+        "Account deleted",
+        "Your account and associated data have been permanently deleted."
+      );
+    } catch (e: any) {
+      Alert.alert("Delete account failed", e?.message ?? "Please try again.");
+    } finally {
+      setDeletingAccount(false);
+    }
+  }, [deletingAccount, signOut]);
+
+  const handleDeleteAccount = useCallback(() => {
+    if (deletingAccount) return;
+    Alert.alert(
+      "Delete account",
+      "This permanently deletes your account and associated data. This action cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Continue",
+          style: "destructive",
+          onPress: () => {
+            Alert.alert(
+              "Final confirmation",
+              "Are you sure you want to permanently delete your account?",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Delete account",
+                  style: "destructive",
+                  onPress: () => {
+                    void runDeleteAccount();
+                  },
+                },
+              ]
+            );
+          },
+        },
+      ]
+    );
+  }, [deletingAccount, runDeleteAccount]);
 
   const addJournalEntry = useCallback(async () => {
     const text = journalText.trim();
@@ -1554,8 +1637,16 @@ export default function ProfileScreen() {
             <Text style={styles.btnText}>{signingOut ? "Signing out..." : "Sign out"}</Text>
           </Pressable>
 
+          <Pressable
+            style={[styles.btn, styles.btnDanger, (deletingAccount || signingOut || loading) && styles.disabled]}
+            onPress={handleDeleteAccount}
+            disabled={deletingAccount || signingOut || loading}
+          >
+            <Text style={styles.btnText}>{deletingAccount ? "Deleting account..." : "Delete account"}</Text>
+          </Pressable>
+
           <Text style={[styles.tip, { color: c.textMuted }]}>
-            Tip: if you ever get stuck signed in, use Sign out here and relaunch the app.
+            Tip: if you ever get stuck signed in, use Sign out. Delete account permanently removes your profile and app data.
           </Text>
 
           {loading ? <ActivityIndicator /> : null}
