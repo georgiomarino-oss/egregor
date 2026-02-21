@@ -4,12 +4,12 @@ export const siteConfig = {
   baseUrl: "https://egregor.world",
   supportEmail: "support@egregor.co.uk",
   legalEmail: "legal@egregor.co.uk",
-  supportPhone: "+1 (555) 000-0000",
-  companyName: "Your Company LLC",
-  companyAddress: "123 Main Street, Suite 100, City, ST 00000, United States",
-  supportHours: "Monday-Friday, 9:00 AM-5:00 PM PT",
+  supportPhone: "+44 7470 412207",
+  companyName: "EGREGOR.WORLD LTD",
+  companyAddress: "167-169 Great Portland Street, Fifth Floor, London, W1W 5PF",
+  supportHours: "Monday-Friday, 9:00 AM-5:00 PM UK time",
   accountDeletionPath:
-    "Profile -> Settings -> Privacy -> Delete account (inside the mobile app)",
+    "Profile -> Account -> Delete account",
   appleSubscriptionTermsUrl: "/subscriptions"
 } as const;
 

@@ -23,6 +23,10 @@ export default function AccountDeletionPage() {
           <li>Open {siteConfig.accountDeletionPath}.</li>
           <li>Confirm deletion when prompted.</li>
         </ul>
+        <p className="inline-note">
+          If you do not yet see a Delete account option in the app, use the
+          support method below and we will process your request manually.
+        </p>
       </section>
 
       <section className="policy-section">
