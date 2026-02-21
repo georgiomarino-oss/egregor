@@ -1,6 +1,7 @@
 export const siteConfig = {
   appName: "Egregor",
-  tagline: "Collective intention for positive change.",
+  tagline:
+    "A shared space where intention becomes action and action becomes meaningful change.",
   baseUrl: "https://egregor.world",
   supportEmail: "support@egregor.co.uk",
   legalEmail: "legal@egregor.co.uk",
@@ -15,9 +16,11 @@ export const siteConfig = {
 
 export const primaryLinks = [
   { href: "/", label: "Home" },
+  { href: "/#mission", label: "Mission" },
+  { href: "/#meaning", label: "Why Egregor" },
+  { href: "/#experience", label: "Experience" },
   { href: "/support", label: "Support" },
-  { href: "/privacy", label: "Privacy" },
-  { href: "/terms", label: "Terms" }
+  { href: "/privacy", label: "Privacy" }
 ] as const;
 
 export const policyLinks = [

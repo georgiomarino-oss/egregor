@@ -20,34 +20,44 @@ const bodyFont = Manrope({
 export const metadata: Metadata = {
   metadataBase: new URL(siteConfig.baseUrl),
   title: {
-    default: `${siteConfig.appName} | Official Site`,
+    default: `${siteConfig.appName} | Collective Intention`,
     template: `%s | ${siteConfig.appName}`
   },
   description:
-    "Official website for Egregor with support, privacy policy, terms, and monetization compliance pages for Apple and Google app stores.",
+    "Egregor is a collective intention platform helping people turn reflection into meaningful action for themselves and the world.",
   openGraph: {
     type: "website",
     siteName: siteConfig.appName,
-    title: `${siteConfig.appName} | Official Site`,
+    title: `${siteConfig.appName} | Collective Intention`,
     description:
-      "Support and legal pages required for App Store and Google Play monetization setup."
+      "A user-facing home for the Egregor vision, story, and trust commitments."
   },
   twitter: {
     card: "summary_large_image",
-    title: `${siteConfig.appName} | Official Site`,
+    title: `${siteConfig.appName} | Collective Intention`,
     description:
-      "Support and legal pages required for App Store and Google Play monetization setup."
+      "A user-facing home for the Egregor vision, story, and trust commitments."
   }
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
+  const supportPhoneHref = `tel:${siteConfig.supportPhone.replace(/[^+\d]/g, "")}`;
+
   return (
     <html lang="en">
       <body className={`${displayFont.variable} ${bodyFont.variable}`}>
         <div className="site-shell">
           <header className="site-header">
             <Link href="/" className="brand-mark">
-              <span className="brand-pill">{siteConfig.appName}</span>
+              <span className="brand-glyph" aria-hidden>
+                EG
+              </span>
+              <span className="brand-copy">
+                <span className="brand-name">{siteConfig.appName}</span>
+                <span className="brand-sub">
+                  Collective intention in action
+                </span>
+              </span>
             </Link>
             <nav className="top-nav" aria-label="Primary">
               {primaryLinks.map((link) => (
@@ -56,16 +66,43 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 </Link>
               ))}
             </nav>
+            <Link href="/support" className="header-cta">
+              Contact
+            </Link>
           </header>
 
           <main className="page-content">{children}</main>
 
           <footer className="site-footer">
-            <div className="footer-copy">
-              <p>{siteConfig.companyName}</p>
-              <p>{siteConfig.companyAddress}</p>
-            </div>
-            <nav className="footer-nav" aria-label="Legal">
+            <section className="footer-brand">
+              <p className="footer-title">{siteConfig.companyName}</p>
+              <p className="footer-text">{siteConfig.tagline}</p>
+              <p className="footer-text">{siteConfig.companyAddress}</p>
+              <p className="footer-text">
+                <a
+                  href={`mailto:${siteConfig.supportEmail}`}
+                  className="footer-inline-link"
+                >
+                  {siteConfig.supportEmail}
+                </a>{" "}
+                ·{" "}
+                <a href={supportPhoneHref} className="footer-inline-link">
+                  {siteConfig.supportPhone}
+                </a>
+              </p>
+            </section>
+
+            <nav className="footer-group" aria-label="Explore">
+              <p className="footer-heading">Explore</p>
+              {primaryLinks.map((link) => (
+                <Link key={link.href} href={link.href} className="footer-link">
+                  {link.label}
+                </Link>
+              ))}
+            </nav>
+
+            <nav className="footer-group" aria-label="Legal">
+              <p className="footer-heading">Legal</p>
               {policyLinks.map((link) => (
                 <Link key={link.href} href={link.href} className="footer-link">
                   {link.label}
