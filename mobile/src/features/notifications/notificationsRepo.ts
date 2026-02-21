@@ -154,6 +154,8 @@ export async function listNotifications(): Promise<NotificationItem[]> {
   >[];
 
   const next: NotificationItem[] = [];
+  const serverLiveEventIds = new Set<string>();
+  const serverSoonEventIds = new Set<string>();
 
   for (const row of server) {
     const id = String((row as any).id ?? "").trim();
@@ -164,6 +166,9 @@ export async function listNotifications(): Promise<NotificationItem[]> {
     const rowEventId = String((row as any).event_id ?? "").trim();
     const rowTitle = String((row as any).title ?? "").trim();
     const rowBody = String((row as any).body ?? "").trim();
+    const metadata = ((row as any).metadata ?? {}) as Record<string, unknown>;
+    const metadataStartIso = String((metadata as any).start_time_utc ?? "").trim();
+    const effectiveAtIso = metadataStartIso || atIso;
 
     if (kindRaw === "chat") {
       next.push({
@@ -171,7 +176,35 @@ export async function listNotifications(): Promise<NotificationItem[]> {
         kind: "chat",
         title: rowTitle || "New message in your circle",
         body: rowBody || "Open the event room to catch up.",
-        atIso,
+        atIso: effectiveAtIso,
+        eventId: rowEventId || undefined,
+      });
+      continue;
+    }
+
+    if (kindRaw === "live_soon") {
+      if (!prefs.notifyLiveStart) continue;
+      if (rowEventId) serverSoonEventIds.add(rowEventId);
+      next.push({
+        id,
+        kind: "soon",
+        title: rowTitle || "Live event starts soon",
+        body: rowBody || "Tap to open the room before the session begins.",
+        atIso: effectiveAtIso,
+        eventId: rowEventId || undefined,
+      });
+      continue;
+    }
+
+    if (kindRaw === "live_now") {
+      if (!prefs.notifyLiveStart) continue;
+      if (rowEventId) serverLiveEventIds.add(rowEventId);
+      next.push({
+        id,
+        kind: "live",
+        title: rowTitle || "Event is live now",
+        body: rowBody || "Join now to sync with the active circle.",
+        atIso: effectiveAtIso,
         eventId: rowEventId || undefined,
       });
       continue;
@@ -184,7 +217,7 @@ export async function listNotifications(): Promise<NotificationItem[]> {
         kind: "community",
         title: rowTitle || "New anonymous manifestation shared",
         body: rowBody || "A new shared manifestation has been added to the community feed.",
-        atIso,
+        atIso: effectiveAtIso,
       });
     }
   }
@@ -199,6 +232,7 @@ export async function listNotifications(): Promise<NotificationItem[]> {
 
       const isLive = startMs <= nowMs && (endMs <= 0 || nowMs <= endMs);
       if (isLive) {
+        if (serverLiveEventIds.has(String((e as any).id ?? ""))) continue;
         next.push({
           id: `live:${e.id}`,
           kind: "live",
@@ -212,6 +246,7 @@ export async function listNotifications(): Promise<NotificationItem[]> {
 
       const msUntil = startMs - nowMs;
       if (msUntil > 0 && msUntil <= soonWindowMs) {
+        if (serverSoonEventIds.has(String((e as any).id ?? ""))) continue;
         const mins = Math.max(1, Math.round(msUntil / 60_000));
         next.push({
           id: `soon:${e.id}`,
