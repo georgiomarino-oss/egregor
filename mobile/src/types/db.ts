@@ -772,6 +772,10 @@ export type Database = {
           used_today: number
         }[]
       }
+      contribute_heatmap_region: {
+        Args: { p_region?: string }
+        Returns: undefined
+      }
       enqueue_chat_push_trigger: {
         Args: {
           p_event_id: string

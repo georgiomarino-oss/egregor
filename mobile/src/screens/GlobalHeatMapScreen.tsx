@@ -1,7 +1,8 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Switch, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Location from "expo-location";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { supabase } from "../supabase/client";
 import { useAppState } from "../state";
@@ -33,6 +34,7 @@ type ManifestationItem = {
 
 const KEY_LOCATION_OPT_IN = "prefs:locationOptIn";
 const HEATMAP_RESYNC_MS = 30_000;
+const LOCATION_HEARTBEAT_MS = 60_000;
 
 const REGIONS: { key: RegionKey; label: string }[] = [
   { key: "Americas", label: "Americas" },
@@ -169,6 +171,19 @@ function formatLocalTime(iso: string | null | undefined) {
   return new Date(t).toLocaleTimeString();
 }
 
+function regionFromCoordinates(latitude: number, longitude: number): RegionKey {
+  const lat = Number(latitude);
+  const lon = Number(longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return "Global";
+  if (lon >= -170 && lon <= -30) return "Americas";
+  if (lon > -30 && lon <= 60 && lat >= 34) return "Europe";
+  if (lon > -20 && lon <= 55 && lat < 34) return "Africa";
+  if (lon > 55 && lon <= 180) return "Asia";
+  if (lon > 110 && lat < -10) return "Oceania";
+  if (lon < -170 || lon > 170) return "Oceania";
+  return "Global";
+}
+
 export default function GlobalHeatMapScreen() {
   const { theme, highContrast } = useAppState();
   const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
@@ -184,6 +199,10 @@ export default function GlobalHeatMapScreen() {
   const [heatWindow, setHeatWindow] = useState<HeatWindow>("90s");
   const [manifestationsByRegion, setManifestationsByRegion] =
     useState<Record<RegionKey, ManifestationItem[]>>(cloneManifestationsByRegion);
+  const [locationSyncState, setLocationSyncState] = useState<
+    "idle" | "syncing" | "enabled" | "permission_denied" | "error"
+  >("idle");
+  const [detectedRegion, setDetectedRegion] = useState<RegionKey | null>(null);
   const heatLoadInFlightRef = useRef(false);
   const queuedHeatLoadRef = useRef(false);
 
@@ -242,6 +261,51 @@ export default function GlobalHeatMapScreen() {
     }
   }, [heatWindow]);
 
+  const syncLocationContribution = useCallback(
+    async (opts?: { requestPermission?: boolean; showErrorAlert?: boolean }) => {
+      const requestPermission = !!opts?.requestPermission;
+      const showErrorAlert = !!opts?.showErrorAlert;
+      try {
+        setLocationSyncState("syncing");
+        const permission = requestPermission
+          ? await Location.requestForegroundPermissionsAsync()
+          : await Location.getForegroundPermissionsAsync();
+
+        if (!permission.granted) {
+          setLocationSyncState("permission_denied");
+          if (showErrorAlert) {
+            Alert.alert(
+              "Location permission required",
+              "Enable location permission to contribute anonymous regional intensity."
+            );
+          }
+          return false;
+        }
+
+        const position = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        const region = regionFromCoordinates(position.coords.latitude, position.coords.longitude);
+        setDetectedRegion(region);
+        const { error } = await supabase.rpc("contribute_heatmap_region", { p_region: region });
+        if (error) {
+          setLocationSyncState("error");
+          if (showErrorAlert) Alert.alert("Location sync failed", error.message);
+          return false;
+        }
+        setLocationSyncState("enabled");
+        return true;
+      } catch (e: any) {
+        setLocationSyncState("error");
+        if (showErrorAlert) {
+          Alert.alert("Location sync failed", e?.message ?? "Could not update your anonymous region.");
+        }
+        return false;
+      }
+    },
+    []
+  );
+
   useFocusEffect(
     useCallback(() => {
       let disposed = false;
@@ -259,7 +323,16 @@ export default function GlobalHeatMapScreen() {
       const run = async () => {
         if (disposed) return;
         const raw = await AsyncStorage.getItem(KEY_LOCATION_OPT_IN);
-        if (!disposed) setLocationOptIn(raw === "1");
+        const optIn = raw === "1";
+        if (!disposed) setLocationOptIn(optIn);
+        if (!disposed) {
+          if (optIn) {
+            void syncLocationContribution({ requestPermission: false, showErrorAlert: false });
+          } else {
+            setLocationSyncState("idle");
+            setDetectedRegion(null);
+          }
+        }
         if (!disposed) await loadHeatData();
       };
 
@@ -281,8 +354,28 @@ export default function GlobalHeatMapScreen() {
         if (refreshTimeout) clearTimeout(refreshTimeout);
         supabase.removeChannel(realtime);
       };
-    }, [loadHeatData])
+    }, [loadHeatData, syncLocationContribution])
   );
+
+  useEffect(() => {
+    if (!locationOptIn) return;
+    let cancelled = false;
+
+    const beat = async () => {
+      if (cancelled) return;
+      await syncLocationContribution({ requestPermission: false, showErrorAlert: false });
+    };
+
+    void beat();
+    const intervalId = setInterval(() => {
+      void beat();
+    }, LOCATION_HEARTBEAT_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [locationOptIn, syncLocationContribution]);
 
   const maxRegionValue = useMemo(
     () => Math.max(1, ...REGIONS.map((r) => activeByRegion[r.key] ?? 0)),
@@ -297,10 +390,37 @@ export default function GlobalHeatMapScreen() {
   const selectedEvents = liveEventsByRegion[selectedRegion] ?? [];
   const selectedManifestations = manifestationsByRegion[selectedRegion] ?? [];
 
+  const locationStatusLabel = useMemo(() => {
+    if (!locationOptIn) return "Location sharing is off.";
+    if (locationSyncState === "syncing") return "Syncing your anonymous region...";
+    if (locationSyncState === "permission_denied") return "Location permission denied.";
+    if (locationSyncState === "error") return "Could not sync anonymous region.";
+    if (detectedRegion) return `Anonymous region active: ${detectedRegion}.`;
+    return "Waiting for location sync...";
+  }, [detectedRegion, locationOptIn, locationSyncState]);
+
   const onToggleLocation = useCallback(async (next: boolean) => {
+    if (!next) {
+      setLocationOptIn(false);
+      setLocationSyncState("idle");
+      setDetectedRegion(null);
+      await AsyncStorage.setItem(KEY_LOCATION_OPT_IN, "0");
+      return;
+    }
+
+    const synced = await syncLocationContribution({
+      requestPermission: true,
+      showErrorAlert: true,
+    });
+    if (!synced) {
+      setLocationOptIn(false);
+      await AsyncStorage.setItem(KEY_LOCATION_OPT_IN, "0");
+      return;
+    }
+
     setLocationOptIn(next);
     await AsyncStorage.setItem(KEY_LOCATION_OPT_IN, next ? "1" : "0");
-  }, []);
+  }, [syncLocationContribution]);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
@@ -342,6 +462,7 @@ export default function GlobalHeatMapScreen() {
               <Text style={[styles.meta, { color: c.textMuted }]}>
                 Privacy-first opt-in. Your identity is never shown on the map.
               </Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>{locationStatusLabel}</Text>
               <Text style={[styles.metric, { color: c.text }]}>Active globally: {totalActive}</Text>
             </View>
 
