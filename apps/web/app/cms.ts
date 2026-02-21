@@ -34,7 +34,12 @@ function buildCmsSettings(): CmsSettings | null {
 }
 
 async function fetchSanityContent(settings: CmsSettings): Promise<unknown> {
-  const query = `*[_type == "siteContent" && slug.current == "website"][0]{
+  const query = `*[
+    _type == "siteContent" &&
+    slug.current == "website" &&
+    !(_id in path("drafts.**")) &&
+    !(_id in path("versions.**"))
+  ][0]{
     hero,
     mission,
     meaning,
