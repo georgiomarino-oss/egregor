@@ -32,7 +32,8 @@ export default function ContactForm({ topics }: ContactFormProps) {
     event.preventDefault();
     setStatus({ status: "sending", message: "" });
 
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const payload = {
       name: String(formData.get("name") ?? "").trim(),
       email: String(formData.get("email") ?? "").trim(),
@@ -65,7 +66,7 @@ export default function ContactForm({ topics }: ContactFormProps) {
       trackEvent("support_contact_submitted", {
         topic: payload.topic || "unknown"
       });
-      event.currentTarget.reset();
+      form.reset();
       setSelectedTopic(topics[0] ?? "Other");
       setStatus({
         status: "success",
