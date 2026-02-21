@@ -60,6 +60,40 @@ type HomeLanguage = "English" | "Spanish" | "Portuguese" | "French";
 type AmbientPreset = "Silence" | "Rain" | "Singing Bowls" | "Binaural";
 type BreathMode = "Calm" | "Deep";
 type SoloDurationMin = 3 | 5 | 10;
+type ExpoSpeechModule = {
+  speak: (
+    text: string,
+    options?: {
+      language?: string;
+      rate?: number;
+      pitch?: number;
+      onDone?: () => void;
+      onStopped?: () => void;
+      onError?: (error: unknown) => void;
+    }
+  ) => void;
+  stop: () => void;
+};
+
+let cachedSpeechModule: ExpoSpeechModule | null | undefined;
+
+function getSpeechModule(): ExpoSpeechModule | null {
+  if (cachedSpeechModule !== undefined) return cachedSpeechModule;
+  try {
+    const runtimeRequire = (globalThis as any)?.require;
+    if (typeof runtimeRequire !== "function") {
+      cachedSpeechModule = null;
+      return null;
+    }
+    const mod = runtimeRequire("expo-speech") as ExpoSpeechModule | undefined;
+    const valid = !!mod && typeof mod.speak === "function" && typeof mod.stop === "function";
+    cachedSpeechModule = valid ? mod : null;
+    return cachedSpeechModule;
+  } catch {
+    cachedSpeechModule = null;
+    return null;
+  }
+}
 
 function normalizeLanguage(v: string): HomeLanguage {
   const raw = v.trim().toLowerCase();
@@ -121,6 +155,13 @@ function resolveBreathPhase(elapsedSeconds: number, mode: BreathMode) {
     cursor = next;
   }
   return { phase: "Inhale", secondsRemaining: pattern[0].seconds };
+}
+
+function speechLanguageCode(language: HomeLanguage) {
+  if (language === "Spanish") return "es-ES";
+  if (language === "Portuguese") return "pt-PT";
+  if (language === "French") return "fr-FR";
+  return "en-US";
 }
 
 function buildSoloPrayer(intent: string, language: HomeLanguage) {
@@ -205,8 +246,12 @@ export default function HomeScreen() {
   const [soloAiLines, setSoloAiLines] = useState<string[] | null>(null);
   const [soloGeneratingAi, setSoloGeneratingAi] = useState(false);
   const [soloAiQuota, setSoloAiQuota] = useState<AiQuotaResult | null>(null);
+  const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
+  const [voiceAvailable, setVoiceAvailable] = useState<boolean | null>(null);
+  const [voicePlaying, setVoicePlaying] = useState(false);
   const homeLoadInFlightRef = useRef(false);
   const homeLoadQueuedRef = useRef(false);
+  const voiceSessionRef = useRef(0);
 
   const liveEvents = useMemo(() => {
     const now = Date.now();
@@ -447,13 +492,16 @@ export default function HomeScreen() {
             const parsed = JSON.parse(raw);
             setPreferredLanguage(normalizeLanguage(String(parsed?.language ?? "English")));
             setShowCommunityFeed(parsed?.showCommunityFeed !== false);
+            setVoiceModeEnabled(!!parsed?.voiceMode);
           } catch {
             setPreferredLanguage("English");
             setShowCommunityFeed(true);
+            setVoiceModeEnabled(false);
           }
         } else {
           setPreferredLanguage("English");
           setShowCommunityFeed(true);
+          setVoiceModeEnabled(false);
         }
         if (!disposed) await refreshHomeBundle();
       };
@@ -513,6 +561,94 @@ export default function HomeScreen() {
   }, [navigation]);
 
   React.useEffect(() => {
+    setVoiceAvailable(!!getSpeechModule());
+  }, []);
+
+  const stopSoloVoice = useCallback(() => {
+    voiceSessionRef.current += 1;
+    const speech = getSpeechModule();
+    if (speech) {
+      try {
+        speech.stop();
+      } catch {
+        // ignore
+      }
+    }
+    setVoicePlaying(false);
+  }, []);
+
+  React.useEffect(() => {
+    if (soloOpen) return;
+    stopSoloVoice();
+  }, [soloOpen, stopSoloVoice]);
+
+  React.useEffect(() => {
+    return () => {
+      stopSoloVoice();
+    };
+  }, [stopSoloVoice]);
+
+  const playSoloVoice = useCallback(() => {
+    if (!voiceModeEnabled) {
+      Alert.alert("Voice mode is off", "Enable Voice mode in Profile to use spoken solo guidance.");
+      return;
+    }
+
+    const speech = getSpeechModule();
+    setVoiceAvailable(!!speech);
+    if (!speech) {
+      Alert.alert(
+        "Voice guidance unavailable",
+        "Install expo-speech to enable spoken solo guidance.\n\nRun: npx expo install expo-speech"
+      );
+      return;
+    }
+
+    const nextSessionId = voiceSessionRef.current + 1;
+    voiceSessionRef.current = nextSessionId;
+    try {
+      speech.stop();
+    } catch {
+      // ignore
+    }
+
+    const intentCore = soloIntent.trim() || "peace and healing";
+    const introByLanguage: Record<HomeLanguage, string> = {
+      English: `Let us begin. Your intention is ${intentCore}.`,
+      Spanish: `Comencemos. Tu intencion es ${intentCore}.`,
+      Portuguese: `Vamos comecar. Sua intencao e ${intentCore}.`,
+      French: `Commencons. Votre intention est ${intentCore}.`,
+    };
+    const guidanceText = [introByLanguage[preferredLanguage], ...soloLines]
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(" ... ");
+
+    const finishIfCurrent = () => {
+      if (voiceSessionRef.current !== nextSessionId) return;
+      setVoicePlaying(false);
+    };
+
+    setVoicePlaying(true);
+    speech.speak(guidanceText, {
+      language: speechLanguageCode(preferredLanguage),
+      rate: breathMode === "Deep" ? 0.92 : 0.98,
+      pitch: 1,
+      onDone: finishIfCurrent,
+      onStopped: finishIfCurrent,
+      onError: () => {
+        finishIfCurrent();
+        Alert.alert("Voice playback failed", "Could not play voice guidance on this device.");
+      },
+    });
+  }, [breathMode, preferredLanguage, soloIntent, soloLines, voiceModeEnabled]);
+
+  const closeSoloModal = useCallback(() => {
+    stopSoloVoice();
+    setSoloOpen(false);
+  }, [stopSoloVoice]);
+
+  React.useEffect(() => {
     if (!soloOpen) return;
     if (!soloRunning) return;
 
@@ -520,6 +656,7 @@ export default function HomeScreen() {
       setSoloSecondsLeft((prev) => {
         if (prev <= 1) {
           setSoloRunning(false);
+          stopSoloVoice();
           setSoloCompletedMinutes(soloDurationMin);
           setSoloCompletionTick(Date.now());
           return 0;
@@ -529,7 +666,7 @@ export default function HomeScreen() {
     }, 1000);
 
     return () => clearInterval(id);
-  }, [soloOpen, soloRunning, soloDurationMin]);
+  }, [soloOpen, soloRunning, soloDurationMin, stopSoloVoice]);
 
   React.useEffect(() => {
     if (!soloOpen) return;
@@ -846,7 +983,7 @@ export default function HomeScreen() {
         contentContainerStyle={{ paddingBottom: 120 }}
       />
 
-      <Modal visible={soloOpen} animationType="slide" transparent onRequestClose={() => setSoloOpen(false)}>
+      <Modal visible={soloOpen} animationType="slide" transparent onRequestClose={closeSoloModal}>
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border }]}>
             <Text style={[styles.modalTitle, { color: c.text }]}>Solo Guided Prayer</Text>
@@ -861,6 +998,7 @@ export default function HomeScreen() {
                   <Pressable
                     key={`dur-${minutes}`}
                     onPress={() => {
+                      stopSoloVoice();
                       setSoloRunning(false);
                       setSoloDurationMin(minutes);
                       setSoloSecondsLeft(minutes * 60);
@@ -933,6 +1071,16 @@ export default function HomeScreen() {
             <Text style={[styles.modalMeta, { color: c.textMuted }]}>
               {soloRunning ? `${breathGuide.phase} for ${breathGuide.secondsRemaining}s` : "Press Start to begin guided breathing"} - Ambient: {ambientPreset}
             </Text>
+            <Text style={[styles.modalMeta, { color: c.textMuted, marginTop: -6 }]}>
+              Voice mode:{" "}
+              {voiceModeEnabled
+                ? voiceAvailable === false
+                  ? "Enabled, but speech module missing"
+                  : voicePlaying
+                    ? "Speaking now"
+                    : "Ready"
+                : "Off (enable in Profile)"}
+            </Text>
 
             <View style={{ gap: 6, marginTop: 10 }}>
               {soloLines.map((line, idx) => (
@@ -959,11 +1107,36 @@ export default function HomeScreen() {
               <Pressable
                 style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
                 onPress={() => {
+                  stopSoloVoice();
                   setSoloRunning(false);
                   setSoloSecondsLeft(selectedDurationSeconds);
                 }}
               >
                 <Text style={[styles.secondaryBtnText, { color: c.text }]}>Reset</Text>
+              </Pressable>
+            </View>
+            <View style={styles.row}>
+              <Pressable
+                style={[
+                  styles.secondaryBtn,
+                  { borderColor: c.border, backgroundColor: c.cardAlt },
+                  !voiceModeEnabled && { opacity: 0.6 },
+                ]}
+                onPress={playSoloVoice}
+                disabled={!voiceModeEnabled}
+              >
+                <Text style={[styles.secondaryBtnText, { color: c.text }]}>{voicePlaying ? "Replay voice" : "Play voice"}</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.secondaryBtn,
+                  { borderColor: c.border, backgroundColor: c.cardAlt },
+                  !voicePlaying && { opacity: 0.6 },
+                ]}
+                onPress={stopSoloVoice}
+                disabled={!voicePlaying}
+              >
+                <Text style={[styles.secondaryBtnText, { color: c.text }]}>Stop voice</Text>
               </Pressable>
             </View>
 
@@ -988,7 +1161,7 @@ export default function HomeScreen() {
 
             <Pressable
               style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt, marginTop: 10 }]}
-              onPress={() => setSoloOpen(false)}
+              onPress={closeSoloModal}
             >
               <Text style={[styles.secondaryBtnText, { color: c.text }]}>Close</Text>
             </Pressable>
