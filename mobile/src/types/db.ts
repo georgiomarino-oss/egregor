@@ -757,6 +757,39 @@ export type Database = {
         }
         Relationships: []
       }
+      user_notification_prefs: {
+        Row: {
+          created_at: string
+          notify_friend_invites: boolean
+          notify_live_start: boolean
+          notify_news_events: boolean
+          notify_streak_reminders: boolean
+          show_community_feed: boolean
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          notify_friend_invites?: boolean
+          notify_live_start?: boolean
+          notify_news_events?: boolean
+          notify_streak_reminders?: boolean
+          show_community_feed?: boolean
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          notify_friend_invites?: boolean
+          notify_live_start?: boolean
+          notify_news_events?: boolean
+          notify_streak_reminders?: boolean
+          show_community_feed?: boolean
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -915,6 +948,13 @@ export type Database = {
           p_recent_participant_days?: number
           p_max_events?: number
           p_max_recipients_per_event?: number
+        }
+        Returns: number
+      }
+      queue_streak_reminder_notifications: {
+        Args: {
+          p_max_recipients?: number
+          p_recent_participant_days?: number
         }
         Returns: number
       }

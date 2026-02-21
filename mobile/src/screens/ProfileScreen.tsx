@@ -8,6 +8,7 @@ import { supabase } from "../supabase/client";
 import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
 import type { RootStackParamList } from "../types";
+import type { Database } from "../types/db";
 import { logMonetizationEvent } from "../features/billing/billingAnalyticsRepo";
 import { getSoloHistoryStats, listSoloHistory, type SoloHistoryEntry } from "../features/solo/soloHistoryRepo";
 
@@ -72,6 +73,8 @@ type ProfilePrefs = {
   highContrast: boolean;
   language: ProfileLanguage;
 };
+type UserNotificationPrefsRow = Database["public"]["Tables"]["user_notification_prefs"]["Row"];
+type UserNotificationPrefsInsert = Database["public"]["Tables"]["user_notification_prefs"]["Insert"];
 const DEFAULT_PROFILE_PREFS: ProfilePrefs = {
   notifyLiveStart: true,
   notifyNewsEvents: true,
@@ -82,6 +85,42 @@ const DEFAULT_PROFILE_PREFS: ProfilePrefs = {
   highContrast: false,
   language: "English",
 };
+
+function normalizeProfilePrefs(raw: unknown): ProfilePrefs {
+  const parsed = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  return {
+    notifyLiveStart: parsed.notifyLiveStart !== false,
+    notifyNewsEvents: parsed.notifyNewsEvents !== false,
+    notifyFriendInvites: parsed.notifyFriendInvites !== false,
+    notifyStreakReminders: parsed.notifyStreakReminders !== false,
+    showCommunityFeed: parsed.showCommunityFeed !== false,
+    voiceMode: !!parsed.voiceMode,
+    highContrast: !!parsed.highContrast,
+    language: normalizeProfileLanguage(String(parsed.language ?? DEFAULT_PROFILE_PREFS.language)),
+  };
+}
+
+function withServerNotificationPrefs(base: ProfilePrefs, row: Partial<UserNotificationPrefsRow>): ProfilePrefs {
+  return {
+    ...base,
+    notifyLiveStart: row.notify_live_start !== false,
+    notifyNewsEvents: row.notify_news_events !== false,
+    notifyFriendInvites: row.notify_friend_invites !== false,
+    notifyStreakReminders: row.notify_streak_reminders !== false,
+    showCommunityFeed: row.show_community_feed !== false,
+  };
+}
+
+function toServerNotificationPrefs(userId: string, prefs: ProfilePrefs): UserNotificationPrefsInsert {
+  return {
+    user_id: userId,
+    notify_live_start: prefs.notifyLiveStart,
+    notify_news_events: prefs.notifyNewsEvents,
+    notify_friend_invites: prefs.notifyFriendInvites,
+    notify_streak_reminders: prefs.notifyStreakReminders,
+    show_community_feed: prefs.showCommunityFeed,
+  };
+}
 
 type CollectiveImpact = {
   liveEventsNow: number;
@@ -239,23 +278,53 @@ export default function ProfileScreen() {
   const loadPrefs = useCallback(async () => {
     try {
       const raw = await AsyncStorage.getItem(KEY_PROFILE_PREFS);
-      if (!raw) {
-        setPrefs(DEFAULT_PROFILE_PREFS);
+      const localPrefs = normalizeProfilePrefs(raw ? JSON.parse(raw) : null);
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const uid = String(user?.id ?? "").trim();
+      if (!uid) {
+        setPrefs(localPrefs);
+        void setHighContrast(localPrefs.highContrast);
         return;
       }
-      const parsed = JSON.parse(raw);
-      const nextPrefs: ProfilePrefs = {
-        notifyLiveStart: !!parsed?.notifyLiveStart,
-        notifyNewsEvents: !!parsed?.notifyNewsEvents,
-        notifyFriendInvites: !!parsed?.notifyFriendInvites,
-        notifyStreakReminders: !!parsed?.notifyStreakReminders,
-        showCommunityFeed: parsed?.showCommunityFeed !== false,
-        voiceMode: !!parsed?.voiceMode,
-        highContrast: !!parsed?.highContrast,
-        language: normalizeProfileLanguage(String(parsed?.language ?? DEFAULT_PROFILE_PREFS.language)),
-      };
-      setPrefs(nextPrefs);
-      void setHighContrast(nextPrefs.highContrast);
+
+      const { data: serverRow, error: serverErr } = await supabase
+        .from("user_notification_prefs")
+        .select(
+          "notify_live_start,notify_news_events,notify_friend_invites,notify_streak_reminders,show_community_feed"
+        )
+        .eq("user_id", uid)
+        .maybeSingle();
+
+      if (serverErr) {
+        setPrefs(localPrefs);
+        void setHighContrast(localPrefs.highContrast);
+        return;
+      }
+
+      if (serverRow) {
+        const mergedPrefs = withServerNotificationPrefs(
+          localPrefs,
+          serverRow as Partial<UserNotificationPrefsRow>
+        );
+        setPrefs(mergedPrefs);
+        void setHighContrast(mergedPrefs.highContrast);
+        try {
+          await AsyncStorage.setItem(KEY_PROFILE_PREFS, JSON.stringify(mergedPrefs));
+        } catch {
+          // ignore local cache write errors
+        }
+        return;
+      }
+
+      await supabase.from("user_notification_prefs").upsert(
+        toServerNotificationPrefs(uid, localPrefs),
+        { onConflict: "user_id" }
+      );
+      setPrefs(localPrefs);
+      void setHighContrast(localPrefs.highContrast);
     } catch {
       setPrefs(DEFAULT_PROFILE_PREFS);
       void setHighContrast(DEFAULT_PROFILE_PREFS.highContrast);
@@ -723,13 +792,30 @@ export default function ProfileScreen() {
       await AsyncStorage.setItem(KEY_PROFILE_PREFS, JSON.stringify(payload));
       setPrefs(payload);
       await setHighContrast(payload.highContrast);
-      Alert.alert("Saved", "Preferences updated.");
+
+      const targetUserId = userId || String((await supabase.auth.getUser()).data.user?.id ?? "").trim();
+      let cloudSyncFailed = false;
+      if (targetUserId) {
+        const { error: syncErr } = await supabase
+          .from("user_notification_prefs")
+          .upsert(toServerNotificationPrefs(targetUserId, payload), {
+            onConflict: "user_id",
+          });
+        cloudSyncFailed = !!syncErr;
+      }
+
+      Alert.alert(
+        "Saved",
+        cloudSyncFailed
+          ? "Preferences updated locally. Cloud sync failed and will retry on next save."
+          : "Preferences updated."
+      );
     } catch (e: any) {
       Alert.alert("Save failed", e?.message ?? "Could not save preferences.");
     } finally {
       setSavingPrefs(false);
     }
-  }, [prefs, setHighContrast]);
+  }, [prefs, setHighContrast, userId]);
 
   const sendDonation = useCallback(async (amount: number) => {
     if (!Number.isFinite(amount) || amount <= 0) return;

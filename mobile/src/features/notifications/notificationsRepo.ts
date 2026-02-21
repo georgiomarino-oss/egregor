@@ -157,6 +157,7 @@ export async function listNotifications(): Promise<NotificationItem[]> {
   const serverLiveEventIds = new Set<string>();
   const serverSoonEventIds = new Set<string>();
   const serverNewsEventIds = new Set<string>();
+  let hasServerStreak = false;
 
   for (const row of server) {
     const id = String((row as any).id ?? "").trim();
@@ -234,6 +235,19 @@ export async function listNotifications(): Promise<NotificationItem[]> {
         body: rowBody || "A new shared manifestation has been added to the community feed.",
         atIso: effectiveAtIso,
       });
+      continue;
+    }
+
+    if (kindRaw === "streak_reminder") {
+      if (!prefs.notifyStreakReminders) continue;
+      hasServerStreak = true;
+      next.push({
+        id,
+        kind: "streak",
+        title: rowTitle || "Keep your streak alive",
+        body: rowBody || "Join one live circle today to keep your momentum.",
+        atIso: effectiveAtIso,
+      });
     }
   }
 
@@ -295,7 +309,7 @@ export async function listNotifications(): Promise<NotificationItem[]> {
     }
   }
 
-  if (prefs.notifyStreakReminders && uid) {
+  if (prefs.notifyStreakReminders && uid && !hasServerStreak) {
     const hasPresenceToday = myPresence.some((r) => {
       const t = safeTimeMs((r as any).last_seen_at);
       if (!t) return false;

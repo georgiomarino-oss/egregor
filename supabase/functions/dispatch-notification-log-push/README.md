@@ -8,6 +8,7 @@ Current push kinds:
 - `live_now`
 - `journal_shared`
 - `news_alert`
+- `streak_reminder`
 
 It marks delivered rows with `notification_log.push_sent_at` so retries are
 idempotent and avoids replaying the same notification every cron run.
