@@ -704,10 +704,32 @@ export default function ProfileScreen() {
     if (deletingAccount) return;
     setDeletingAccount(true);
     try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const accessToken = String(session?.access_token ?? "").trim();
+      if (!accessToken) {
+        throw new Error("Session expired. Please sign in again and retry.");
+      }
+
       const { data, error } = await supabase.functions.invoke("delete-account", {
         body: {},
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
       });
-      if (error) throw new Error(error.message || "Could not delete account.");
+      if (error) {
+        let details = error.message || "Could not delete account.";
+        try {
+          const context = (error as any)?.context;
+          const payload = context ? await context.json() : null;
+          const fromPayload = String(payload?.error ?? "").trim();
+          if (fromPayload) details = fromPayload;
+        } catch {
+          // keep generic message
+        }
+        throw new Error(details);
+      }
 
       const payload = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
       if (payload.ok !== true) {
