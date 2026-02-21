@@ -1,23 +1,33 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { getSiteContent } from "../cms";
 import { siteConfig } from "../site-config";
+import ContactForm from "./contact-form";
 
 export const metadata: Metadata = {
   title: "Support",
   description:
-    "Customer support contact details, billing support links, and platform policy links for Egregor."
+    "Contact Egregor support for account, billing, technical, legal, and partnership help."
 };
 
-export default function SupportPage() {
+export const revalidate = 300;
+
+export default async function SupportPage() {
+  const content = await getSiteContent();
+
   return (
     <article className="policy-panel">
-      <h1>Support</h1>
-      <p className="policy-meta">
-        This page is intended for App Store and Google Play support URL fields.
-      </p>
+      <h1>{content.support.title}</h1>
+      <p className="policy-meta">{content.support.intro}</p>
+
+      <section className="section-block support-form-block">
+        <h2>{content.support.formTitle}</h2>
+        <p>{content.support.formDescription}</p>
+        <ContactForm topics={content.support.topics} />
+      </section>
 
       <section className="policy-section">
-        <h2>Contact Support</h2>
+        <h2>Direct Contact</h2>
         <ul>
           <li>Email: {siteConfig.supportEmail}</li>
           <li>Phone: {siteConfig.supportPhone}</li>
@@ -27,22 +37,11 @@ export default function SupportPage() {
       </section>
 
       <section className="policy-section">
-        <h2>Help Topics</h2>
-        <ul>
-          <li>Account access issues and login troubleshooting.</li>
-          <li>Subscription status, restore purchase, and billing questions.</li>
-          <li>Bug reports, crash reports, and performance issues.</li>
-          <li>Data requests, privacy inquiries, and account deletion support.</li>
-        </ul>
-      </section>
-
-      <section className="policy-section">
         <h2>Subscription and Refund Help</h2>
         <ul>
           <li>
             Apple subscriptions are managed in Apple ID settings; refund
-            requests can be submitted through Apple&apos;s report-a-problem
-            flow.
+            requests can be submitted through Apple&apos;s report-a-problem flow.
           </li>
           <li>
             Google Play subscriptions are managed in Play subscriptions

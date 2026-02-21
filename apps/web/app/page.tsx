@@ -1,61 +1,21 @@
 import Link from "next/link";
+import { getSiteContent } from "./cms";
 import { policyLinks, siteConfig } from "./site-config";
 
-const pillars = [
-  {
-    title: "Intention First",
-    description:
-      "A deliberate pause helps people move from reaction to purpose, then from purpose to action."
-  },
-  {
-    title: "Reflection That Grounds",
-    description:
-      "Journaling and guided moments are designed to reduce noise and sharpen personal clarity."
-  },
-  {
-    title: "Collective Momentum",
-    description:
-      "When people align around constructive intent, small choices compound into meaningful change."
-  }
-] as const;
+export const revalidate = 300;
 
-const journey = [
-  {
-    step: "Set an intention",
-    description:
-      "Start with what matters most to you, not what the feed tells you to care about."
-  },
-  {
-    step: "Capture your reflection",
-    description:
-      "Track thoughts and progress so growth becomes visible, personal, and sustainable."
-  },
-  {
-    step: "Take one real action",
-    description:
-      "Translate insight into something practical that improves your day or helps someone else."
-  },
-  {
-    step: "Contribute to the whole",
-    description:
-      "The app reinforces a core belief: individually intentional people create a healthier collective."
-  }
-] as const;
+export default async function HomePage() {
+  const content = await getSiteContent();
 
-export default function HomePage() {
   return (
     <>
       <section className="home-hero">
         <div className="hero-grid">
           <div className="hero-copy stack">
-            <span className="hero-kicker">Egregor.world</span>
-            <h1>When intention is shared, meaningful change accelerates.</h1>
-            <p className="hero-lead">{siteConfig.tagline}</p>
-            <p>
-              Egregor is built for people who believe a better world begins with
-              better inner habits: thoughtful attention, consistent reflection,
-              and action rooted in values.
-            </p>
+            <span className="hero-kicker">{content.hero.kicker}</span>
+            <h1>{content.hero.title}</h1>
+            <p className="hero-lead">{content.hero.lead}</p>
+            <p>{content.hero.body}</p>
             <div className="cta-row">
               <Link href="/#meaning" className="btn-primary">
                 Why The Name Matters
@@ -68,53 +28,36 @@ export default function HomePage() {
 
           <aside className="hero-signal">
             <p className="signal-label">Core Belief</p>
-            <h2>
-              Collectively, we have the power to shape culture through
-              intention.
-            </h2>
+            <h2>{content.hero.beliefTitle}</h2>
             <ul className="signal-list">
-              <li>Intentional people build intentional communities.</li>
-              <li>Intentional communities build resilient futures.</li>
-              <li>Egregor exists to make that process practical daily.</li>
+              {content.hero.beliefBullets.map((bullet) => (
+                <li key={bullet}>{bullet}</li>
+              ))}
             </ul>
           </aside>
         </div>
 
         <ul className="hero-metrics">
-          <li>
-            <span>01</span>
-            Human-centered design
-          </li>
-          <li>
-            <span>02</span>
-            Reflection plus action loop
-          </li>
-          <li>
-            <span>03</span>
-            Trust-led platform standards
-          </li>
+          {content.hero.metrics.map((metric) => (
+            <li key={metric.id}>
+              <span>{metric.id}</span>
+              {metric.label}
+            </li>
+          ))}
         </ul>
       </section>
 
       <section id="mission" className="section-block">
         <div className="section-heading stack">
           <p className="section-kicker">Mission</p>
-          <h2>Build a calmer, clearer, more constructive digital experience.</h2>
+          <h2>{content.mission.title}</h2>
         </div>
         <div className="split-layout">
-          <p>
-            Most digital products compete for attention. Egregor is built to
-            restore attention. We want users to leave with more clarity and more
-            agency, not more distraction.
-          </p>
-          <p>
-            Our long-term goal is simple: support people in creating habits
-            that improve personal wellbeing and create positive ripple effects
-            in homes, teams, and communities.
-          </p>
+          <p>{content.mission.paragraphOne}</p>
+          <p>{content.mission.paragraphTwo}</p>
         </div>
         <div className="pillar-grid">
-          {pillars.map((pillar) => (
+          {content.mission.pillars.map((pillar) => (
             <article key={pillar.title} className="pillar-card">
               <h3>{pillar.title}</h3>
               <p>{pillar.description}</p>
@@ -126,24 +69,16 @@ export default function HomePage() {
       <section id="meaning" className="section-block">
         <div className="section-heading stack">
           <p className="section-kicker">The Name</p>
-          <h2>Why we chose the word &quot;Egregor&quot;</h2>
+          <h2>{content.meaning.title}</h2>
         </div>
         <div className="meaning-grid">
           <article className="meaning-card stack">
-            <h3>Meaning behind the word</h3>
-            <p>
-              &quot;Egregor&quot; is often used to describe a collective thought
-              form: the shared energy and direction that emerges when people
-              align around a common intention.
-            </p>
+            <h3>{content.meaning.meaningTitle}</h3>
+            <p>{content.meaning.meaningBody}</p>
           </article>
           <article className="meaning-card stack">
-            <h3>Why it fits this app</h3>
-            <p>
-              We chose the name because it captures our thesis exactly:
-              individual mindset matters, but shared intention changes what is
-              possible at scale.
-            </p>
+            <h3>{content.meaning.fitTitle}</h3>
+            <p>{content.meaning.fitBody}</p>
           </article>
         </div>
       </section>
@@ -151,11 +86,11 @@ export default function HomePage() {
       <section id="experience" className="section-block">
         <div className="section-heading stack">
           <p className="section-kicker">Experience</p>
-          <h2>A simple flow designed for daily momentum.</h2>
+          <h2>{content.experience.title}</h2>
         </div>
         <div className="journey-grid">
-          {journey.map((item, index) => (
-            <article key={item.step} className="journey-step">
+          {content.experience.steps.map((item, index) => (
+            <article key={`${item.step}-${index}`} className="journey-step">
               <p className="step-number">0{index + 1}</p>
               <h3>{item.step}</h3>
               <p>{item.description}</p>
@@ -167,20 +102,16 @@ export default function HomePage() {
       <section className="section-block">
         <div className="section-heading stack">
           <p className="section-kicker">Trust</p>
-          <h2>Built to be transparent, compliant, and user-respectful.</h2>
+          <h2>{content.trust.title}</h2>
         </div>
-        <p>
-          Legal and policy pages are part of the experience, not hidden away.
-          You can review how data is handled, how subscriptions work, and how
-          account deletion is processed.
-        </p>
+        <p>{content.trust.intro}</p>
         <div className="trust-grid">
-          {policyLinks.map((link) => (
+          {policyLinks.map((link, index) => (
             <article key={link.href} className="trust-card">
               <h3>{link.label}</h3>
               <p>
-                Clear, public information aligned with Apple App Store and
-                Google Play expectations.
+                {content.trust.cards[index]?.body ??
+                  "Clear, public information aligned with Apple App Store and Google Play expectations."}
               </p>
               <Link href={link.href} className="trust-link">
                 Open page
@@ -191,11 +122,8 @@ export default function HomePage() {
       </section>
 
       <section className="final-cta stack">
-        <h2>Let&apos;s make intention practical.</h2>
-        <p>
-          Questions, partnerships, or support needs? Reach out and the Egregor
-          team will respond.
-        </p>
+        <h2>{content.finalCta.title}</h2>
+        <p>{content.finalCta.body}</p>
         <div className="cta-row">
           <Link href="/support" className="btn-primary">
             Contact Support

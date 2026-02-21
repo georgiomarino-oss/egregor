@@ -517,6 +517,86 @@ p {
   background: rgba(255, 255, 255, 0.9);
 }
 
+.support-form-block {
+  margin-top: 4px;
+}
+
+.contact-form {
+  display: grid;
+  gap: 12px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.form-field {
+  display: grid;
+  gap: 6px;
+}
+
+.form-field span {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--ink-700);
+}
+
+.form-field input,
+.form-field select,
+.form-field textarea {
+  width: 100%;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink-900);
+  font: inherit;
+  padding: 10px 12px;
+}
+
+.form-field textarea {
+  resize: vertical;
+  min-height: 130px;
+}
+
+.form-field input:focus,
+.form-field select:focus,
+.form-field textarea:focus {
+  outline: none;
+  border-color: rgba(14, 98, 119, 0.5);
+  box-shadow: 0 0 0 3px rgba(20, 141, 160, 0.15);
+}
+
+.honeypot-wrapper {
+  position: absolute;
+  left: -200vw;
+  top: -200vh;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.form-status {
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.form-status.success {
+  color: #1f7a3d;
+}
+
+.form-status.error {
+  color: #a2342c;
+}
+
 .site-footer {
   border: 1px solid var(--line-soft);
   border-radius: 20px;
@@ -635,6 +715,7 @@ p {
   .hero-grid,
   .hero-metrics,
   .split-layout,
+  .form-grid,
   .meaning-grid,
   .journey-grid,
   .trust-grid,

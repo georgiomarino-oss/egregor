@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Manrope, Playfair_Display } from "next/font/google";
+import Script from "next/script";
 import type { ReactNode } from "react";
 import "./globals.css";
 import { policyLinks, primaryLinks, siteConfig } from "./site-config";
@@ -42,6 +43,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   const supportPhoneHref = `tel:${siteConfig.supportPhone.replace(/[^+\d]/g, "")}`;
+  const gaMeasurementId = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
 
   return (
     <html lang="en">
@@ -85,7 +87,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 >
                   {siteConfig.supportEmail}
                 </a>{" "}
-                ·{" "}
+                |{" "}
                 <a href={supportPhoneHref} className="footer-inline-link">
                   {siteConfig.supportPhone}
                 </a>
@@ -111,6 +113,21 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             </nav>
           </footer>
         </div>
+        {gaMeasurementId ? (
+          <>
+            <Script
+              src={`https://www.googletagmanager.com/gtag/js?id=${gaMeasurementId}`}
+              strategy="afterInteractive"
+            />
+            <Script id="ga4-init" strategy="afterInteractive">
+              {`window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+window.gtag = window.gtag || gtag;
+gtag('js', new Date());
+gtag('config', '${gaMeasurementId}', { anonymize_ip: true });`}
+            </Script>
+          </>
+        ) : null}
       </body>
     </html>
   );
