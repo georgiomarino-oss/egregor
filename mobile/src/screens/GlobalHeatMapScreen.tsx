@@ -9,22 +9,29 @@ import { getAppColors } from "../theme/appearance";
 import type { Database } from "../types/db";
 import type { RootStackParamList } from "../types";
 
-type EventRow = Database["public"]["Tables"]["events"]["Row"];
-type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
-type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
+type HeatSnapshotRow = Database["public"]["Functions"]["get_global_heatmap_snapshot"]["Returns"][number];
+
+type RegionKey = "Americas" | "Europe" | "Asia" | "Africa" | "Oceania" | "Global";
+type HeatWindow = "90s" | "24h" | "7d";
+type HeatEventItem = {
+  id: string;
+  title: string;
+  start_time_utc: string;
+  end_time_utc: string | null;
+  timezone: string | null;
+  intention_statement: string | null;
+  region: RegionKey;
+};
 type ManifestationItem = {
   id: string;
   eventId: string;
   body: string;
   createdAt: string;
   eventTitle: string;
+  region: RegionKey;
 };
 
-type RegionKey = "Americas" | "Europe" | "Asia" | "Africa" | "Oceania" | "Global";
-type HeatWindow = "90s" | "24h" | "7d";
-
 const KEY_LOCATION_OPT_IN = "prefs:locationOptIn";
-const ACTIVE_WINDOW_MS = 90_000;
 const HEATMAP_RESYNC_MS = 30_000;
 
 const REGIONS: { key: RegionKey; label: string }[] = [
@@ -36,30 +43,130 @@ const REGIONS: { key: RegionKey; label: string }[] = [
   { key: "Global", label: "Global / UTC" },
 ];
 
-function safeTimeMs(iso: string | null | undefined): number {
-  if (!iso) return 0;
-  const t = new Date(iso).getTime();
-  return Number.isFinite(t) ? t : 0;
-}
-
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
-function regionFromTimezone(tzRaw: string | null | undefined): RegionKey {
-  const tz = String(tzRaw ?? "").toLowerCase();
-  if (tz.startsWith("america/")) return "Americas";
-  if (tz.startsWith("europe/")) return "Europe";
-  if (tz.startsWith("asia/")) return "Asia";
-  if (tz.startsWith("africa/")) return "Africa";
-  if (tz.startsWith("australia/") || tz.startsWith("pacific/")) return "Oceania";
+function normalizeRegionKey(raw: unknown): RegionKey {
+  const v = String(raw ?? "").trim().toLowerCase();
+  if (v === "americas") return "Americas";
+  if (v === "europe") return "Europe";
+  if (v === "asia") return "Asia";
+  if (v === "africa") return "Africa";
+  if (v === "oceania") return "Oceania";
   return "Global";
 }
 
-function windowMs(window: HeatWindow) {
-  if (window === "24h") return 24 * 60 * 60 * 1000;
-  if (window === "7d") return 7 * 24 * 60 * 60 * 1000;
-  return ACTIVE_WINDOW_MS;
+function cloneActiveByRegion(): Record<RegionKey, number> {
+  return {
+    Americas: 0,
+    Europe: 0,
+    Asia: 0,
+    Africa: 0,
+    Oceania: 0,
+    Global: 0,
+  };
+}
+
+function cloneEventsByRegion(): Record<RegionKey, HeatEventItem[]> {
+  return {
+    Americas: [],
+    Europe: [],
+    Asia: [],
+    Africa: [],
+    Oceania: [],
+    Global: [],
+  };
+}
+
+function cloneManifestationsByRegion(): Record<RegionKey, ManifestationItem[]> {
+  return {
+    Americas: [],
+    Europe: [],
+    Asia: [],
+    Africa: [],
+    Oceania: [],
+    Global: [],
+  };
+}
+
+function parseActiveByRegion(raw: unknown): Record<RegionKey, number> {
+  const next = cloneActiveByRegion();
+  const obj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  if (!obj) return next;
+
+  for (const region of REGIONS) {
+    const n = Number(obj[region.key]);
+    next[region.key] = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  }
+  return next;
+}
+
+function parseLiveEvents(raw: unknown): Record<RegionKey, HeatEventItem[]> {
+  const next = cloneEventsByRegion();
+  if (!Array.isArray(raw)) return next;
+
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const id = String(row.id ?? "").trim();
+    if (!id) continue;
+
+    const region = normalizeRegionKey(row.region);
+    next[region].push({
+      id,
+      title: String(row.title ?? "Untitled"),
+      start_time_utc: String(row.start_time_utc ?? ""),
+      end_time_utc: row.end_time_utc ? String(row.end_time_utc) : null,
+      timezone: row.timezone ? String(row.timezone) : null,
+      intention_statement: row.intention_statement ? String(row.intention_statement) : null,
+      region,
+    });
+  }
+
+  return next;
+}
+
+function parseManifestations(raw: unknown): Record<RegionKey, ManifestationItem[]> {
+  const next = cloneManifestationsByRegion();
+  if (!Array.isArray(raw)) return next;
+
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const id = String(row.id ?? "").trim();
+    const eventId = String(row.event_id ?? "").trim();
+    const body = String(row.body ?? "").trim();
+    if (!id || !eventId || !body) continue;
+
+    const region = normalizeRegionKey(row.region);
+    next[region].push({
+      id,
+      eventId,
+      body,
+      createdAt: String(row.created_at ?? ""),
+      eventTitle: String(row.event_title ?? "Live circle"),
+      region,
+    });
+  }
+
+  for (const region of REGIONS) {
+    next[region.key] = next[region.key].slice(0, 6);
+  }
+
+  return next;
+}
+
+function formatLocalDateTime(iso: string | null | undefined) {
+  const t = new Date(String(iso ?? "")).getTime();
+  if (!Number.isFinite(t)) return "Unknown time";
+  return new Date(t).toLocaleString();
+}
+
+function formatLocalTime(iso: string | null | undefined) {
+  const t = new Date(String(iso ?? "")).getTime();
+  if (!Number.isFinite(t)) return "Unknown";
+  return new Date(t).toLocaleTimeString();
 }
 
 export default function GlobalHeatMapScreen() {
@@ -69,32 +176,14 @@ export default function GlobalHeatMapScreen() {
 
   const [loading, setLoading] = useState(false);
   const [locationOptIn, setLocationOptIn] = useState(false);
-  const [activeByRegion, setActiveByRegion] = useState<Record<RegionKey, number>>({
-    Americas: 0,
-    Europe: 0,
-    Asia: 0,
-    Africa: 0,
-    Oceania: 0,
-    Global: 0,
-  });
-  const [liveEventsByRegion, setLiveEventsByRegion] = useState<Record<RegionKey, EventRow[]>>({
-    Americas: [],
-    Europe: [],
-    Asia: [],
-    Africa: [],
-    Oceania: [],
-    Global: [],
-  });
+  const [activeByRegion, setActiveByRegion] = useState<Record<RegionKey, number>>(cloneActiveByRegion);
+  const [liveEventsByRegion, setLiveEventsByRegion] = useState<Record<RegionKey, HeatEventItem[]>>(
+    cloneEventsByRegion
+  );
   const [selectedRegion, setSelectedRegion] = useState<RegionKey>("Americas");
   const [heatWindow, setHeatWindow] = useState<HeatWindow>("90s");
-  const [manifestationsByRegion, setManifestationsByRegion] = useState<Record<RegionKey, ManifestationItem[]>>({
-    Americas: [],
-    Europe: [],
-    Asia: [],
-    Africa: [],
-    Oceania: [],
-    Global: [],
-  });
+  const [manifestationsByRegion, setManifestationsByRegion] =
+    useState<Record<RegionKey, ManifestationItem[]>>(cloneManifestationsByRegion);
   const heatLoadInFlightRef = useRef(false);
   const queuedHeatLoadRef = useRef(false);
 
@@ -119,100 +208,30 @@ export default function GlobalHeatMapScreen() {
     heatLoadInFlightRef.current = true;
     setLoading(true);
     try {
-      const now = Date.now();
-      const selectedWindowMs = windowMs(heatWindow);
-      const cutoffIso = new Date(now - selectedWindowMs).toISOString();
-      const [{ data: presenceRows }, { data: eventRows }, { data: messageRows }] = await Promise.all([
-        supabase
-          .from("event_presence")
-          .select("event_id,user_id,last_seen_at")
-          .gte("last_seen_at", cutoffIso)
-          .limit(5000),
-        supabase
-          .from("events")
-          .select("id,title,start_time_utc,end_time_utc,timezone,intention_statement")
-          .order("start_time_utc", { ascending: false })
-          .limit(500),
-        supabase
-          .from("event_messages")
-          .select("id,event_id,body,created_at")
-          .gte("created_at", cutoffIso)
-          .order("created_at", { ascending: false })
-          .limit(300),
-      ]);
+      const { data, error } = await supabase.rpc("get_global_heatmap_snapshot", {
+        p_window: heatWindow,
+        p_max_events: 500,
+        p_max_manifestations: 300,
+      });
 
-      const events = (eventRows ?? []) as EventRow[];
-      const presence = (presenceRows ?? []) as Pick<PresenceRow, "event_id" | "user_id" | "last_seen_at">[];
-      const eventById: Record<string, EventRow> = {};
-      for (const e of events) eventById[e.id] = e;
+      if (error) {
+        console.log("[heatmap] snapshot rpc failed", error.message);
+        return;
+      }
 
-      const activeCounts: Record<RegionKey, number> = {
-        Americas: 0,
-        Europe: 0,
-        Asia: 0,
-        Africa: 0,
-        Oceania: 0,
-        Global: 0,
-      };
-      for (const p of presence) {
-        if (safeTimeMs((p as any).last_seen_at) < now - selectedWindowMs) continue;
-        const event = eventById[String((p as any).event_id ?? "")];
-        const region = regionFromTimezone((event as any)?.timezone ?? "");
-        activeCounts[region] += 1;
-      }
-      setActiveByRegion(activeCounts);
+      const rows = (data ?? []) as HeatSnapshotRow[];
+      const row = rows[0] ?? null;
 
-      const liveByRegion: Record<RegionKey, EventRow[]> = {
-        Americas: [],
-        Europe: [],
-        Asia: [],
-        Africa: [],
-        Oceania: [],
-        Global: [],
-      };
-      for (const e of events) {
-        const start = safeTimeMs((e as any).start_time_utc);
-        const end = safeTimeMs((e as any).end_time_utc);
-        if (!start) continue;
-        const live = start <= now && (end <= 0 || now <= end);
-        const recent = start >= now - selectedWindowMs && start <= now;
-        if (heatWindow === "90s") {
-          if (!live) continue;
-        } else if (!recent) {
-          continue;
-        }
-        const region = regionFromTimezone((e as any).timezone ?? "");
-        liveByRegion[region].push(e);
+      if (!row) {
+        setActiveByRegion(cloneActiveByRegion());
+        setLiveEventsByRegion(cloneEventsByRegion());
+        setManifestationsByRegion(cloneManifestationsByRegion());
+        return;
       }
-      setLiveEventsByRegion(liveByRegion);
 
-      const messages = (messageRows ?? []) as Pick<EventMessageRow, "id" | "event_id" | "body" | "created_at">[];
-      const manifests: Record<RegionKey, ManifestationItem[]> = {
-        Americas: [],
-        Europe: [],
-        Asia: [],
-        Africa: [],
-        Oceania: [],
-        Global: [],
-      };
-      for (const m of messages) {
-        const eventId = String((m as any).event_id ?? "");
-        const event = eventById[eventId];
-        const region = regionFromTimezone((event as any)?.timezone ?? "");
-        const body = String((m as any).body ?? "").trim();
-        if (!body) continue;
-        manifests[region].push({
-          id: String((m as any).id ?? ""),
-          eventId,
-          body,
-          createdAt: String((m as any).created_at ?? ""),
-          eventTitle: String((event as any)?.title ?? "Live circle"),
-        });
-      }
-      for (const key of Object.keys(manifests) as RegionKey[]) {
-        manifests[key] = manifests[key].slice(0, 6);
-      }
-      setManifestationsByRegion(manifests);
+      setActiveByRegion(parseActiveByRegion((row as any).active_by_region));
+      setLiveEventsByRegion(parseLiveEvents((row as any).live_events));
+      setManifestationsByRegion(parseManifestations((row as any).manifestations));
     } finally {
       setLoading(false);
       heatLoadInFlightRef.current = false;
@@ -227,6 +246,7 @@ export default function GlobalHeatMapScreen() {
     useCallback(() => {
       let disposed = false;
       let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
+
       const scheduleRefresh = () => {
         if (disposed || refreshTimeout) return;
         refreshTimeout = setTimeout(() => {
@@ -235,12 +255,14 @@ export default function GlobalHeatMapScreen() {
           void loadHeatData();
         }, 1200);
       };
+
       const run = async () => {
         if (disposed) return;
         const raw = await AsyncStorage.getItem(KEY_LOCATION_OPT_IN);
         if (!disposed) setLocationOptIn(raw === "1");
         if (!disposed) await loadHeatData();
       };
+
       void run();
       const id = setInterval(() => {
         void loadHeatData();
@@ -291,9 +313,8 @@ export default function GlobalHeatMapScreen() {
         ListHeaderComponent={
           <View style={{ gap: 12 }}>
             <Text style={[styles.h1, { color: c.text }]}>Global Heat Map</Text>
-            <Text style={[styles.meta, { color: c.textMuted }]}>
-              Collective intensity by world region.
-            </Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>Collective intensity by world region.</Text>
+
             <View style={styles.row}>
               {(["90s", "24h", "7d"] as HeatWindow[]).map((w) => {
                 const on = w === heatWindow;
@@ -378,7 +399,7 @@ export default function GlobalHeatMapScreen() {
                       onPress={() => openEventRoom(m.eventId)}
                     >
                       <Text style={[styles.meta, { color: c.textMuted }]} numberOfLines={1}>
-                        {m.eventTitle} • {new Date(m.createdAt).toLocaleTimeString()}
+                        {m.eventTitle} - {formatLocalTime(m.createdAt)}
                       </Text>
                       <Text style={[styles.meta, { color: c.text }]} numberOfLines={2}>
                         {m.body}
@@ -395,18 +416,18 @@ export default function GlobalHeatMapScreen() {
             style={[styles.eventCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}
             onPress={() => openEventRoom(item.id)}
           >
-            <Text style={[styles.eventTitle, { color: c.text }]}>{String((item as any).title ?? "Untitled")}</Text>
+            <Text style={[styles.eventTitle, { color: c.text }]}>{item.title || "Untitled"}</Text>
             <Text style={[styles.meta, { color: c.textMuted }]}>
-              {new Date((item as any).start_time_utc).toLocaleString()} ({String((item as any).timezone ?? "UTC")})
+              {formatLocalDateTime(item.start_time_utc)} ({String(item.timezone ?? "UTC")})
             </Text>
             <Text style={[styles.meta, { color: c.text }]} numberOfLines={2}>
-              {String((item as any).intention_statement ?? "Live collective intention.")}
+              {String(item.intention_statement ?? "Live collective intention.")}
             </Text>
           </Pressable>
         )}
         ListEmptyComponent={
           <View style={styles.empty}>
-            {loading ? <ActivityIndicator /> : <Text style={{ color: c.textMuted }}>No live events in this region.</Text>}
+            {loading ? <ActivityIndicator /> : <Text style={{ color: c.textMuted }}>No events in this window.</Text>}
           </View>
         }
       />
@@ -463,4 +484,3 @@ const styles = StyleSheet.create({
   eventTitle: { fontSize: 16, fontWeight: "800", marginBottom: 3 },
   empty: { paddingVertical: 24, alignItems: "center", justifyContent: "center" },
 });
-

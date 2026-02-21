@@ -802,6 +802,19 @@ export type Database = {
           weekly_impact: number
         }[]
       }
+      get_global_heatmap_snapshot: {
+        Args: {
+          p_max_events?: number
+          p_max_manifestations?: number
+          p_window?: string
+        }
+        Returns: {
+          active_by_region: Json
+          generated_at: string
+          live_events: Json
+          manifestations: Json
+        }[]
+      }
       get_monetization_funnel_summary: {
         Args: { p_user_id?: string }
         Returns: {
