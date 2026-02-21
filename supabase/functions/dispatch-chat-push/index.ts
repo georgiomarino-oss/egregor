@@ -502,6 +502,9 @@ Deno.serve(async (req) => {
       user_id: target.userId,
       event_id: target.eventId,
       dedupe_key: target.dedupeKey,
+      title: clip(target.message.title, 140),
+      body: clip(target.message.body, 280),
+      metadata: target.message.data,
     }));
     for (const rowsChunk of chunk(notificationRows, DB_IN_CHUNK)) {
       if (rowsChunk.length === 0) continue;

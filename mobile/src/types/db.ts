@@ -477,27 +477,36 @@ export type Database = {
       }
       notification_log: {
         Row: {
+          body: string | null
           created_at: string
           dedupe_key: string
           event_id: string | null
           id: string
           kind: string
+          metadata: Json
+          title: string | null
           user_id: string
         }
         Insert: {
+          body?: string | null
           created_at?: string
           dedupe_key: string
           event_id?: string | null
           id?: string
           kind: string
+          metadata?: Json
+          title?: string | null
           user_id: string
         }
         Update: {
+          body?: string | null
           created_at?: string
           dedupe_key?: string
           event_id?: string | null
           id?: string
           kind?: string
+          metadata?: Json
+          title?: string | null
           user_id?: string
         }
         Relationships: []
@@ -853,6 +862,14 @@ export type Database = {
       is_circle_member: {
         Args: { p_user_id?: string }
         Returns: boolean
+      }
+      queue_shared_manifestation_notifications: {
+        Args: {
+          p_lookback_minutes?: number
+          p_max_entries?: number
+          p_max_recipients?: number
+        }
+        Returns: number
       }
       set_event_run_state: {
         Args: {

@@ -145,6 +145,16 @@ export default function NotificationsScreen() {
           scheduleRefresh
         )
         .on("postgres_changes", { event: "*", schema: "public", table: "event_presence" }, scheduleRefresh)
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "notification_log" },
+          scheduleRefresh
+        )
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "user_notification_reads" },
+          scheduleRefresh
+        )
         .subscribe();
 
       return () => {

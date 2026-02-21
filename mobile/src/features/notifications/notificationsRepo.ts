@@ -5,11 +5,12 @@ import type { Database } from "../../types/db";
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type PresenceRow = Database["public"]["Tables"]["event_presence"]["Row"];
 type EventMessageRow = Database["public"]["Tables"]["event_messages"]["Row"];
+type NotificationLogRow = Database["public"]["Tables"]["notification_log"]["Row"];
 type UserNotificationReadRow = Database["public"]["Tables"]["user_notification_reads"]["Row"];
 
 export type NotificationItem = {
   id: string;
-  kind: "live" | "soon" | "streak" | "community" | "news" | "invite";
+  kind: "chat" | "live" | "soon" | "streak" | "community" | "news" | "invite";
   title: string;
   body: string;
   atIso: string;
@@ -46,10 +47,12 @@ function safeTimeMs(iso: string | null | undefined): number {
 }
 
 function notificationPriority(kind: NotificationItem["kind"]) {
-  if (kind === "news") return 5;
-  if (kind === "live") return 4;
+  if (kind === "news") return 6;
+  if (kind === "live") return 5;
+  if (kind === "chat") return 4;
   if (kind === "soon") return 3;
   if (kind === "streak") return 2;
+  if (kind === "community") return 1;
   if (kind === "invite") return 1;
   return 0;
 }
@@ -104,26 +107,40 @@ export async function listNotifications(): Promise<NotificationItem[]> {
   } = await supabase.auth.getUser();
   const uid = user?.id ?? "";
 
-  const [{ data: eventsRows }, { data: latestMessages }, { data: myPresenceRows }] = await Promise.all([
-    supabase
-      .from("events")
-      .select("id,title,intention_statement,start_time_utc,end_time_utc,timezone")
-      .order("start_time_utc", { ascending: true })
-      .limit(120),
-    supabase
-      .from("event_messages")
-      .select("id,event_id,body,created_at")
-      .order("created_at", { ascending: false })
-      .limit(25),
-    uid
-      ? supabase
-          .from("event_presence")
-          .select("last_seen_at")
-          .eq("user_id", uid)
-          .order("last_seen_at", { ascending: false })
-          .limit(50)
-      : Promise.resolve({ data: [] as Pick<PresenceRow, "last_seen_at">[] }),
-  ]);
+  const [{ data: eventsRows }, { data: latestMessages }, { data: myPresenceRows }, { data: serverRows }] =
+    await Promise.all([
+      supabase
+        .from("events")
+        .select("id,title,intention_statement,start_time_utc,end_time_utc,timezone")
+        .order("start_time_utc", { ascending: true })
+        .limit(120),
+      supabase
+        .from("event_messages")
+        .select("id,event_id,body,created_at")
+        .order("created_at", { ascending: false })
+        .limit(25),
+      uid
+        ? supabase
+            .from("event_presence")
+            .select("last_seen_at")
+            .eq("user_id", uid)
+            .order("last_seen_at", { ascending: false })
+            .limit(50)
+        : Promise.resolve({ data: [] as Pick<PresenceRow, "last_seen_at">[] }),
+      uid
+        ? supabase
+            .from("notification_log")
+            .select("id,kind,event_id,dedupe_key,created_at,title,body,metadata")
+            .eq("user_id", uid)
+            .order("created_at", { ascending: false })
+            .limit(80)
+        : Promise.resolve({
+            data: [] as Pick<
+              NotificationLogRow,
+              "id" | "kind" | "event_id" | "dedupe_key" | "created_at" | "title" | "body" | "metadata"
+            >[],
+          }),
+    ]);
 
   const events = (eventsRows ?? []) as Pick<
     EventRow,
@@ -131,8 +148,48 @@ export async function listNotifications(): Promise<NotificationItem[]> {
   >[];
   const msgs = (latestMessages ?? []) as Pick<EventMessageRow, "id" | "event_id" | "body" | "created_at">[];
   const myPresence = (myPresenceRows ?? []) as Pick<PresenceRow, "last_seen_at">[];
+  const server = (serverRows ?? []) as Pick<
+    NotificationLogRow,
+    "id" | "kind" | "event_id" | "dedupe_key" | "created_at" | "title" | "body" | "metadata"
+  >[];
 
   const next: NotificationItem[] = [];
+
+  for (const row of server) {
+    const id = String((row as any).id ?? "").trim();
+    if (!id) continue;
+
+    const kindRaw = String((row as any).kind ?? "").trim().toLowerCase();
+    const atIso = String((row as any).created_at ?? new Date().toISOString());
+    const rowEventId = String((row as any).event_id ?? "").trim();
+    const rowTitle = String((row as any).title ?? "").trim();
+    const rowBody = String((row as any).body ?? "").trim();
+
+    if (kindRaw === "chat") {
+      next.push({
+        id,
+        kind: "chat",
+        title: rowTitle || "New message in your circle",
+        body: rowBody || "Open the event room to catch up.",
+        atIso,
+        eventId: rowEventId || undefined,
+      });
+      continue;
+    }
+
+    if (kindRaw === "journal_shared") {
+      if (!prefs.showCommunityFeed) continue;
+      next.push({
+        id,
+        kind: "community",
+        title: rowTitle || "New anonymous manifestation shared",
+        body: rowBody || "A new shared manifestation has been added to the community feed.",
+        atIso,
+      });
+    }
+  }
+
+  const hasServerCommunity = next.some((n) => n.kind === "community");
 
   if (prefs.notifyLiveStart) {
     for (const e of events) {
@@ -210,7 +267,7 @@ export async function listNotifications(): Promise<NotificationItem[]> {
     }
   }
 
-  if (prefs.showCommunityFeed) {
+  if (prefs.showCommunityFeed && !hasServerCommunity) {
     const community = msgs
       .filter((m) => String((m as any).body ?? "").trim().length > 0)
       .slice(0, 4);
@@ -236,13 +293,20 @@ export async function listNotifications(): Promise<NotificationItem[]> {
     });
   }
 
-  next.sort((a, b) => {
+  const deduped = Array.from(
+    next.reduce((acc, item) => {
+      if (!acc.has(item.id)) acc.set(item.id, item);
+      return acc;
+    }, new Map<string, NotificationItem>()).values()
+  );
+
+  deduped.sort((a, b) => {
     const pa = notificationPriority(a.kind);
     const pb = notificationPriority(b.kind);
     if (pa !== pb) return pb - pa;
     return safeTimeMs(b.atIso) - safeTimeMs(a.atIso);
   });
-  return next.slice(0, 40);
+  return deduped.slice(0, 40);
 }
 
 async function readLocalNotificationIds(): Promise<string[]> {
