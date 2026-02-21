@@ -713,7 +713,7 @@ export default function ProfileScreen() {
       }
 
       const { data, error } = await supabase.functions.invoke("delete-account", {
-        body: {},
+        body: { accessToken },
         headers: {
           Authorization: `Bearer ${accessToken}`,
         },

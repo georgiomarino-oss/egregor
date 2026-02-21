@@ -103,16 +103,21 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS_HEADERS });
   if (req.method !== "POST") return jsonResponse(405, { error: "Method not allowed. Use POST." });
 
+  const requestBody = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+
   const supabaseUrl = String(Deno.env.get("SUPABASE_URL") ?? "").trim();
   const serviceRoleKey = String(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "").trim();
   if (!supabaseUrl || !serviceRoleKey) {
-    return jsonResponse(500, {
+    return jsonResponse(200, {
+      ok: false,
       error: "Missing required env vars. Expected SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
     });
   }
 
-  const token = parseBearerToken(req);
-  if (!token) return jsonResponse(401, { error: "Missing bearer token." });
+  const tokenFromHeader = parseBearerToken(req);
+  const tokenFromBody = String(requestBody.accessToken ?? "").trim();
+  const token = tokenFromHeader || tokenFromBody;
+  if (!token) return jsonResponse(200, { ok: false, error: "Missing access token." });
 
   const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
@@ -123,13 +128,14 @@ Deno.serve(async (req) => {
     error: userErr,
   } = await supabaseAdmin.auth.getUser(token);
   if (userErr || !user) {
-    return jsonResponse(401, {
+    return jsonResponse(200, {
+      ok: false,
       error: userErr?.message || "Could not resolve authenticated user.",
     });
   }
 
   const userId = String(user.id ?? "").trim();
-  if (!userId) return jsonResponse(401, { error: "Authenticated user id missing." });
+  if (!userId) return jsonResponse(200, { ok: false, error: "Authenticated user id missing." });
 
   const cleanupSteps: string[] = [];
 
@@ -231,7 +237,8 @@ Deno.serve(async (req) => {
       cleanupSteps,
     });
   } catch (e) {
-    return jsonResponse(500, {
+    return jsonResponse(200, {
+      ok: false,
       error: e instanceof Error ? e.message : "Unknown error",
       userId,
       cleanupSteps,
