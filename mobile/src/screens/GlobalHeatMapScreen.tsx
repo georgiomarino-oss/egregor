@@ -25,6 +25,7 @@ type HeatSnapshotRow = Database["public"]["Functions"]["get_global_heatmap_snaps
 
 type RegionKey = "Americas" | "Europe" | "Asia" | "Africa" | "Oceania" | "Global";
 type HeatWindow = "90s" | "24h" | "7d";
+type MapTier = "World" | "Continent" | "Country" | "City";
 type HeatEventItem = {
   id: string;
   title: string;
@@ -41,6 +42,14 @@ type ManifestationItem = {
   createdAt: string;
   eventTitle: string;
   region: RegionKey;
+};
+type HotspotPoint = {
+  id: string;
+  region: RegionKey;
+  xPct: number;
+  yPct: number;
+  intensity: number;
+  size: number;
 };
 
 const KEY_LOCATION_OPT_IN = "prefs:locationOptIn";
@@ -64,9 +73,96 @@ const REGION_PLOT: Record<RegionKey, { xPct: number; yPct: number }> = {
   Oceania: { xPct: 83, yPct: 68 },
   Global: { xPct: 50, yPct: 17 },
 };
+const MAP_GRID_LINES = [8, 18, 28, 38, 48, 58, 68, 78, 88];
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
+}
+
+function clampPct(n: number) {
+  return clamp(n, 4, 96);
+}
+
+function hashSeed(input: string) {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function createSeeded(seed: number) {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+}
+
+function resolveMapTier(scale: number): MapTier {
+  if (scale >= 2.25) return "City";
+  if (scale >= 1.7) return "Country";
+  if (scale >= 1.3) return "Continent";
+  return "World";
+}
+
+function spreadForTier(tier: MapTier) {
+  if (tier === "City") return 6;
+  if (tier === "Country") return 9;
+  if (tier === "Continent") return 13;
+  return 17;
+}
+
+function heatColorForIntensity(intensity: number) {
+  if (intensity > 0.78) return "#FF9A3C";
+  if (intensity > 0.56) return "#F4C35F";
+  if (intensity > 0.32) return "#69B3FF";
+  return "#6CE3D9";
+}
+
+function buildHotspots(args: {
+  activeByRegion: Record<RegionKey, number>;
+  maxRegionValue: number;
+  selectedRegion: RegionKey;
+  tier: MapTier;
+  heatWindow: HeatWindow;
+}) {
+  const points: HotspotPoint[] = [];
+  const spreadBase = spreadForTier(args.tier);
+
+  for (const region of REGIONS) {
+    const value = Math.max(0, args.activeByRegion[region.key] ?? 0);
+    if (value <= 0) continue;
+
+    const center = REGION_PLOT[region.key];
+    const normalized = value / Math.max(1, args.maxRegionValue);
+    const weighted = Math.sqrt(value);
+    const clusterCount = Math.max(1, Math.min(14, Math.round(weighted * 2.2)));
+    const seed = hashSeed(`${region.key}:${args.heatWindow}:${value}:${args.tier}`);
+    const rand = createSeeded(seed);
+    const focusFactor = args.selectedRegion === region.key ? 0.7 : 1;
+
+    for (let i = 0; i < clusterCount; i += 1) {
+      const angle = rand() * Math.PI * 2;
+      const distance = (0.2 + rand() * 0.85) * spreadBase * focusFactor;
+      const xPct = clampPct(center.xPct + Math.cos(angle) * distance);
+      const yPct = clampPct(center.yPct + Math.sin(angle) * distance);
+      const size = 10 + normalized * 34 * (0.55 + rand() * 0.95);
+      const intensity = clamp(normalized * (0.75 + rand() * 0.55), 0.1, 1);
+
+      points.push({
+        id: `${region.key}-${i}`,
+        region: region.key,
+        xPct,
+        yPct,
+        intensity,
+        size,
+      });
+    }
+  }
+
+  return points;
 }
 
 function touchDistance(
@@ -236,7 +332,7 @@ export default function GlobalHeatMapScreen() {
     "idle" | "syncing" | "enabled" | "permission_denied" | "error"
   >("idle");
   const [detectedRegion, setDetectedRegion] = useState<RegionKey | null>(null);
-  const [mapZoomLabel, setMapZoomLabel] = useState("World");
+  const [mapZoomTier, setMapZoomTier] = useState<MapTier>("World");
   const mapScale = useRef(new Animated.Value(1)).current;
   const mapTranslateX = useRef(new Animated.Value(0)).current;
   const mapTranslateY = useRef(new Animated.Value(0)).current;
@@ -262,15 +358,7 @@ export default function GlobalHeatMapScreen() {
       const clamped = clamp(next, 1, 3);
       mapScaleValueRef.current = clamped;
       mapScale.setValue(clamped);
-      if (clamped >= 2.25) {
-        setMapZoomLabel("City");
-      } else if (clamped >= 1.7) {
-        setMapZoomLabel("Country");
-      } else if (clamped >= 1.3) {
-        setMapZoomLabel("Continent");
-      } else {
-        setMapZoomLabel("World");
-      }
+      setMapZoomTier(resolveMapTier(clamped));
     },
     [mapScale]
   );
@@ -548,6 +636,22 @@ export default function GlobalHeatMapScreen() {
     () => REGIONS.reduce((sum, r) => sum + (activeByRegion[r.key] ?? 0), 0),
     [activeByRegion]
   );
+  const hotspotPoints = useMemo(
+    () =>
+      buildHotspots({
+        activeByRegion,
+        maxRegionValue,
+        selectedRegion,
+        tier: mapZoomTier,
+        heatWindow,
+      }),
+    [activeByRegion, heatWindow, mapZoomTier, maxRegionValue, selectedRegion]
+  );
+  const selectedRegionActive = activeByRegion[selectedRegion] ?? 0;
+  const selectedRegionSharePct = useMemo(() => {
+    if (totalActive <= 0) return 0;
+    return Math.round((selectedRegionActive / totalActive) * 100);
+  }, [selectedRegionActive, totalActive]);
 
   const selectedEvents = liveEventsByRegion[selectedRegion] ?? [];
   const selectedManifestations = manifestationsByRegion[selectedRegion] ?? [];
@@ -602,8 +706,10 @@ export default function GlobalHeatMapScreen() {
         onRefresh={loadHeatData}
         ListHeaderComponent={
           <View style={{ gap: 12 }}>
-            <Text style={[styles.h1, { color: c.text }]}>Global Heat Map</Text>
-            <Text style={[styles.meta, { color: c.textMuted }]}>Collective intensity by world region.</Text>
+            <Text style={[styles.h1, { color: c.text }]}>Global Pulse Map V2</Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>
+              Real-time collective intention pulses across world regions. Zoom from world to city detail.
+            </Text>
 
             <View style={styles.row}>
               {(["90s", "24h", "7d"] as HeatWindow[]).map((w) => {
@@ -641,6 +747,12 @@ export default function GlobalHeatMapScreen() {
               <Text style={[styles.meta, { color: c.textMuted }]}>
                 Pinch or drag to explore. Tap a pulse to focus a region.
               </Text>
+              <View style={styles.row}>
+                <Text style={[styles.meta, { color: c.textMuted }]}>Focused region: {selectedRegion}</Text>
+                <Text style={[styles.meta, { color: c.text }]}>
+                  {selectedRegionActive} active ({selectedRegionSharePct}%)
+                </Text>
+              </View>
 
               <View
                 style={[styles.mapViewport, { borderColor: c.border, backgroundColor: c.background }]}
@@ -663,13 +775,76 @@ export default function GlobalHeatMapScreen() {
                   <View style={[styles.continentBlob, styles.continentAfrica, { backgroundColor: c.cardAlt }]} />
                   <View style={[styles.continentBlob, styles.continentAsia, { backgroundColor: c.cardAlt }]} />
                   <View style={[styles.continentBlob, styles.continentOceania, { backgroundColor: c.cardAlt }]} />
+                  {MAP_GRID_LINES.map((pct) => (
+                    <View key={`v-${pct}`} style={[styles.mapGridLineV, { left: `${pct}%`, borderColor: c.border }]} />
+                  ))}
+                  {MAP_GRID_LINES.map((pct) => (
+                    <View key={`h-${pct}`} style={[styles.mapGridLineH, { top: `${pct}%`, borderColor: c.border }]} />
+                  ))}
+
+                  {hotspotPoints.map((spot) => {
+                    const selected = selectedRegion === spot.region;
+                    const pulse = pulseValuesRef.current[spot.region];
+                    const color = heatColorForIntensity(spot.intensity);
+                    const ringSize = Math.max(14, spot.size * (selected ? 1.16 : 1));
+                    const coreSize = Math.max(4, ringSize * 0.24);
+                    return (
+                      <Pressable
+                        key={spot.id}
+                        style={[
+                          styles.hotspotAnchor,
+                          {
+                            left: `${spot.xPct}%`,
+                            top: `${spot.yPct}%`,
+                          },
+                        ]}
+                        onPress={() => setSelectedRegion(spot.region)}
+                      >
+                        <Animated.View
+                          style={[
+                            styles.hotspotRing,
+                            {
+                              width: ringSize,
+                              height: ringSize,
+                              marginLeft: -ringSize / 2,
+                              marginTop: -ringSize / 2,
+                              borderColor: color,
+                              opacity: pulse.interpolate({
+                                inputRange: [0, 1],
+                                outputRange: [0.18, 0.52],
+                              }),
+                              transform: [
+                                {
+                                  scale: pulse.interpolate({
+                                    inputRange: [0, 1],
+                                    outputRange: [0.88, 1.3],
+                                  }),
+                                },
+                              ],
+                            },
+                          ]}
+                        />
+                        <View
+                          style={[
+                            styles.hotspotCore,
+                            {
+                              width: coreSize,
+                              height: coreSize,
+                              marginLeft: -coreSize / 2,
+                              marginTop: -coreSize / 2,
+                              backgroundColor: color,
+                              borderColor: selected ? c.primary : c.background,
+                            },
+                          ]}
+                        />
+                      </Pressable>
+                    );
+                  })}
 
                   {REGIONS.map((region) => {
                     const value = activeByRegion[region.key] ?? 0;
                     const selected = selectedRegion === region.key;
-                    const intensity = value <= 0 ? 0 : value / maxRegionValue;
-                    const pulseSize = 24 + Math.round(intensity * 64);
-                    const pulse = pulseValuesRef.current[region.key];
+                    const hasData = value > 0;
 
                     return (
                       <Pressable
@@ -683,58 +858,33 @@ export default function GlobalHeatMapScreen() {
                         ]}
                         onPress={() => setSelectedRegion(region.key)}
                       >
-                        {value > 0 ? (
-                          <>
-                            <Animated.View
-                              style={[
-                                styles.pulseRing,
-                                {
-                                  width: pulseSize,
-                                  height: pulseSize,
-                                  marginLeft: -pulseSize / 2,
-                                  marginTop: -pulseSize / 2,
-                                  borderColor: selected ? c.primary : c.textMuted,
-                                  opacity: pulse.interpolate({
-                                    inputRange: [0, 1],
-                                    outputRange: [0.22, 0.56],
-                                  }),
-                                  transform: [
-                                    {
-                                      scale: pulse.interpolate({
-                                        inputRange: [0, 1],
-                                        outputRange: [0.9, 1.35],
-                                      }),
-                                    },
-                                  ],
-                                },
-                              ]}
-                            />
-                            <View
-                              style={[
-                                styles.pulseCore,
-                                {
-                                  backgroundColor: selected ? c.primary : c.text,
-                                  borderColor: c.background,
-                                },
-                              ]}
-                            />
-                          </>
-                        ) : (
+                        <View
+                          style={[
+                            styles.regionPin,
+                            {
+                              borderColor: selected ? c.primary : c.border,
+                              backgroundColor: selected ? c.cardAlt : c.card,
+                            },
+                          ]}
+                        >
                           <View
                             style={[
-                              styles.pulseCoreIdle,
-                              {
-                                borderColor: c.border,
-                                backgroundColor: c.card,
-                              },
+                              hasData ? styles.pulseCore : styles.pulseCoreIdle,
+                              hasData
+                                ? {
+                                    backgroundColor: selected ? c.primary : c.text,
+                                    borderColor: c.background,
+                                  }
+                                : {
+                                    borderColor: c.border,
+                                    backgroundColor: c.card,
+                                  },
                             ]}
                           />
-                        )}
+                          <Text style={[styles.pulseCount, { color: c.text }]}>{value}</Text>
+                        </View>
                         <Text style={[styles.pulseLabel, { color: selected ? c.text : c.textMuted }]}>
                           {region.label}
-                        </Text>
-                        <Text style={[styles.pulseCount, { color: c.text }]}>
-                          {value}
                         </Text>
                       </Pressable>
                     );
@@ -761,7 +911,26 @@ export default function GlobalHeatMapScreen() {
                 >
                   <Text style={[styles.zoomBtnText, { color: c.text }]}>Reset</Text>
                 </Pressable>
-                <Text style={[styles.meta, { color: c.textMuted }]}>Zoom: {mapZoomLabel}</Text>
+                <Text style={[styles.meta, { color: c.textMuted }]}>Zoom: {mapZoomTier}</Text>
+              </View>
+              <View style={styles.zoomTierRow}>
+                {(["World", "Continent", "Country", "City"] as MapTier[]).map((tier) => {
+                  const on = tier === mapZoomTier;
+                  return (
+                    <View
+                      key={tier}
+                      style={[
+                        styles.zoomTierChip,
+                        {
+                          borderColor: on ? c.primary : c.border,
+                          backgroundColor: on ? c.cardAlt : c.background,
+                        },
+                      ]}
+                    >
+                      <Text style={[styles.meta, { color: on ? c.text : c.textMuted }]}>{tier}</Text>
+                    </View>
+                  );
+                })}
               </View>
             </View>
 
@@ -858,6 +1027,20 @@ const styles = StyleSheet.create({
     height: "100%",
     backgroundColor: "#0D1328",
   },
+  mapGridLineV: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    borderLeftWidth: 1,
+    opacity: 0.22,
+  },
+  mapGridLineH: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    borderTopWidth: 1,
+    opacity: 0.22,
+  },
   continentBlob: {
     position: "absolute",
     borderRadius: 40,
@@ -900,11 +1083,36 @@ const styles = StyleSheet.create({
     width: 120,
     marginLeft: -60,
     marginTop: -26,
+    zIndex: 3,
   },
-  pulseRing: {
+  hotspotAnchor: {
+    position: "absolute",
+    width: 14,
+    height: 14,
+    marginLeft: -7,
+    marginTop: -7,
+    zIndex: 2,
+  },
+  hotspotRing: {
     position: "absolute",
     borderRadius: 999,
     borderWidth: 1,
+  },
+  hotspotCore: {
+    position: "absolute",
+    borderRadius: 999,
+    borderWidth: 1.5,
+  },
+  regionPin: {
+    minWidth: 34,
+    height: 20,
+    paddingHorizontal: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 6,
   },
   pulseCore: {
     width: 12,
@@ -933,6 +1141,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
     flexWrap: "wrap",
+  },
+  zoomTierRow: {
+    marginTop: 4,
+    flexDirection: "row",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  zoomTierChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
   },
   zoomBtn: {
     borderWidth: 1,
