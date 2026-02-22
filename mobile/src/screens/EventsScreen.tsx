@@ -6,6 +6,7 @@ import {
   AppState,
   AppStateStatus,
   FlatList,
+  Image,
   Modal,
   Pressable,
   Share,
@@ -22,6 +23,7 @@ import type { Database } from "../types/db";
 import type { RootStackParamList, RootTabParamList } from "../types";
 import { useAppState } from "../state";
 import { getScreenColors } from "../theme/appearance";
+import { buildMapboxStaticMapUrl } from "../features/maps/mapboxStatic";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type ScriptRow = Database["public"]["Tables"]["scripts"]["Row"];
@@ -189,6 +191,17 @@ export default function EventsScreen() {
   const route = useRoute<RouteProp<RootTabParamList, "Events">>();
   const { theme, highContrast } = useAppState();
   const c = useMemo(() => getScreenColors(theme, highContrast, "group"), [theme, highContrast]);
+  const mapboxMiniMapUrl = useMemo(
+    () =>
+      buildMapboxStaticMapUrl({
+        theme,
+        variant: "groupMini",
+        width: 1100,
+        height: 560,
+      }),
+    [theme]
+  );
+  const mapboxMiniEnabled = !!mapboxMiniMapUrl;
 
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EventRow[]>([]);
@@ -1516,11 +1529,20 @@ export default function EventsScreen() {
                 style={[styles.groupMapPreview, { borderColor: c.border, backgroundColor: c.background }]}
                 onPress={openGlobalMap}
               >
-                <View style={[styles.groupMapBlob, styles.groupMapBlobAmericas, { backgroundColor: c.cardAlt }]} />
-                <View style={[styles.groupMapBlob, styles.groupMapBlobEurope, { backgroundColor: c.cardAlt }]} />
-                <View style={[styles.groupMapBlob, styles.groupMapBlobAfrica, { backgroundColor: c.cardAlt }]} />
-                <View style={[styles.groupMapBlob, styles.groupMapBlobAsia, { backgroundColor: c.cardAlt }]} />
-                <View style={[styles.groupMapBlob, styles.groupMapBlobOceania, { backgroundColor: c.cardAlt }]} />
+                {mapboxMiniEnabled ? (
+                  <>
+                    <Image source={{ uri: mapboxMiniMapUrl }} style={styles.groupMapImage} resizeMode="cover" />
+                    <View style={styles.groupMapImageTint} />
+                  </>
+                ) : (
+                  <>
+                    <View style={[styles.groupMapBlob, styles.groupMapBlobAmericas, { backgroundColor: c.cardAlt }]} />
+                    <View style={[styles.groupMapBlob, styles.groupMapBlobEurope, { backgroundColor: c.cardAlt }]} />
+                    <View style={[styles.groupMapBlob, styles.groupMapBlobAfrica, { backgroundColor: c.cardAlt }]} />
+                    <View style={[styles.groupMapBlob, styles.groupMapBlobAsia, { backgroundColor: c.cardAlt }]} />
+                    <View style={[styles.groupMapBlob, styles.groupMapBlobOceania, { backgroundColor: c.cardAlt }]} />
+                  </>
+                )}
 
                 {GROUP_REGIONS.map((region) => {
                   const value = quickMapCounts[region.key] ?? 0;
@@ -2003,6 +2025,13 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     overflow: "hidden",
+  },
+  groupMapImage: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  groupMapImageTint: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(8, 16, 34, 0.24)",
   },
   groupMapBlob: {
     position: "absolute",

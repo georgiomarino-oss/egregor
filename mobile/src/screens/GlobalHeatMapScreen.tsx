@@ -4,6 +4,7 @@ import {
   Alert,
   Animated,
   FlatList,
+  Image,
   PanResponder,
   Pressable,
   StyleSheet,
@@ -20,6 +21,7 @@ import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
 import type { Database } from "../types/db";
 import type { RootStackParamList } from "../types";
+import { buildMapboxStaticMapUrl } from "../features/maps/mapboxStatic";
 
 type HeatSnapshotRow = Database["public"]["Functions"]["get_global_heatmap_snapshot"]["Returns"][number];
 
@@ -316,6 +318,17 @@ function regionFromCoordinates(latitude: number, longitude: number): RegionKey {
 export default function GlobalHeatMapScreen() {
   const { theme, highContrast } = useAppState();
   const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
+  const mapboxStaticUrl = useMemo(
+    () =>
+      buildMapboxStaticMapUrl({
+        theme,
+        variant: "global",
+        width: 1200,
+        height: 700,
+      }),
+    [theme]
+  );
+  const mapboxEnabled = !!mapboxStaticUrl;
   const navigation = useNavigation<any>();
 
   const [loading, setLoading] = useState(false);
@@ -747,6 +760,13 @@ export default function GlobalHeatMapScreen() {
               <Text style={[styles.meta, { color: c.textMuted }]}>
                 Pinch or drag to explore. Tap a pulse to focus a region.
               </Text>
+              {mapboxEnabled ? (
+                <Text style={[styles.meta, { color: c.textMuted }]}>Mapbox basemap: active.</Text>
+              ) : (
+                <Text style={[styles.meta, { color: c.textMuted }]}>
+                  Add `EXPO_PUBLIC_MAPBOX_TOKEN` to enable Mapbox basemap detail.
+                </Text>
+              )}
               <View style={styles.row}>
                 <Text style={[styles.meta, { color: c.textMuted }]}>Focused region: {selectedRegion}</Text>
                 <Text style={[styles.meta, { color: c.text }]}>
@@ -770,17 +790,26 @@ export default function GlobalHeatMapScreen() {
                     },
                   ]}
                 >
-                  <View style={[styles.continentBlob, styles.continentAmericas, { backgroundColor: c.cardAlt }]} />
-                  <View style={[styles.continentBlob, styles.continentEurope, { backgroundColor: c.cardAlt }]} />
-                  <View style={[styles.continentBlob, styles.continentAfrica, { backgroundColor: c.cardAlt }]} />
-                  <View style={[styles.continentBlob, styles.continentAsia, { backgroundColor: c.cardAlt }]} />
-                  <View style={[styles.continentBlob, styles.continentOceania, { backgroundColor: c.cardAlt }]} />
-                  {MAP_GRID_LINES.map((pct) => (
-                    <View key={`v-${pct}`} style={[styles.mapGridLineV, { left: `${pct}%`, borderColor: c.border }]} />
-                  ))}
-                  {MAP_GRID_LINES.map((pct) => (
-                    <View key={`h-${pct}`} style={[styles.mapGridLineH, { top: `${pct}%`, borderColor: c.border }]} />
-                  ))}
+                  {mapboxEnabled ? (
+                    <>
+                      <Image source={{ uri: mapboxStaticUrl }} style={styles.mapboxBaseImage} resizeMode="cover" />
+                      <View style={styles.mapboxBaseTint} />
+                    </>
+                  ) : (
+                    <>
+                      <View style={[styles.continentBlob, styles.continentAmericas, { backgroundColor: c.cardAlt }]} />
+                      <View style={[styles.continentBlob, styles.continentEurope, { backgroundColor: c.cardAlt }]} />
+                      <View style={[styles.continentBlob, styles.continentAfrica, { backgroundColor: c.cardAlt }]} />
+                      <View style={[styles.continentBlob, styles.continentAsia, { backgroundColor: c.cardAlt }]} />
+                      <View style={[styles.continentBlob, styles.continentOceania, { backgroundColor: c.cardAlt }]} />
+                      {MAP_GRID_LINES.map((pct) => (
+                        <View key={`v-${pct}`} style={[styles.mapGridLineV, { left: `${pct}%`, borderColor: c.border }]} />
+                      ))}
+                      {MAP_GRID_LINES.map((pct) => (
+                        <View key={`h-${pct}`} style={[styles.mapGridLineH, { top: `${pct}%`, borderColor: c.border }]} />
+                      ))}
+                    </>
+                  )}
 
                   {hotspotPoints.map((spot) => {
                     const selected = selectedRegion === spot.region;
@@ -1026,6 +1055,13 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
     backgroundColor: "#0D1328",
+  },
+  mapboxBaseImage: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  mapboxBaseTint: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(7, 14, 30, 0.28)",
   },
   mapGridLineV: {
     position: "absolute",

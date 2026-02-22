@@ -15,6 +15,8 @@ Create `mobile/.env` (or export in shell):
 ```env
 EXPO_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
 EXPO_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
+# Optional (enables Mapbox basemap on Global Pulse screens):
+EXPO_PUBLIC_MAPBOX_TOKEN=<your-mapbox-public-token>
 ```
 
 ## 2) Install dependencies
