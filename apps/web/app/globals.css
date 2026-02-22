@@ -15,6 +15,33 @@
   --line-strong: rgba(19, 34, 54, 0.26);
   --shadow-soft: 0 20px 45px rgba(10, 26, 47, 0.12);
   --shadow-card: 0 12px 30px rgba(10, 26, 47, 0.1);
+  --bg-radial-a: rgba(243, 166, 74, 0.22);
+  --bg-radial-b: rgba(20, 141, 160, 0.2);
+  --bg-radial-c: rgba(14, 98, 119, 0.2);
+  --surface-tail: #f6fbfb;
+}
+
+html[data-day-period="evening"] {
+  --ink-950: #e8efff;
+  --ink-900: #d8e6ff;
+  --ink-700: #a9bbdc;
+  --ink-600: #8ca2c6;
+  --surface-100: #07101e;
+  --surface-200: #0a1627;
+  --card: rgba(16, 28, 46, 0.86);
+  --card-solid: #101d30;
+  --brand-700: #34b5ce;
+  --brand-500: #63d0dd;
+  --accent-500: #f4b96d;
+  --accent-600: #ffcc8f;
+  --line-soft: rgba(180, 206, 255, 0.18);
+  --line-strong: rgba(180, 206, 255, 0.34);
+  --shadow-soft: 0 20px 45px rgba(1, 6, 14, 0.44);
+  --shadow-card: 0 12px 30px rgba(1, 8, 20, 0.4);
+  --bg-radial-a: rgba(244, 185, 109, 0.16);
+  --bg-radial-b: rgba(99, 208, 221, 0.14);
+  --bg-radial-c: rgba(109, 132, 255, 0.16);
+  --surface-tail: #081322;
 }
 
 * {
@@ -31,10 +58,10 @@ body {
   font-family: var(--font-body), "Avenir Next", "Segoe UI", sans-serif;
   color: var(--ink-900);
   background:
-    radial-gradient(circle at 14% 12%, rgba(243, 166, 74, 0.22), transparent 36%),
-    radial-gradient(circle at 88% 2%, rgba(20, 141, 160, 0.2), transparent 30%),
-    radial-gradient(circle at 78% 86%, rgba(14, 98, 119, 0.2), transparent 34%),
-    linear-gradient(150deg, var(--surface-100) 0%, var(--surface-200) 46%, #f6fbfb 100%);
+    radial-gradient(circle at 14% 12%, var(--bg-radial-a), transparent 36%),
+    radial-gradient(circle at 88% 2%, var(--bg-radial-b), transparent 30%),
+    radial-gradient(circle at 78% 86%, var(--bg-radial-c), transparent 34%),
+    linear-gradient(150deg, var(--surface-100) 0%, var(--surface-200) 46%, var(--surface-tail) 100%);
   min-height: 100vh;
 }
 
@@ -124,12 +151,14 @@ p {
   width: 42px;
   height: 42px;
   border-radius: 12px;
-  background: linear-gradient(145deg, var(--brand-700), var(--brand-500));
-  color: #ecfbff;
-  font-size: 0.82rem;
-  font-weight: 800;
-  letter-spacing: 0.04em;
+  overflow: hidden;
   box-shadow: 0 10px 24px rgba(20, 141, 160, 0.34);
+}
+
+.brand-glyph svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .brand-copy {
@@ -192,6 +221,36 @@ p {
 .header-cta:hover {
   transform: translateY(-1px);
   background: #ffffff;
+}
+
+html[data-day-period="evening"] .site-header {
+  background: rgba(9, 20, 35, 0.82);
+}
+
+html[data-day-period="evening"] .nav-link:hover,
+html[data-day-period="evening"] .header-cta,
+html[data-day-period="evening"] .btn-ghost {
+  background: rgba(20, 34, 55, 0.9);
+}
+
+html[data-day-period="evening"] .header-cta:hover,
+html[data-day-period="evening"] .btn-ghost:hover {
+  background: rgba(24, 42, 68, 0.98);
+}
+
+html[data-day-period="evening"] .section-block,
+html[data-day-period="evening"] .policy-panel,
+html[data-day-period="evening"] .site-footer,
+html[data-day-period="evening"] .home-hero {
+  background: rgba(12, 24, 41, 0.82);
+}
+
+html[data-day-period="evening"] .pillar-card,
+html[data-day-period="evening"] .meaning-card,
+html[data-day-period="evening"] .journey-step,
+html[data-day-period="evening"] .trust-card,
+html[data-day-period="evening"] .hero-signal {
+  background: rgba(16, 30, 49, 0.92);
 }
 
 .page-content {
@@ -610,6 +669,26 @@ p {
 .footer-brand {
   display: grid;
   gap: 6px;
+}
+
+.footer-brand-top {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.footer-logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 8px 18px rgba(13, 48, 90, 0.28);
+}
+
+.footer-logo svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .footer-title {

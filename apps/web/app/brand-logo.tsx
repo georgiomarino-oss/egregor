@@ -1,0 +1,74 @@
+type BrandLogoProps = {
+  size?: number;
+  className?: string;
+};
+
+export function BrandLogo({ size = 42, className }: BrandLogoProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 512 512"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      role="img"
+      aria-label="Egregor logo"
+      className={className}
+    >
+      <defs>
+        <linearGradient id="eg-core" x1="118" y1="88" x2="404" y2="424" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#2ABAA7" />
+          <stop offset="0.55" stopColor="#3C83E7" />
+          <stop offset="1" stopColor="#7968E8" />
+        </linearGradient>
+        <linearGradient id="eg-ring" x1="74" y1="74" x2="438" y2="438" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#8EF3E6" />
+          <stop offset="1" stopColor="#B7C5FF" />
+        </linearGradient>
+        <radialGradient
+          id="eg-bg"
+          cx="0"
+          cy="0"
+          r="1"
+          gradientUnits="userSpaceOnUse"
+          gradientTransform="translate(256 256) rotate(90) scale(256)"
+        >
+          <stop offset="0" stopColor="#0F2136" />
+          <stop offset="1" stopColor="#071423" />
+        </radialGradient>
+      </defs>
+
+      <circle cx="256" cy="256" r="246" fill="url(#eg-bg)" />
+      <circle cx="256" cy="256" r="170" fill="url(#eg-core)" opacity="0.22" />
+
+      <g fill="url(#eg-ring)">
+        <circle cx="256" cy="64" r="16" />
+        <circle cx="352" cy="90" r="14" />
+        <circle cx="422" cy="160" r="13" />
+        <circle cx="448" cy="256" r="14" />
+        <circle cx="422" cy="352" r="13" />
+        <circle cx="352" cy="422" r="14" />
+        <circle cx="256" cy="448" r="16" />
+        <circle cx="160" cy="422" r="14" />
+        <circle cx="90" cy="352" r="13" />
+        <circle cx="64" cy="256" r="14" />
+        <circle cx="90" cy="160" r="13" />
+        <circle cx="160" cy="90" r="14" />
+      </g>
+
+      <circle cx="256" cy="256" r="144" stroke="url(#eg-ring)" strokeWidth="7" opacity="0.7" />
+
+      <g fill="#EDF7FF">
+        <path d="M226 162C212 165 202 178 202 193V308C202 329 219 346 240 346H248V214C248 197 241 174 226 162Z" />
+        <path d="M286 162C300 165 310 178 310 193V308C310 329 293 346 272 346H264V214C264 197 271 174 286 162Z" />
+        <path d="M214 358C214 346 224 336 236 336H276C288 336 298 346 298 358V374H214V358Z" />
+        <rect x="244" y="136" width="24" height="228" rx="12" />
+      </g>
+
+      <path
+        d="M256 118C263 105 281 103 291 115C301 128 297 145 281 157L256 174L231 157C215 145 211 128 221 115C231 103 249 105 256 118Z"
+        fill="#F6B255"
+      />
+    </svg>
+  );
+}

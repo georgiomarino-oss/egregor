@@ -4,6 +4,7 @@ import { Manrope, Playfair_Display } from "next/font/google";
 import Script from "next/script";
 import type { ReactNode } from "react";
 import "./globals.css";
+import { BrandLogo } from "./brand-logo";
 import { policyLinks, primaryLinks, siteConfig } from "./site-config";
 
 const displayFont = Playfair_Display({
@@ -38,6 +39,9 @@ export const metadata: Metadata = {
     title: `${siteConfig.appName} | Collective Intention`,
     description:
       "A user-facing home for the Egregor vision, story, and trust commitments."
+  },
+  icons: {
+    icon: "/favicon.ico"
   }
 };
 
@@ -52,7 +56,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <header className="site-header">
             <Link href="/" className="brand-mark">
               <span className="brand-glyph" aria-hidden>
-                EG
+                <BrandLogo size={42} />
               </span>
               <span className="brand-copy">
                 <span className="brand-name">{siteConfig.appName}</span>
@@ -77,7 +81,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
           <footer className="site-footer">
             <section className="footer-brand">
-              <p className="footer-title">{siteConfig.companyName}</p>
+              <div className="footer-brand-top">
+                <span className="footer-logo" aria-hidden>
+                  <BrandLogo size={34} />
+                </span>
+                <p className="footer-title">{siteConfig.companyName}</p>
+              </div>
               <p className="footer-text">{siteConfig.tagline}</p>
               <p className="footer-text">{siteConfig.companyAddress}</p>
               <p className="footer-text">
@@ -128,6 +137,17 @@ gtag('config', '${gaMeasurementId}', { anonymize_ip: true });`}
             </Script>
           </>
         ) : null}
+        <Script id="day-period-theme" strategy="beforeInteractive">
+          {`(function () {
+  function setDayPeriod() {
+    var hour = new Date().getHours();
+    var period = (hour >= 6 && hour < 18) ? "day" : "evening";
+    document.documentElement.setAttribute("data-day-period", period);
+  }
+  setDayPeriod();
+  setInterval(setDayPeriod, 60000);
+})();`}
+        </Script>
       </body>
     </html>
   );
