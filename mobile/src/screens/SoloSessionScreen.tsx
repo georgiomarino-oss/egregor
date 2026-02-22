@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AppState,
   Alert,
   Animated,
   Easing,
@@ -147,10 +148,10 @@ function buildDurationPrayerLines(args: {
     reflections = [
       "Fortalece minha fe para sustentar esta intencao com amor.",
       "Ensina-me a agir com gentileza, paciencia e sabedoria.",
-      "Que minha mente permaneça clara e meu coracao humilde.",
+      "Que minha mente permaneca clara e meu coracao humilde.",
       "Que minhas acoes diarias fiquem alinhadas com esta oracao.",
     ];
-    refrain = "Inspiro paz, expiro medo, e permaneço em confianca.";
+    refrain = "Inspiro paz, expiro medo, e permaneco em confianca.";
     closing = [
       `Recebo com gratidao o que ja esta se movendo em ${intention}.`,
       "Entrego esta intencao ao bem maior, com serenidade e esperanca.",
@@ -159,7 +160,7 @@ function buildDurationPrayerLines(args: {
   } else if (args.language === "French") {
     opening = [
       `Presence bienveillante, j'entre dans le silence et je confie cette priere pour ${intention}.`,
-      "Je respire profondement, je relache la hâte et j'ouvre mon coeur.",
+      "Je respire profondement, je relache la hate et j'ouvre mon coeur.",
       "Que chaque inspiration apporte la paix et chaque expiration dissolve la peur.",
     ];
     reflections = [
@@ -264,6 +265,7 @@ export default function SoloSessionScreen() {
   const startCtaPulse = useRef(new Animated.Value(1)).current;
   const completionHandledRef = useRef(false);
   const soundRef = useRef<ExpoAvSound | null>(null);
+  const voiceRequestIdRef = useRef(0);
   const scriptScrollRef = useRef<ScrollView | null>(null);
   const lineYRef = useRef<Record<number, number>>({});
 
@@ -319,8 +321,10 @@ export default function SoloSessionScreen() {
   }, [elapsedSeconds, prayerProgress, running, secondsLeft]);
 
   const stopVoice = useCallback(async () => {
+    voiceRequestIdRef.current += 1;
     const sound = soundRef.current;
     soundRef.current = null;
+    setVoiceLoading(false);
     if (!sound) {
       setVoicePlaying(false);
       return;
@@ -540,6 +544,18 @@ export default function SoloSessionScreen() {
   }, [stopVoice]);
 
   useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") {
+        setRunning(false);
+        void stopVoice();
+      }
+    });
+    return () => {
+      sub.remove();
+    };
+  }, [stopVoice]);
+
+  useEffect(() => {
     completionHandledRef.current = false;
     setRunning(false);
     setSessionTotalSeconds(minutes * 60);
@@ -551,6 +567,8 @@ export default function SoloSessionScreen() {
 
   const handleStartVoice = useCallback(async (): Promise<boolean> => {
     if (voiceLoading) return false;
+    const requestId = voiceRequestIdRef.current + 1;
+    voiceRequestIdRef.current = requestId;
 
     try {
       await Audio.setAudioModeAsync({
@@ -589,6 +607,9 @@ export default function SoloSessionScreen() {
         style:
           "Spiritual, calm, and intentional prayer guide. Speak warmly with gentle pauses and soothing cadence.",
       });
+      if (voiceRequestIdRef.current !== requestId) {
+        return false;
+      }
 
       const base64 = String(generated.audioBase64 ?? "").trim();
       if (!base64) {
@@ -635,11 +656,22 @@ export default function SoloSessionScreen() {
       const status = await sound.loadAsync({
         uri: `data:${mimeType};base64,${base64}`,
       }, { shouldPlay: true });
+      if (voiceRequestIdRef.current !== requestId) {
+        try {
+          await sound.unloadAsync();
+        } catch {
+          // ignore
+        }
+        return false;
+      }
       syncSessionFromDurationMillis(status?.durationMillis);
       await sound.setIsMutedAsync(audioMuted);
       setVoicePlaying(true);
       return true;
     } catch (error: any) {
+      if (voiceRequestIdRef.current !== requestId) {
+        return false;
+      }
       setVoicePlaying(false);
       Alert.alert(
         "Voice playback failed",
@@ -648,7 +680,9 @@ export default function SoloSessionScreen() {
       );
       return false;
     } finally {
-      setVoiceLoading(false);
+      if (voiceRequestIdRef.current === requestId) {
+        setVoiceLoading(false);
+      }
     }
   }, [
     audioMuted,
