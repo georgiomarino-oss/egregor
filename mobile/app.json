@@ -2,22 +2,32 @@
   "expo": {
     "name": "Egregor",
     "slug": "egregor-mobile",
+    "scheme": "egregor",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
+      "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#071423"
     },
     "ios": {
+      "bundleIdentifier": "world.egregor.mobile",
       "supportsTablet": false,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Egregor uses your location (optional) to show live regional participation heat map.",
-        "NSUserNotificationUsageDescription": "Egregor sends gentle alerts for live circles, responses, and compassionate global events."
+        "NSUserNotificationUsageDescription": "Egregor sends gentle alerts for live circles, responses, and compassionate global events.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
+      "package": "world.egregor.mobile",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#071423"
+      },
       "permissions": [
         "POST_NOTIFICATIONS",
         "ACCESS_COARSE_LOCATION",
@@ -28,12 +38,14 @@
       "expo-notifications"
     ],
     "web": {
-      "bundler": "metro"
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
     },
     "extra": {
       "eas": {
-        "projectId": "REPLACE_WITH_EAS_PROJECT_ID_LATER"
+        "projectId": "bda88a59-6fb6-42e9-870c-4aa71b2ece8f"
       }
-    }
+    },
+    "owner": "egregor"
   }
 }
