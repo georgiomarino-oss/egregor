@@ -27,6 +27,16 @@ type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type ScriptRow = Database["public"]["Tables"]["scripts"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 type ProfileMini = Pick<ProfileRow, "id" | "display_name" | "avatar_url">;
+type GroupRegionKey = "Americas" | "Europe" | "Asia" | "Africa" | "Oceania" | "Global";
+
+const GROUP_REGIONS: { key: GroupRegionKey; label: string; xPct: number; yPct: number }[] = [
+  { key: "Americas", label: "Americas", xPct: 18, yPct: 43 },
+  { key: "Europe", label: "Europe", xPct: 47, yPct: 28 },
+  { key: "Asia", label: "Asia", xPct: 69, yPct: 41 },
+  { key: "Africa", label: "Africa", xPct: 50, yPct: 54 },
+  { key: "Oceania", label: "Oceania", xPct: 82, yPct: 67 },
+  { key: "Global", label: "Global", xPct: 50, yPct: 16 },
+];
 
 function plusMinutesToLocalInput(minutes: number) {
   const d = new Date(Date.now() + minutes * 60_000);
@@ -100,6 +110,19 @@ function isValidTimezone(value: string) {
   } catch {
     return false;
   }
+}
+
+function regionFromTimezone(timezone: string | null | undefined): GroupRegionKey {
+  const tz = String(timezone ?? "").trim().toLowerCase();
+  if (!tz) return "Global";
+  if (tz.startsWith("america/")) return "Americas";
+  if (tz.startsWith("europe/")) return "Europe";
+  if (tz.startsWith("africa/")) return "Africa";
+  if (tz.startsWith("asia/")) return "Asia";
+  if (tz.startsWith("australia/") || tz.startsWith("pacific/")) return "Oceania";
+  if (tz.startsWith("atlantic/")) return "Europe";
+  if (tz.startsWith("indian/")) return "Asia";
+  return "Global";
 }
 
 function upsertEventRow(rows: EventRow[], next: EventRow): EventRow[] {
@@ -1253,6 +1276,47 @@ export default function EventsScreen() {
     return rows;
   }, [events, hostedOnly, myUserId, upcomingOnly, nowTick, eventQuery, displayNameForUserId, scriptsById, selectedCategory]);
 
+  const quickMapCounts = useMemo(() => {
+    const counts: Record<GroupRegionKey, number> = {
+      Americas: 0,
+      Europe: 0,
+      Asia: 0,
+      Africa: 0,
+      Oceania: 0,
+      Global: 0,
+    };
+    const now = Date.now();
+
+    for (const event of events) {
+      const startMs = safeTimeMs((event as any).start_time_utc);
+      const endMs = safeTimeMs((event as any).end_time_utc);
+      const isLive = startMs > 0 && startMs <= now && (!endMs || now <= endMs);
+      const startsSoon = startMs > now && startMs - now <= 24 * 60 * 60 * 1000;
+      if (!isLive && !startsSoon) continue;
+
+      const weight = isLive
+        ? Math.max(1, Number((event as any).active_count_snapshot ?? 0))
+        : 1;
+      const region = regionFromTimezone((event as any).timezone);
+      counts[region] += Number.isFinite(weight) ? Math.floor(weight) : 1;
+    }
+
+    counts.Global = Object.entries(counts)
+      .filter(([key]) => key !== "Global")
+      .reduce((sum, [, value]) => sum + value, 0);
+
+    return counts;
+  }, [events]);
+
+  const quickMapMax = useMemo(
+    () => Math.max(1, ...GROUP_REGIONS.map((r) => quickMapCounts[r.key] ?? 0)),
+    [quickMapCounts]
+  );
+
+  const openGlobalMap = useCallback(() => {
+    navigation.navigate("Global");
+  }, [navigation]);
+
   const renderEvent = ({ item }: { item: EventRow }) => {
     void nowTick;
     const nowMs = Date.now();
@@ -1403,6 +1467,79 @@ export default function EventsScreen() {
         onRefresh={refreshAll}
         ListHeaderComponent={
           <View>
+            <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+              <View style={[styles.row, { marginTop: 0 }]}>
+                <Text style={[styles.sectionTitle, { color: c.text, marginBottom: 0 }]}>Global Pulse Map</Text>
+                <Pressable
+                  style={[styles.btn, styles.btnGhost, { borderColor: c.border }]}
+                  onPress={openGlobalMap}
+                >
+                  <Text style={[styles.btnGhostText, { color: c.text }]}>Open full map</Text>
+                </Pressable>
+              </View>
+              <Text style={[styles.meta, { color: c.textMuted }]}>
+                Live at the top of Group. Tap any region label to view the full interactive map.
+              </Text>
+
+              <Pressable
+                style={[styles.groupMapPreview, { borderColor: c.border, backgroundColor: c.background }]}
+                onPress={openGlobalMap}
+              >
+                <View style={[styles.groupMapBlob, styles.groupMapBlobAmericas, { backgroundColor: c.cardAlt }]} />
+                <View style={[styles.groupMapBlob, styles.groupMapBlobEurope, { backgroundColor: c.cardAlt }]} />
+                <View style={[styles.groupMapBlob, styles.groupMapBlobAfrica, { backgroundColor: c.cardAlt }]} />
+                <View style={[styles.groupMapBlob, styles.groupMapBlobAsia, { backgroundColor: c.cardAlt }]} />
+                <View style={[styles.groupMapBlob, styles.groupMapBlobOceania, { backgroundColor: c.cardAlt }]} />
+
+                {GROUP_REGIONS.map((region) => {
+                  const value = quickMapCounts[region.key] ?? 0;
+                  const intensity = value / quickMapMax;
+                  const size = 10 + intensity * 18;
+                  const selectedColor = intensity > 0.66 ? "#F59E0B" : intensity > 0.33 ? c.primary : "#7FD7FF";
+                  return (
+                    <View
+                      key={region.key}
+                      style={[
+                        styles.groupMapPoint,
+                        {
+                          left: `${region.xPct}%`,
+                          top: `${region.yPct}%`,
+                        },
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.groupMapRing,
+                          {
+                            width: size * 1.6,
+                            height: size * 1.6,
+                            marginLeft: -(size * 1.6) / 2,
+                            marginTop: -(size * 1.6) / 2,
+                            borderColor: selectedColor,
+                            opacity: value > 0 ? 0.45 : 0.2,
+                          },
+                        ]}
+                      />
+                      <View
+                        style={[
+                          styles.groupMapCore,
+                          {
+                            width: size,
+                            height: size,
+                            marginLeft: -size / 2,
+                            marginTop: -size / 2,
+                            backgroundColor: value > 0 ? selectedColor : c.card,
+                            borderColor: c.border,
+                          },
+                        ]}
+                      />
+                      <Text style={[styles.groupMapLabel, { color: c.textMuted }]}>{region.label}</Text>
+                    </View>
+                  );
+                })}
+              </Pressable>
+            </View>
+
             <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
               <Text style={[styles.sectionTitle, { color: c.text }]}>Group Flow</Text>
               <Text style={[styles.meta, { color: c.textMuted }]}>
@@ -1827,6 +1964,70 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   sectionTitle: { color: "#DCE4FF", fontSize: 16, fontWeight: "700", marginBottom: 8 },
+  groupMapPreview: {
+    marginTop: 8,
+    height: 170,
+    borderRadius: 14,
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  groupMapBlob: {
+    position: "absolute",
+    borderRadius: 32,
+    opacity: 0.9,
+  },
+  groupMapBlobAmericas: {
+    left: "10%",
+    top: "26%",
+    width: 62,
+    height: 88,
+  },
+  groupMapBlobEurope: {
+    left: "43%",
+    top: "22%",
+    width: 34,
+    height: 32,
+  },
+  groupMapBlobAfrica: {
+    left: "46%",
+    top: "42%",
+    width: 38,
+    height: 56,
+  },
+  groupMapBlobAsia: {
+    left: "58%",
+    top: "25%",
+    width: 72,
+    height: 70,
+  },
+  groupMapBlobOceania: {
+    left: "80%",
+    top: "62%",
+    width: 30,
+    height: 22,
+  },
+  groupMapPoint: {
+    position: "absolute",
+    width: 98,
+    marginLeft: -49,
+    marginTop: -20,
+    alignItems: "center",
+  },
+  groupMapRing: {
+    position: "absolute",
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  groupMapCore: {
+    position: "absolute",
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  groupMapLabel: {
+    marginTop: 12,
+    fontSize: 10,
+    fontWeight: "700",
+  },
 
   label: { color: "#B9C3E6", fontSize: 12, marginBottom: 6, marginTop: 8 },
   input: {

@@ -706,7 +706,7 @@ export default function GlobalHeatMapScreen() {
         onRefresh={loadHeatData}
         ListHeaderComponent={
           <View style={{ gap: 12 }}>
-            <Text style={[styles.h1, { color: c.text }]}>Global Pulse Map V2</Text>
+            <Text style={[styles.h1, { color: c.text }]}>Global Pulse Map</Text>
             <Text style={[styles.meta, { color: c.textMuted }]}>
               Real-time collective intention pulses across world regions. Zoom from world to city detail.
             </Text>
