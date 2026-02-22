@@ -1291,12 +1291,17 @@ export default function EventsScreen() {
       const startMs = safeTimeMs((event as any).start_time_utc);
       const endMs = safeTimeMs((event as any).end_time_utc);
       const isLive = startMs > 0 && startMs <= now && (!endMs || now <= endMs);
-      const startsSoon = startMs > now && startMs - now <= 24 * 60 * 60 * 1000;
+      const startsSoon = startMs > now && startMs - now <= 12 * 60 * 60 * 1000;
       if (!isLive && !startsSoon) continue;
 
-      const weight = isLive
-        ? Math.max(1, Number((event as any).active_count_snapshot ?? 0))
-        : 1;
+      const activeSnapshot = Number((event as any).active_count_snapshot ?? 0);
+      const totalJoined = Number((event as any).total_join_count ?? 0);
+      const liveWeight = Math.max(
+        1,
+        Number.isFinite(activeSnapshot) ? Math.floor(activeSnapshot) : 0,
+        Number.isFinite(totalJoined) ? Math.floor(totalJoined * 0.25) : 0
+      );
+      const weight = isLive ? liveWeight : 1;
       const region = regionFromTimezone((event as any).timezone);
       counts[region] += Number.isFinite(weight) ? Math.floor(weight) : 1;
     }
@@ -1312,6 +1317,15 @@ export default function EventsScreen() {
     () => Math.max(1, ...GROUP_REGIONS.map((r) => quickMapCounts[r.key] ?? 0)),
     [quickMapCounts]
   );
+  const quickMapStats = useMemo(() => {
+    const regionalKeys = GROUP_REGIONS.filter((region) => region.key !== "Global");
+    const activeRegions = regionalKeys.filter((region) => (quickMapCounts[region.key] ?? 0) > 0).length;
+    const liveParticipants = regionalKeys.reduce(
+      (sum, region) => sum + (quickMapCounts[region.key] ?? 0),
+      0
+    );
+    return { activeRegions, liveParticipants };
+  }, [quickMapCounts]);
 
   const openGlobalMap = useCallback(() => {
     navigation.navigate("Global");
@@ -1478,7 +1492,13 @@ export default function EventsScreen() {
                 </Pressable>
               </View>
               <Text style={[styles.meta, { color: c.textMuted }]}>
-                Live at the top of Group. Tap any region label to view the full interactive map.
+                Live at the top of Group. Tap the map to open the full interactive view.
+              </Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>
+                Live participants:{" "}
+                <Text style={{ color: c.text, fontWeight: "800" }}>{quickMapStats.liveParticipants}</Text>
+                {" · "}Active regions:{" "}
+                <Text style={{ color: c.text, fontWeight: "800" }}>{quickMapStats.activeRegions}</Text>
               </Text>
 
               <Pressable
@@ -1533,7 +1553,9 @@ export default function EventsScreen() {
                           },
                         ]}
                       />
-                      <Text style={[styles.groupMapLabel, { color: c.textMuted }]}>{region.label}</Text>
+                      <Text style={[styles.groupMapLabel, { color: c.textMuted }]}>
+                        {value > 0 ? `${region.label} (${value})` : region.label}
+                      </Text>
                     </View>
                   );
                 })}
