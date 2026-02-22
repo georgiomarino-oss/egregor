@@ -154,6 +154,14 @@ function safeCount(value: unknown): number {
   return Math.max(0, Math.floor(n));
 }
 
+function compactProfileTabLabel(value: string, max = 11) {
+  const cleaned = value.trim().replace(/\s+/g, " ");
+  if (!cleaned) return "Profile";
+  const first = cleaned.split(" ")[0] ?? cleaned;
+  if (first.length <= max) return first;
+  return `${first.slice(0, Math.max(3, max - 1))}.`;
+}
+
 export default function ProfileScreen() {
   const navigation = useNavigation<any>();
   const {
@@ -661,6 +669,25 @@ export default function ProfileScreen() {
     if (fromDisplayName) return fromDisplayName;
     return "Unnamed user";
   }, [displayName, firstName, lastName]);
+  const profileTabLabel = useMemo(() => {
+    const first = firstName.trim();
+    if (first) return compactProfileTabLabel(first);
+
+    const display = displayName.trim();
+    if (display) return compactProfileTabLabel(display);
+
+    const emailLocal = String(email ?? "").trim().split("@")[0] ?? "";
+    if (emailLocal.trim()) return compactProfileTabLabel(emailLocal);
+
+    return "Profile";
+  }, [displayName, email, firstName]);
+
+  useEffect(() => {
+    navigation.setOptions?.({
+      title: profileTabLabel,
+      tabBarLabel: profileTabLabel,
+    });
+  }, [navigation, profileTabLabel]);
 
   const clearAutoJoinPrefs = useCallback(async () => {
     try {
