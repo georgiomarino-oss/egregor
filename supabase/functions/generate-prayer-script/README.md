@@ -13,6 +13,12 @@ Supabase Edge Function for AI-powered event scripts, solo guidance, and solo voi
 - `OPENAI_MODEL` (default: `gpt-4.1-mini`)
 - `OPENAI_TTS_MODEL` (default: `gpt-4o-mini-tts`)
 - `OPENAI_TTS_VOICE` (default: `alloy`)
+- `ELEVENLABS_API_KEY` (if set, `solo_voice` uses ElevenLabs first)
+- `ELEVENLABS_TTS_MODEL` (default: `eleven_turbo_v2_5`)
+- `ELEVENLABS_VOICE_DEFAULT` (recommended default voice id)
+- `ELEVENLABS_VOICE_FEMALE` (optional voice id for female selection)
+- `ELEVENLABS_VOICE_MALE` (optional voice id for male selection)
+- `ELEVENLABS_VOICE_NEUTRAL` (optional neutral voice id)
 - `AI_GENERATION_REQUIRE_AUTH` (default: `1`; set to `0` to disable auth requirement)
 
 ## Request
@@ -49,10 +55,10 @@ Supabase Edge Function for AI-powered event scripts, solo guidance, and solo voi
 ```json
 {
   "ok": true,
-  "source": "openai",
+  "source": "elevenlabs",
   "payload": {}
 }
 ```
 
-- `source` is `openai` or `fallback`.
-- If OpenAI fails or is not configured, `fallback` payload is returned with a `warning` field.
+- `source` is `elevenlabs`, `openai`, or `fallback`.
+- `solo_voice` provider order: ElevenLabs -> OpenAI -> fallback.

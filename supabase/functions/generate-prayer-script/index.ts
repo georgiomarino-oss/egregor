@@ -122,6 +122,44 @@ function chunkSpeechLines(lines: string[], maxChars: number) {
   return chunks;
 }
 
+function pickFirstNonEmpty(values: string[]) {
+  for (const raw of values) {
+    const next = String(raw ?? "").trim();
+    if (next) return next;
+  }
+  return "";
+}
+
+function normalizeVoiceKey(raw: string) {
+  const voice = String(raw ?? "").trim().toLowerCase();
+  if (!voice) return "";
+  if (voice.includes("female") || voice.includes("shimmer")) return "female";
+  if (voice.includes("male") || voice.includes("onyx")) return "male";
+  if (voice.includes("neutral") || voice.includes("alloy")) return "neutral";
+  return voice;
+}
+
+function looksLikeElevenLabsVoiceId(raw: string) {
+  const voiceId = String(raw ?? "").trim();
+  return /^[A-Za-z0-9_-]{10,80}$/.test(voiceId);
+}
+
+function resolveElevenLabsVoiceId(inputVoice: string) {
+  const normalized = normalizeVoiceKey(inputVoice);
+  if (looksLikeElevenLabsVoiceId(normalized)) return normalized;
+
+  const defaultVoice = String(Deno.env.get("ELEVENLABS_VOICE_DEFAULT") ?? "").trim();
+  const female = String(Deno.env.get("ELEVENLABS_VOICE_FEMALE") ?? "").trim();
+  const male = String(Deno.env.get("ELEVENLABS_VOICE_MALE") ?? "").trim();
+  const neutral = String(Deno.env.get("ELEVENLABS_VOICE_NEUTRAL") ?? "").trim();
+
+  if (normalized === "female") return pickFirstNonEmpty([female, neutral, defaultVoice, male]);
+  if (normalized === "male") return pickFirstNonEmpty([male, neutral, defaultVoice, female]);
+  if (normalized === "neutral") return pickFirstNonEmpty([neutral, defaultVoice, female, male]);
+
+  return pickFirstNonEmpty([defaultVoice, female, neutral, male]);
+}
+
 function fallbackEventPayload(args: {
   intention: string;
   durationMinutes: number;
@@ -442,6 +480,135 @@ async function generateSoloVoiceWithOpenAI(input: {
   throw new Error(`OpenAI speech request failed. ${clip(errors.join(" | "), 700)}`);
 }
 
+async function generateSoloVoiceWithElevenLabs(input: {
+  title: string;
+  intention: string;
+  lines: string[];
+  tone: string;
+  language: string;
+  voice?: string;
+  speechRate: number;
+  style: string;
+}) {
+  const apiKey = String(Deno.env.get("ELEVENLABS_API_KEY") ?? "").trim();
+  if (!apiKey) {
+    throw new Error("ELEVENLABS_API_KEY is not set.");
+  }
+
+  const voiceId = resolveElevenLabsVoiceId(String(input.voice ?? ""));
+  if (!voiceId) {
+    throw new Error(
+      "ElevenLabs voice is not configured. Set ELEVENLABS_VOICE_DEFAULT (or FEMALE/MALE/NEUTRAL)."
+    );
+  }
+
+  const modelId =
+    String(Deno.env.get("ELEVENLABS_TTS_MODEL") ?? "").trim() || "eleven_turbo_v2_5";
+  const scriptLines = input.lines
+    .map((line) => clip(safeText(line, ""), 280))
+    .filter((line) => !!line)
+    .slice(0, 160);
+  const fallbackLine = `I hold this prayer for ${input.intention}. I breathe in peace, and I release fear with trust.`;
+  const spokenChunks = chunkSpeechLines(
+    scriptLines.length ? scriptLines : [fallbackLine],
+    2000
+  ).slice(0, 32);
+  if (!spokenChunks.length) {
+    throw new Error("No script lines were available for ElevenLabs speech generation.");
+  }
+
+  const rateNorm = (Math.max(0.65, Math.min(1.2, input.speechRate)) - 0.65) / 0.55;
+  const stability = Number((0.72 + (1 - rateNorm) * 0.12).toFixed(2));
+  const similarityBoost = 0.82;
+  const style = Number((0.2 + (1 - rateNorm) * 0.2).toFixed(2));
+  const speakerBoost = true;
+
+  const errors: string[] = [];
+  const chunksAudio: Uint8Array[] = [];
+  let mimeType = "audio/mpeg";
+
+  for (const chunk of spokenChunks) {
+    const response = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(
+        voiceId
+      )}/stream?output_format=mp3_44100_128`,
+      {
+        method: "POST",
+        headers: {
+          "xi-api-key": apiKey,
+          "Content-Type": "application/json",
+          Accept: "audio/mpeg",
+        },
+        body: JSON.stringify({
+          text: chunk,
+          model_id: modelId,
+          voice_settings: {
+            stability,
+            similarity_boost: similarityBoost,
+            style,
+            use_speaker_boost: speakerBoost,
+          },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const body = await response.text();
+      errors.push(`${response.status} ${clip(body, 220)}`);
+      break;
+    }
+
+    const audioBytes = new Uint8Array(await response.arrayBuffer());
+    if (!audioBytes.length) {
+      errors.push("empty audio response");
+      break;
+    }
+    mimeType = String(response.headers.get("content-type") ?? "audio/mpeg").trim() || "audio/mpeg";
+    chunksAudio.push(audioBytes);
+  }
+
+  if (!chunksAudio.length) {
+    throw new Error(`ElevenLabs speech request failed. ${clip(errors.join(" | "), 700)}`);
+  }
+
+  return {
+    audioBase64: bytesToBase64(concatByteArrays(chunksAudio)),
+    mimeType,
+  };
+}
+
+async function generateSoloVoiceWithProviderFallback(input: {
+  title: string;
+  intention: string;
+  lines: string[];
+  tone: string;
+  language: string;
+  voice?: string;
+  speechRate: number;
+  style: string;
+}) {
+  const warnings: string[] = [];
+
+  try {
+    const payload = await generateSoloVoiceWithElevenLabs(input);
+    return { source: "elevenlabs" as const, payload, warning: "" };
+  } catch (e) {
+    warnings.push(`ElevenLabs unavailable: ${e instanceof Error ? e.message : "unknown error"}`);
+  }
+
+  try {
+    const payload = await generateSoloVoiceWithOpenAI(input);
+    return {
+      source: "openai" as const,
+      payload,
+      warning: warnings.length ? clip(warnings.join(" | "), 700) : "",
+    };
+  } catch (e) {
+    warnings.push(`OpenAI unavailable: ${e instanceof Error ? e.message : "unknown error"}`);
+    throw new Error(clip(warnings.join(" | "), 900));
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: CORS_HEADERS });
@@ -515,7 +682,7 @@ Deno.serve(async (req) => {
     );
 
     try {
-      const payload = await generateSoloVoiceWithOpenAI({
+      const generated = await generateSoloVoiceWithProviderFallback({
         title,
         intention,
         lines,
@@ -527,8 +694,9 @@ Deno.serve(async (req) => {
       });
       return jsonResponse(200, {
         ok: true,
-        source: "openai",
-        payload,
+        source: generated.source,
+        payload: generated.payload,
+        ...(generated.warning ? { warning: generated.warning } : {}),
       });
     } catch (e) {
       return jsonResponse(200, {
@@ -538,7 +706,10 @@ Deno.serve(async (req) => {
           audioBase64: "",
           mimeType: "audio/mpeg",
         },
-        warning: e instanceof Error ? e.message : "OpenAI speech generation failed.",
+        warning:
+          e instanceof Error
+            ? e.message
+            : "Voice generation failed for all providers.",
       });
     }
   }

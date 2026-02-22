@@ -36,7 +36,7 @@ export type GeneratedSoloGuidance = {
 export type GeneratedSoloVoice = {
   audioBase64: string;
   mimeType: string;
-  source: "openai" | "fallback";
+  source: "elevenlabs" | "openai" | "fallback";
   warning?: string;
 };
 
@@ -413,7 +413,12 @@ export async function generateSoloVoiceAudio(args: {
     return {
       audioBase64,
       mimeType: safeText(payload?.mimeType, "audio/mpeg"),
-      source: data?.source === "openai" ? "openai" : "fallback",
+      source:
+        data?.source === "elevenlabs"
+          ? "elevenlabs"
+          : data?.source === "openai"
+            ? "openai"
+            : "fallback",
       warning: warning || undefined,
     };
   } catch (error: any) {
