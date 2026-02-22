@@ -73,6 +73,37 @@ function getAuthLinkErrorMessage(rawMessage: string | null | undefined) {
   return "We couldn't complete sign in from this link. Please request a new email and try again.";
 }
 
+function compactTabLabel(value: string, max = 11) {
+  const cleaned = value.trim().replace(/\s+/g, " ");
+  if (!cleaned) return "Profile";
+  const first = cleaned.split(" ")[0] ?? cleaned;
+  if (first.length <= max) return first;
+  return `${first.slice(0, Math.max(3, max - 1))}.`;
+}
+
+function resolveProfileTabLabel(user: any): string {
+  const metadata = user?.user_metadata ?? {};
+  const metadataCandidates = [
+    metadata.display_name,
+    metadata.full_name,
+    metadata.name,
+    metadata.first_name,
+  ];
+  for (const candidate of metadataCandidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return compactTabLabel(candidate);
+    }
+  }
+
+  const email = String(user?.email ?? "").trim();
+  if (email.includes("@")) {
+    const [local] = email.split("@");
+    if (local?.trim()) return compactTabLabel(local);
+  }
+
+  return "Profile";
+}
+
 function extractAuthParams(url: string) {
   try {
     const parsed = new URL(url);
@@ -116,9 +147,10 @@ function LoadingScreen() {
 }
 
 function AuthedTabs() {
-  const { theme, highContrast } = useAppState();
+  const { theme, highContrast, user } = useAppState();
   const c = getAppColors(theme, highContrast);
   const insets = useSafeAreaInsets();
+  const profileTabLabel = useMemo(() => resolveProfileTabLabel(user), [user]);
   const tabBottomPadding = Math.max(
     insets.bottom + (Platform.OS === "android" ? 10 : 2),
     Platform.OS === "android" ? 24 : 12
@@ -225,8 +257,8 @@ function AuthedTabs() {
         name="Profile"
         component={ProfileScreen}
         options={{
-          title: "Account",
-          tabBarLabel: "Account",
+          title: profileTabLabel,
+          tabBarLabel: profileTabLabel,
         }}
       />
 

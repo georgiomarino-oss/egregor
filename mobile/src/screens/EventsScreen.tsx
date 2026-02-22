@@ -1310,8 +1310,19 @@ export default function EventsScreen() {
       .filter(([key]) => key !== "Global")
       .reduce((sum, [, value]) => sum + value, 0);
 
+    // Keep Group mini-map responsive to local join/leave actions immediately,
+    // without waiting for an events snapshot refresh.
+    if (isJoined && joinedEventId) {
+      const joinedForPreview = events.find((event) => event.id === joinedEventId);
+      if (joinedForPreview) {
+        const joinedRegion = regionFromTimezone((joinedForPreview as any).timezone);
+        counts[joinedRegion] += 1;
+        counts.Global += 1;
+      }
+    }
+
     return counts;
-  }, [events]);
+  }, [events, isJoined, joinedEventId]);
 
   const quickMapMax = useMemo(
     () => Math.max(1, ...GROUP_REGIONS.map((r) => quickMapCounts[r.key] ?? 0)),
@@ -1492,7 +1503,7 @@ export default function EventsScreen() {
                 </Pressable>
               </View>
               <Text style={[styles.meta, { color: c.textMuted }]}>
-                Live at the top of Group. Tap the map to open the full interactive view.
+                Tap the map to open the full interactive view.
               </Text>
               <Text style={[styles.meta, { color: c.textMuted }]}>
                 Live participants:{" "}
