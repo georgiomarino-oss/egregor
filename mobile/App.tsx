@@ -1,7 +1,7 @@
 // mobile/App.tsx
 import "react-native-gesture-handler";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, AppState, Linking, Platform, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, Image, Linking, Platform, View } from "react-native";
 import {
   NavigationContainer,
   DefaultTheme,
@@ -27,6 +27,9 @@ import NotificationsScreen from "./src/screens/NotificationsScreen";
 import BillingDebugScreen from "./src/screens/BillingDebugScreen";
 import SoloSessionScreen from "./src/screens/SoloSessionScreen";
 import JournalComposeScreen from "./src/screens/JournalComposeScreen";
+import EgregorCircleScreen from "./src/screens/EgregorCircleScreen";
+import CommunityChatScreen from "./src/screens/CommunityChatScreen";
+import DirectChatScreen from "./src/screens/DirectChatScreen";
 
 import { AppStateProvider, useAppState } from "./src/state";
 import type { RootStackParamList, RootTabParamList } from "./src/types";
@@ -290,15 +293,41 @@ function AuthedTabs() {
         tabBarHideOnKeyboard: true,
         tabBarIcon: ({ color, size, focused }) => {
           const iconSize = Math.max(20, size);
+          const routeColors = getScreenColors(theme, highContrast, routeToContext(route.name));
+          if (route.name === "Home") {
+            const visualSize = focused ? iconSize + 1 : iconSize;
+            return (
+              <View
+                style={{
+                  width: focused ? 34 : 30,
+                  height: focused ? 34 : 30,
+                  borderRadius: 999,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: focused ? routeColors.cardAlt : "transparent",
+                  borderWidth: focused ? 1 : 0,
+                  borderColor: focused ? routeColors.border : "transparent",
+                }}
+              >
+                <Image
+                  source={require("./assets/icon.png")}
+                  style={{
+                    width: visualSize,
+                    height: visualSize,
+                    borderRadius: 6,
+                  }}
+                  resizeMode="cover"
+                />
+              </View>
+            );
+          }
           const iconByRoute: Record<string, keyof typeof MaterialCommunityIcons.glyphMap> = {
-            Home: focused ? "home" : "home-outline",
             Events: focused ? "account-group" : "account-group-outline",
             Solo: "hands-pray",
             Profile: focused ? "account" : "account-outline",
             Global: "earth",
             Scripts: "file-document-outline",
           };
-          const routeColors = getScreenColors(theme, highContrast, routeToContext(route.name));
           return (
             <View
               style={{
@@ -325,7 +354,7 @@ function AuthedTabs() {
       <Tabs.Screen
         name="Home"
         component={HomeScreen}
-        options={{ title: "Home", tabBarLabel: "Home" }}
+        options={{ title: "Community", tabBarLabel: "Community" }}
       />
       <Tabs.Screen
         name="Events"
@@ -637,6 +666,36 @@ function RootNav() {
               options={{
                 headerShown: true,
                 title: "Billing Debug",
+                headerStyle: { backgroundColor: c.card },
+                headerTintColor: c.text,
+              }}
+            />
+            <Stack.Screen
+              name="EgregorCircle"
+              component={EgregorCircleScreen}
+              options={{
+                headerShown: true,
+                title: "Egregor Circle",
+                headerStyle: { backgroundColor: c.card },
+                headerTintColor: c.text,
+              }}
+            />
+            <Stack.Screen
+              name="CommunityChat"
+              component={CommunityChatScreen}
+              options={{
+                headerShown: true,
+                title: "Community Chat",
+                headerStyle: { backgroundColor: c.card },
+                headerTintColor: c.text,
+              }}
+            />
+            <Stack.Screen
+              name="DirectChat"
+              component={DirectChatScreen}
+              options={{
+                headerShown: true,
+                title: "Chat",
                 headerStyle: { backgroundColor: c.card },
                 headerTintColor: c.text,
               }}

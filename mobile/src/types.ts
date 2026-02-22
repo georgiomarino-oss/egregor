@@ -32,6 +32,12 @@ export type RootStackParamList = {
   RootTabs: undefined;
   Notifications: undefined;
   BillingDebug: undefined;
+  EgregorCircle: undefined;
+  CommunityChat: undefined;
+  DirectChat: {
+    peerUserId: string;
+    peerDisplayName?: string;
+  };
   EventRoom: { eventId: string };
   SoloSession:
     | {

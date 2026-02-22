@@ -36,6 +36,7 @@ import {
   type SoloHistoryEntry,
 } from "../features/solo/soloHistoryRepo";
 import { logMonetizationEvent } from "../features/billing/billingAnalyticsRepo";
+import { getCircleSummary } from "../features/community/communityRepo";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type CommunityFeedItem = {
@@ -54,6 +55,14 @@ type HomeDashboardSnapshotRow = {
   active_global_participants: number | null;
   active_global_events: number | null;
   feed_items: unknown;
+};
+type CirclePastEventSummary = {
+  id: string;
+  title: string;
+  endTimeUtc: string;
+  totalJoinCount: number;
+  positiveCount: number;
+  totalReports: number;
 };
 
 const HOME_RESYNC_MS = 30_000;
@@ -236,6 +245,9 @@ export default function HomeScreen() {
   const [showCommunityFeed, setShowCommunityFeed] = useState(true);
   const [dailyIntention, setDailyIntention] = useState("peace and clarity");
   const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [circleMembersCount, setCircleMembersCount] = useState(0);
+  const [circlePendingCount, setCirclePendingCount] = useState(0);
+  const [circlePastEvents, setCirclePastEvents] = useState<CirclePastEventSummary[]>([]);
   const [soloOpen, setSoloOpen] = useState(false);
   const [soloIntent, setSoloIntent] = useState("peace, healing, and grounded courage");
   const [soloDurationMin, setSoloDurationMin] = useState<SoloDurationMin>(3);
@@ -327,6 +339,74 @@ export default function HomeScreen() {
       setSoloRecent([]);
     }
   }, []);
+
+  const refreshCircleSnapshot = useCallback(async () => {
+    const uid = String(user?.id ?? "").trim();
+    if (!uid) {
+      setCircleMembersCount(0);
+      setCirclePendingCount(0);
+      setCirclePastEvents([]);
+      return;
+    }
+
+    try {
+      const [summary, pastEventsResp] = await Promise.all([
+        getCircleSummary(),
+        (supabase as any)
+          .from("events")
+          .select("id,title,end_time_utc,total_join_count")
+          .eq("host_user_id", uid)
+          .lt("end_time_utc", new Date().toISOString())
+          .order("end_time_utc", { ascending: false })
+          .limit(8),
+      ]);
+
+      setCircleMembersCount(safeCount(summary.membersCount));
+      setCirclePendingCount(safeCount(summary.pendingIncomingCount));
+
+      const pastEvents = (pastEventsResp?.data ?? []) as any[];
+      const eventIds = pastEvents.map((row) => String(row?.id ?? "")).filter(Boolean);
+      if (!eventIds.length) {
+        setCirclePastEvents([]);
+        return;
+      }
+
+      const { data: outcomeRows } = await (supabase as any)
+        .from("event_outcome_reports")
+        .select("event_id,outcome_type")
+        .in("event_id", eventIds);
+
+      const byEvent = new Map<string, { positive: number; total: number }>();
+      for (const row of outcomeRows ?? []) {
+        const eventId = String((row as any)?.event_id ?? "");
+        if (!eventId) continue;
+        const outcomeType = String((row as any)?.outcome_type ?? "").trim().toLowerCase();
+        const current = byEvent.get(eventId) ?? { positive: 0, total: 0 };
+        current.total += 1;
+        if (outcomeType === "positive") current.positive += 1;
+        byEvent.set(eventId, current);
+      }
+
+      const rows: CirclePastEventSummary[] = pastEvents.map((eventRow) => {
+        const eventId = String(eventRow?.id ?? "");
+        const tally = byEvent.get(eventId) ?? { positive: 0, total: 0 };
+        return {
+          id: eventId,
+          title: String(eventRow?.title ?? "Untitled event"),
+          endTimeUtc: String(eventRow?.end_time_utc ?? ""),
+          totalJoinCount: safeCount(eventRow?.total_join_count),
+          positiveCount: safeCount(tally.positive),
+          totalReports: safeCount(tally.total),
+        };
+      });
+
+      setCirclePastEvents(rows);
+    } catch {
+      setCircleMembersCount(0);
+      setCirclePendingCount(0);
+      setCirclePastEvents([]);
+    }
+  }, [user?.id]);
 
   const recommendedEvents = useMemo(() => {
     const now = Date.now();
@@ -482,8 +562,8 @@ export default function HomeScreen() {
   }, []);
 
   const refreshHomeBundle = useCallback(async () => {
-    await Promise.all([loadHome(), refreshUnreadNotifications(), refreshSoloStats()]);
-  }, [loadHome, refreshUnreadNotifications, refreshSoloStats]);
+    await Promise.all([loadHome(), refreshUnreadNotifications(), refreshSoloStats(), refreshCircleSnapshot()]);
+  }, [loadHome, refreshCircleSnapshot, refreshUnreadNotifications, refreshSoloStats]);
 
   const refreshSoloAiQuota = useCallback(async () => {
     const uid = String(user?.id ?? "").trim();
@@ -958,7 +1038,7 @@ export default function HomeScreen() {
             <Text style={[styles.subtitle, { color: c.text }]}>{ui.subtitle}</Text>
             <View style={[styles.dayPhasePill, { borderColor: c.border, backgroundColor: c.cardAlt }]}>
               <Text style={[styles.dayPhaseText, { color: c.text }]}>
-                {c.dayPeriod === "day" ? "Day Flow - Home" : "Evening Flow - Home"}
+                {c.dayPeriod === "day" ? "Day Flow - Community" : "Evening Flow - Community"}
               </Text>
             </View>
             <View style={[styles.sectionCard, { backgroundColor: c.cardAlt, borderColor: c.border, marginTop: 0 }]}>
@@ -993,6 +1073,65 @@ export default function HomeScreen() {
             >
               <Text style={[styles.secondaryBtnText, { color: c.text }]}>{ui.quickSolo}</Text>
             </Pressable>
+
+            <View style={[styles.sectionCard, { backgroundColor: c.card, borderColor: c.border }]}>
+              <Text style={[styles.sectionMeta, { color: c.textMuted, marginTop: 0 }]}>Egregor Circle</Text>
+              <Text style={[styles.sectionTitle, { color: c.text }]}>
+                {circleMembersCount} member{circleMembersCount === 1 ? "" : "s"}
+              </Text>
+              <Text style={[styles.sectionMeta, { color: c.textMuted }]}>
+                {circlePendingCount > 0
+                  ? `${circlePendingCount} request-to-chat pending approval.`
+                  : "No pending requests right now."}
+              </Text>
+              <View style={styles.row}>
+                <Pressable
+                  style={[styles.primaryBtn, { backgroundColor: c.primary }]}
+                  onPress={() => (navigation.getParent?.() ?? navigation).navigate("EgregorCircle")}
+                >
+                  <Text style={[styles.primaryBtnText, { color: "#FFFFFF" }]}>Open Egregor Circle</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+                  onPress={() => (navigation.getParent?.() ?? navigation).navigate("CommunityChat")}
+                >
+                  <Text style={[styles.secondaryBtnText, { color: c.text }]}>Community Chat</Text>
+                </Pressable>
+              </View>
+            </View>
+
+            <View style={[styles.sectionCard, { backgroundColor: c.card, borderColor: c.border }]}>
+              <Text style={[styles.sectionTitle, { color: c.text }]}>Past Circle Events</Text>
+              <Text style={[styles.sectionMeta, { color: c.textMuted }]}>
+                Track post-event outcomes to show collective intention in action.
+              </Text>
+              {!circlePastEvents.length ? (
+                <Text style={[styles.sectionMeta, { color: c.textMuted, marginTop: 8 }]}>
+                  No completed circle events yet.
+                </Text>
+              ) : (
+                <View style={{ gap: 8, marginTop: 8 }}>
+                  {circlePastEvents.slice(0, 3).map((eventRow) => (
+                    <Pressable
+                      key={eventRow.id}
+                      onPress={() => openEventRoom(eventRow.id)}
+                      style={[styles.feedCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}
+                    >
+                      <Text style={[styles.feedMeta, { color: c.textMuted }]}>
+                        {eventRow.endTimeUtc ? new Date(eventRow.endTimeUtc).toLocaleDateString() : "Completed"} -{" "}
+                        {eventRow.totalJoinCount} joined
+                      </Text>
+                      <Text style={[styles.feedBody, { color: c.text }]} numberOfLines={2}>
+                        {eventRow.title}
+                      </Text>
+                      <Text style={[styles.feedMeta, { color: c.textMuted }]}>
+                        Positive outcomes: {eventRow.positiveCount}/{eventRow.totalReports}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+            </View>
 
             <Pressable
               style={[styles.viewToggleBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
