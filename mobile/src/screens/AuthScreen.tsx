@@ -41,13 +41,17 @@ export default function AuthScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
 
   const canSubmit = useMemo(() => {
     if (!email.trim()) return false;
     if (password.length < 6) return false;
+    if (mode === "signup" && !firstName.trim()) return false;
+    if (mode === "signup" && !lastName.trim()) return false;
     if (mode === "signup" && password !== confirmPassword) return false;
     return !loading;
-  }, [email, password, confirmPassword, mode, loading]);
+  }, [email, password, firstName, lastName, confirmPassword, mode, loading]);
 
   const onChangeEmail = (value: string) => {
     setEmail(value.replace(/\s+/g, "").toLowerCase());
@@ -58,6 +62,14 @@ export default function AuthScreen() {
     if (!e) return Alert.alert("Missing email", "Please enter your email.");
     if (password.length < 6) {
       return Alert.alert("Password too short", "Password must be at least 6 characters.");
+    }
+    const cleanFirstName = firstName.trim();
+    const cleanLastName = lastName.trim();
+    if (mode === "signup" && !cleanFirstName) {
+      return Alert.alert("Missing first name", "Please enter your first name.");
+    }
+    if (mode === "signup" && !cleanLastName) {
+      return Alert.alert("Missing last name", "Please enter your last name.");
     }
     if (mode === "signup" && password !== confirmPassword) {
       return Alert.alert("Password mismatch", "Password and confirmation must match.");
@@ -75,7 +87,14 @@ export default function AuthScreen() {
         const { error } = await supabase.auth.signUp({
           email: e,
           password,
-          options: { emailRedirectTo: AUTH_REDIRECT_URL },
+          options: {
+            emailRedirectTo: AUTH_REDIRECT_URL,
+            data: {
+              first_name: cleanFirstName,
+              last_name: cleanLastName,
+              display_name: `${cleanFirstName} ${cleanLastName}`.trim(),
+            },
+          },
         });
         if (error) {
           Alert.alert("Sign up failed", getAuthErrorMessage("signup", error.message));
@@ -167,6 +186,34 @@ export default function AuthScreen() {
                   <Text style={styles.pillText}>Sign up</Text>
                 </Pressable>
               </View>
+
+              {mode === "signup" ? (
+                <>
+                  <Text style={[styles.label, { color: c.textMuted }]}>First name</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+                    value={firstName}
+                    onChangeText={setFirstName}
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                    placeholder="First name"
+                    placeholderTextColor={c.textMuted}
+                    maxLength={60}
+                  />
+
+                  <Text style={[styles.label, { color: c.textMuted }]}>Last name</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+                    value={lastName}
+                    onChangeText={setLastName}
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                    placeholder="Last name"
+                    placeholderTextColor={c.textMuted}
+                    maxLength={60}
+                  />
+                </>
+              ) : null}
 
               <Text style={[styles.label, { color: c.textMuted }]}>Email</Text>
               <TextInput

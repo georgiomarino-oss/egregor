@@ -185,6 +185,8 @@ export default function ProfileScreen() {
 
   const [displayName, setDisplayName] = useState<string>("");
   const [avatarUrl, setAvatarUrl] = useState<string>("");
+  const [firstName, setFirstName] = useState<string>("");
+  const [lastName, setLastName] = useState<string>("");
   const [streakDays, setStreakDays] = useState(0);
   const [activeDays30, setActiveDays30] = useState(0);
   const [intentionEnergy, setIntentionEnergy] = useState(0);
@@ -496,6 +498,8 @@ export default function ProfileScreen() {
         setEmail("");
         setDisplayName("");
         setAvatarUrl("");
+        setFirstName("");
+        setLastName("");
         setStreakDays(0);
         setActiveDays30(0);
         setIntentionEnergy(0);
@@ -508,16 +512,37 @@ export default function ProfileScreen() {
 
       const { data: prof, error: profErr } = await supabase
         .from("profiles")
-        .select("display_name,avatar_url")
+        .select("display_name,avatar_url,first_name,last_name")
         .eq("id", user.id)
         .maybeSingle();
 
       if (!profErr && prof) {
         setDisplayName(String((prof as any).display_name ?? ""));
         setAvatarUrl(String((prof as any).avatar_url ?? ""));
+        setFirstName(String((prof as any).first_name ?? ""));
+        setLastName(String((prof as any).last_name ?? ""));
+      } else if (profErr) {
+        const { data: fallbackProf, error: fallbackError } = await supabase
+          .from("profiles")
+          .select("display_name,avatar_url")
+          .eq("id", user.id)
+          .maybeSingle();
+        if (!fallbackError && fallbackProf) {
+          setDisplayName(String((fallbackProf as any).display_name ?? ""));
+          setAvatarUrl(String((fallbackProf as any).avatar_url ?? ""));
+          setFirstName("");
+          setLastName("");
+        } else {
+          setDisplayName("");
+          setAvatarUrl("");
+          setFirstName("");
+          setLastName("");
+        }
       } else {
         setDisplayName("");
         setAvatarUrl("");
+        setFirstName("");
+        setLastName("");
       }
 
       await refreshLiveProfileStats(user.id);
@@ -615,13 +640,27 @@ export default function ProfileScreen() {
   }, [email, waitlistEmail]);
 
   const initials = useMemo(() => {
+    const first = firstName.trim();
+    const last = lastName.trim();
+    if (first || last) {
+      const a = first[0] ?? "?";
+      const b = last[0] ?? "";
+      return (a + b).toUpperCase();
+    }
     const name = (displayName || email || "").trim();
     if (!name) return "?";
     const parts = name.split(/\s+/).filter(Boolean);
     const a = parts[0]?.[0] ?? "?";
     const b = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? "" : "";
     return (a + b).toUpperCase();
-  }, [displayName, email]);
+  }, [displayName, email, firstName, lastName]);
+  const fullName = useMemo(() => {
+    const fromNames = [firstName.trim(), lastName.trim()].filter(Boolean).join(" ").trim();
+    if (fromNames) return fromNames;
+    const fromDisplayName = displayName.trim();
+    if (fromDisplayName) return fromDisplayName;
+    return "Unnamed user";
+  }, [displayName, firstName, lastName]);
 
   const clearAutoJoinPrefs = useCallback(async () => {
     try {
@@ -637,6 +676,17 @@ export default function ProfileScreen() {
   const handleSaveProfile = useCallback(async () => {
     if (!userId) {
       Alert.alert("Not signed in", "Sign in again and retry.");
+      return;
+    }
+
+    const nextFirstName = firstName.trim();
+    const nextLastName = lastName.trim();
+    if (nextFirstName.length > 60) {
+      Alert.alert("Validation", "First name must be 60 characters or fewer.");
+      return;
+    }
+    if (nextLastName.length > 60) {
+      Alert.alert("Validation", "Last name must be 60 characters or fewer.");
       return;
     }
 
@@ -663,13 +713,32 @@ export default function ProfileScreen() {
 
     setSavingProfile(true);
     try {
+      const fallbackDisplayName = [nextFirstName, nextLastName].filter(Boolean).join(" ").trim();
       const payload = {
         id: userId,
-        display_name: nextDisplayName || null,
+        first_name: nextFirstName || null,
+        last_name: nextLastName || null,
+        display_name: nextDisplayName || fallbackDisplayName || null,
         avatar_url: nextAvatarUrl || null,
       };
 
-      const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
+      let { error } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
+      if (error) {
+        const schemaMissingNameColumns =
+          String(error.message ?? "").toLowerCase().includes("first_name") ||
+          String(error.message ?? "").toLowerCase().includes("last_name");
+        if (schemaMissingNameColumns) {
+          const legacyPayload = {
+            id: userId,
+            display_name: nextDisplayName || fallbackDisplayName || null,
+            avatar_url: nextAvatarUrl || null,
+          };
+          const legacyResult = await supabase
+            .from("profiles")
+            .upsert(legacyPayload, { onConflict: "id" });
+          error = legacyResult.error;
+        }
+      }
       if (error) {
         Alert.alert("Save failed", error.message);
         return;
@@ -680,7 +749,7 @@ export default function ProfileScreen() {
     } finally {
       setSavingProfile(false);
     }
-  }, [avatarUrl, displayName, load, userId]);
+  }, [avatarUrl, displayName, firstName, lastName, load, userId]);
 
   const handleSignOut = useCallback(async () => {
     Alert.alert("Sign out", "Are you sure you want to sign out?", [
@@ -1176,7 +1245,7 @@ export default function ProfileScreen() {
           )}
 
           <View style={{ flex: 1 }}>
-            <Text style={[styles.name, { color: c.text }]}>{displayName?.trim() ? displayName.trim() : "Unnamed user"}</Text>
+            <Text style={[styles.name, { color: c.text }]}>{fullName}</Text>
 
             {!!email && <Text style={[styles.meta, { color: c.textMuted }]}>{email}</Text>}
 
@@ -1654,6 +1723,32 @@ export default function ProfileScreen() {
 
         <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
           <Text style={[styles.sectionTitle, { color: c.text }]}>Account</Text>
+
+          <Text style={[styles.fieldLabel, { color: c.textMuted }]}>First name</Text>
+          <TextInput
+            style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+            value={firstName}
+            onChangeText={setFirstName}
+            placeholder="Your first name"
+            placeholderTextColor={c.textMuted}
+            autoCapitalize="words"
+            autoCorrect={false}
+            editable={!loading && !savingProfile}
+            maxLength={60}
+          />
+
+          <Text style={[styles.fieldLabel, { color: c.textMuted }]}>Last name</Text>
+          <TextInput
+            style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+            value={lastName}
+            onChangeText={setLastName}
+            placeholder="Your last name"
+            placeholderTextColor={c.textMuted}
+            autoCapitalize="words"
+            autoCorrect={false}
+            editable={!loading && !savingProfile}
+            maxLength={60}
+          />
 
           <Text style={[styles.fieldLabel, { color: c.textMuted }]}>Display name</Text>
           <TextInput

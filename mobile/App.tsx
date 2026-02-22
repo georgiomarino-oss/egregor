@@ -81,13 +81,24 @@ function compactTabLabel(value: string, max = 11) {
   return `${first.slice(0, Math.max(3, max - 1))}.`;
 }
 
-function resolveProfileTabLabel(user: any): string {
+function resolveProfileTabLabel(args: {
+  user: any;
+  profileFirstName?: string;
+  profileDisplayName?: string;
+}): string {
+  const profileFirstName = String(args.profileFirstName ?? "").trim();
+  if (profileFirstName) return compactTabLabel(profileFirstName);
+
+  const profileDisplayName = String(args.profileDisplayName ?? "").trim();
+  if (profileDisplayName) return compactTabLabel(profileDisplayName);
+
+  const user = args.user;
   const metadata = user?.user_metadata ?? {};
   const metadataCandidates = [
+    metadata.first_name,
     metadata.display_name,
     metadata.full_name,
     metadata.name,
-    metadata.first_name,
   ];
   for (const candidate of metadataCandidates) {
     if (typeof candidate === "string" && candidate.trim()) {
@@ -150,12 +161,85 @@ function AuthedTabs() {
   const { theme, highContrast, user } = useAppState();
   const c = getAppColors(theme, highContrast);
   const insets = useSafeAreaInsets();
-  const profileTabLabel = useMemo(() => resolveProfileTabLabel(user), [user]);
+  const [profileFirstName, setProfileFirstName] = useState("");
+  const [profileDisplayName, setProfileDisplayName] = useState("");
+  const profileTabLabel = useMemo(
+    () =>
+      resolveProfileTabLabel({
+        user,
+        profileFirstName,
+        profileDisplayName,
+      }),
+    [profileDisplayName, profileFirstName, user]
+  );
   const tabBottomPadding = Math.max(
     insets.bottom + (Platform.OS === "android" ? 10 : 2),
     Platform.OS === "android" ? 24 : 12
   );
   const tabHeight = 62 + tabBottomPadding;
+
+  useEffect(() => {
+    let cancelled = false;
+    const uid = String(user?.id ?? "").trim();
+    if (!uid) {
+      setProfileFirstName("");
+      setProfileDisplayName("");
+      return;
+    }
+
+    const loadProfileTabName = async () => {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("first_name,display_name")
+        .eq("id", uid)
+        .maybeSingle();
+      if (cancelled) return;
+      if (!error) {
+        setProfileFirstName(String((data as any)?.first_name ?? ""));
+        setProfileDisplayName(String((data as any)?.display_name ?? ""));
+        return;
+      }
+
+      // Fallback for environments where first_name is not migrated yet.
+      const { data: fallbackData, error: fallbackError } = await supabase
+        .from("profiles")
+        .select("display_name")
+        .eq("id", uid)
+        .maybeSingle();
+      if (cancelled || fallbackError) return;
+      setProfileFirstName("");
+      setProfileDisplayName(String((fallbackData as any)?.display_name ?? ""));
+    };
+
+    void loadProfileTabName();
+
+    const channel = supabase
+      .channel(`tabs:profile-name:${uid}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "profiles",
+          filter: `id=eq.${uid}`,
+        },
+        (payload) => {
+          const next = (payload as any)?.new ?? null;
+          if (next) {
+            setProfileFirstName(String((next as any).first_name ?? ""));
+            setProfileDisplayName(String((next as any).display_name ?? ""));
+            return;
+          }
+          void loadProfileTabName();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
 
   const routeToContext = (routeName: string): ScreenContext => {
     if (routeName === "Events") return "group";
