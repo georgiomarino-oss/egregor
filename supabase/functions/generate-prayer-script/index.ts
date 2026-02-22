@@ -1,11 +1,16 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 type RequestBody = {
-  mode?: "event" | "solo";
+  mode?: "event" | "solo" | "solo_voice";
   intention?: string;
   durationMinutes?: number;
   tone?: string;
   language?: string;
+  title?: string;
+  lines?: unknown;
+  voice?: string;
+  speechRate?: number;
+  style?: string;
 };
 
 const CORS_HEADERS = {
@@ -44,6 +49,12 @@ function clampMinutes(value: unknown, fallback = 20) {
   return Math.max(1, Math.min(240, Math.round(n)));
 }
 
+function clampSpeechRate(value: unknown, fallback = 0.85) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0.65, Math.min(1.2, n));
+}
+
 function parseJsonObject(text: string) {
   const raw = String(text ?? "").trim();
   if (!raw) return null;
@@ -61,13 +72,63 @@ function parseJsonObject(text: string) {
   }
 }
 
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function concatByteArrays(parts: Uint8Array[]) {
+  const total = parts.reduce((sum, chunk) => sum + chunk.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of parts) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
+function chunkSpeechLines(lines: string[], maxChars: number) {
+  const chunks: string[] = [];
+  let current = "";
+  for (const raw of lines) {
+    const line = String(raw ?? "").trim();
+    if (!line) continue;
+    const next = current ? `${current}\n\n${line}` : line;
+    if (next.length <= maxChars) {
+      current = next;
+      continue;
+    }
+    if (current) chunks.push(current);
+    if (line.length <= maxChars) {
+      current = line;
+      continue;
+    }
+
+    let start = 0;
+    while (start < line.length) {
+      const slice = line.slice(start, start + maxChars).trim();
+      if (slice) chunks.push(slice);
+      start += maxChars;
+    }
+    current = "";
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
 function fallbackEventPayload(args: {
   intention: string;
   durationMinutes: number;
   tone: string;
   language: string;
 }) {
-  const intention = safeText(args.intention, "Collective peace and clarity.");
+  const intention = safeText(args.intention, "Collective healing, clarity, and peace.");
   const durationMinutes = clampMinutes(args.durationMinutes, 20);
   const tone = safeText(args.tone, "calm").toLowerCase();
   const language = safeText(args.language, "English");
@@ -86,7 +147,7 @@ function fallbackEventPayload(args: {
       {
         name: "Arrival",
         minutes: arrival,
-        text: `Arrive with a ${tone} rhythm and steady breath.`,
+        text: `Arrive with a ${tone} rhythm, steady breath, and shared focus.`,
       },
       {
         name: "Intention",
@@ -96,11 +157,11 @@ function fallbackEventPayload(args: {
       {
         name: "Integration",
         minutes: integration,
-        text: "Hold the intention in silence, gratitude, and grounded focus.",
+        text: "Hold the intention as one field, with gratitude and grounded presence.",
       },
     ],
     speakerNotes:
-      "Use slow pacing, leave short pauses, and keep section transitions gentle.",
+      "Use slow pacing, leave gentle pauses, and keep transitions smooth so the group moves as one.",
   };
 }
 
@@ -127,8 +188,8 @@ function fallbackSoloPayload(args: {
     lines: [
       `${lead} slowly and hold ${intention} in your awareness.`,
       `${lead} in steadiness, breathe out tension, and keep a ${tone} pace.`,
-      "Visualize support and healing surrounding this intention.",
-      "Close with gratitude for what is already shifting.",
+      "Feel yourself connected to the wider field of care, support, and healing.",
+      "Close with gratitude for what is already shifting through collective intention.",
     ],
   };
 }
@@ -204,7 +265,10 @@ async function requireAuthenticatedUser(req: Request) {
 function buildSystemPrompt(mode: "event" | "solo") {
   if (mode === "solo") {
     return [
-      "You are a calm spiritual writing assistant.",
+      "You are Egregor's spiritual guidance writer.",
+      "Voice: grounded, inclusive, uplifting, and practical.",
+      "Use Egregor language of collective intention in action.",
+      "Never mention AI, models, prompts, fallback, or backend systems.",
       "Return JSON only.",
       "Schema:",
       '{ "title": string, "lines": string[] }',
@@ -213,7 +277,10 @@ function buildSystemPrompt(mode: "event" | "solo") {
     ].join(" ");
   }
   return [
-    "You are a calm spiritual writing assistant for synchronized group practice.",
+    "You are Egregor's spiritual guidance writer for synchronized group practice.",
+    "Voice: grounded, inclusive, uplifting, and practical.",
+    "Use Egregor language of collective intention in action.",
+    "Never mention AI, models, prompts, fallback, or backend systems.",
     "Return JSON only.",
     "Schema:",
     '{ "title": string, "intention": string, "durationMinutes": number, "tone": string, "language": string, "sections": [{ "name": string, "minutes": number, "text": string }], "speakerNotes": string }',
@@ -236,6 +303,7 @@ function buildUserPrompt(input: {
     `Tone: ${input.tone}`,
     `Language: ${input.language}`,
     "Keep language spiritually warm, practical, and easy to read aloud.",
+    "Write in Egregor's tone: collective intention, coherence, compassion, and grounded action.",
   ].join("\n");
 }
 
@@ -283,6 +351,97 @@ async function generateWithOpenAI(input: {
   return parsed;
 }
 
+async function generateSoloVoiceWithOpenAI(input: {
+  title: string;
+  intention: string;
+  lines: string[];
+  tone: string;
+  language: string;
+  voice?: string;
+  speechRate: number;
+  style: string;
+}) {
+  const apiKey = String(Deno.env.get("OPENAI_API_KEY") ?? "").trim();
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is not set.");
+  }
+
+  const requestedModel = String(Deno.env.get("OPENAI_TTS_MODEL") ?? "").trim();
+  const modelCandidates = [
+    requestedModel || "gpt-4o-mini-tts",
+    "gpt-4o-mini-tts",
+    "tts-1-hd",
+    "tts-1",
+  ].filter((value, idx, arr) => !!value && arr.indexOf(value) === idx);
+  const voice = clip(safeText(input.voice, String(Deno.env.get("OPENAI_TTS_VOICE") ?? "alloy")), 40);
+  const scriptLines = input.lines
+    .map((line) => clip(safeText(line, ""), 260))
+    .filter((line) => !!line)
+    .slice(0, 140);
+  const fallbackLine = `I hold this prayer for ${input.intention}. I breathe in peace, and I release fear with trust.`;
+  const spokenChunks = chunkSpeechLines(
+    scriptLines.length ? scriptLines : [fallbackLine],
+    1200
+  ).slice(0, 32);
+  if (!spokenChunks.length) {
+    throw new Error("No script lines were available for speech generation.");
+  }
+
+  const errors: string[] = [];
+  for (const model of modelCandidates) {
+    const chunksAudio: Uint8Array[] = [];
+    let mimeType = "audio/mpeg";
+    let modelFailed = false;
+
+    for (const chunk of spokenChunks) {
+      const response = await fetch("https://api.openai.com/v1/audio/speech", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          voice,
+          response_format: "mp3",
+          speed: input.speechRate,
+          ...(model.includes("gpt-4o-mini-tts") && input.style
+            ? { instructions: input.style }
+            : {}),
+          input: chunk,
+        }),
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        errors.push(`${model}: ${response.status} ${clip(body, 220)}`);
+        modelFailed = true;
+        break;
+      }
+
+      const audioBytes = new Uint8Array(await response.arrayBuffer());
+      if (!audioBytes.length) {
+        errors.push(`${model}: empty audio response`);
+        modelFailed = true;
+        break;
+      }
+      mimeType = String(response.headers.get("content-type") ?? "audio/mpeg").trim() || "audio/mpeg";
+      chunksAudio.push(audioBytes);
+    }
+
+    if (modelFailed || !chunksAudio.length) {
+      continue;
+    }
+
+    return {
+      audioBase64: bytesToBase64(concatByteArrays(chunksAudio)),
+      mimeType,
+    };
+  }
+
+  throw new Error(`OpenAI speech request failed. ${clip(errors.join(" | "), 700)}`);
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: CORS_HEADERS });
@@ -292,18 +451,23 @@ Deno.serve(async (req) => {
     return jsonResponse(405, { error: "Method not allowed. Use POST." });
   }
 
-  const auth = await requireAuthenticatedUser(req);
-  if (!auth.ok) {
-    return jsonResponse(auth.status, { error: auth.error });
+  const body = (await req.json().catch(() => ({}))) as RequestBody;
+  const modeRaw = safeText(body.mode, "event").toLowerCase();
+  const mode: "event" | "solo" | "solo_voice" =
+    modeRaw === "solo_voice" ? "solo_voice" : modeRaw === "solo" ? "solo" : "event";
+
+  if (mode !== "solo_voice") {
+    const auth = await requireAuthenticatedUser(req);
+    if (!auth.ok) {
+      return jsonResponse(auth.status, { error: auth.error });
+    }
   }
 
-  const body = (await req.json().catch(() => ({}))) as RequestBody;
-  const mode = body.mode === "solo" ? "solo" : "event";
   const intention = clip(
     safeText(body.intention, "Collective peace and healing."),
     2000
   );
-  const durationMinutes = clampMinutes(body.durationMinutes, mode === "solo" ? 5 : 20);
+  const durationMinutes = clampMinutes(body.durationMinutes, mode === "event" ? 20 : 5);
   const tone = clip(safeText(body.tone, "calm").toLowerCase(), 40);
   const language = clip(safeText(body.language, "English"), 40);
 
@@ -329,6 +493,52 @@ Deno.serve(async (req) => {
         source: "fallback",
         payload: fallback,
         warning: e instanceof Error ? e.message : "OpenAI generation failed.",
+      });
+    }
+  }
+
+  if (mode === "solo_voice") {
+    const title = clip(safeText(body.title, "Solo Guided Prayer"), 120);
+    const lines = Array.isArray(body.lines)
+      ? body.lines
+          .map((line) => clip(safeText(line, ""), 220))
+          .filter((line: string) => !!line)
+          .slice(0, 140)
+      : [];
+    const speechRate = clampSpeechRate(body.speechRate, 0.85);
+    const style = clip(
+      safeText(
+        body.style,
+        "Speak slowly, calmly, and intentionally with gentle pauses between phrases. Keep a warm spiritual tone."
+      ),
+      320
+    );
+
+    try {
+      const payload = await generateSoloVoiceWithOpenAI({
+        title,
+        intention,
+        lines,
+        tone,
+        language,
+        voice: safeText(body.voice, ""),
+        speechRate,
+        style,
+      });
+      return jsonResponse(200, {
+        ok: true,
+        source: "openai",
+        payload,
+      });
+    } catch (e) {
+      return jsonResponse(200, {
+        ok: true,
+        source: "fallback",
+        payload: {
+          audioBase64: "",
+          mimeType: "audio/mpeg",
+        },
+        warning: e instanceof Error ? e.message : "OpenAI speech generation failed.",
       });
     }
   }

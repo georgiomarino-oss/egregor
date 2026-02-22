@@ -1,6 +1,6 @@
 # generate-prayer-script
 
-Supabase Edge Function for AI-powered event scripts and solo guidance.
+Supabase Edge Function for AI-powered event scripts, solo guidance, and solo voice audio.
 
 ## Required environment variables
 
@@ -11,6 +11,8 @@ Supabase Edge Function for AI-powered event scripts and solo guidance.
 
 - `OPENAI_API_KEY` (if missing, function returns deterministic fallback content)
 - `OPENAI_MODEL` (default: `gpt-4.1-mini`)
+- `OPENAI_TTS_MODEL` (default: `gpt-4o-mini-tts`)
+- `OPENAI_TTS_VOICE` (default: `alloy`)
 - `AI_GENERATION_REQUIRE_AUTH` (default: `1`; set to `0` to disable auth requirement)
 
 ## Request
@@ -28,7 +30,19 @@ Supabase Edge Function for AI-powered event scripts and solo guidance.
 }
 ```
 
-- `mode` can be `event` or `solo`.
+- `mode` can be `event`, `solo`, or `solo_voice`.
+- `solo_voice` expects `title` and `lines` and returns base64 audio:
+
+```json
+{
+  "mode": "solo_voice",
+  "title": "Prayer for Family",
+  "intention": "peace, unity, and healing for my family",
+  "tone": "calm",
+  "language": "en-US",
+  "lines": ["Breathe in slowly...", "Release tension..."]
+}
+```
 
 ## Response
 

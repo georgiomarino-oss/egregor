@@ -438,6 +438,11 @@ mobile/.env
 mobile/.env.*
 .DS_Store
 
+# Next.js / web build output
+apps/web/.next/
+apps/web/.turbo/
+apps/web/out/
+
 # Supabase CLI temp
 supabase/.temp/
 
