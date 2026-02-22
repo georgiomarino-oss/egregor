@@ -3,9 +3,11 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  LayoutChangeEvent,
   Modal,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -13,12 +15,13 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useNavigation, useRoute } from "@react-navigation/native";
+import type { RouteProp } from "@react-navigation/native";
 import { supabase } from "../supabase/client";
 import type { Database } from "../types/db";
-import type { RootStackParamList } from "../types";
+import type { RootStackParamList, RootTabParamList } from "../types";
 import { useAppState } from "../state";
-import { getAppColors } from "../theme/appearance";
+import { getScreenColors } from "../theme/appearance";
 import { getUnreadNotificationCount } from "../features/notifications/notificationsRepo";
 import {
   consumeAiGenerationQuota,
@@ -216,8 +219,9 @@ function safeCount(value: unknown): number {
 
 export default function HomeScreen() {
   const { theme, highContrast, user, isCircleMember } = useAppState();
-  const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
+  const c = useMemo(() => getScreenColors(theme, highContrast, "home"), [theme, highContrast]);
   const navigation = useNavigation<any>();
+  const route = useRoute<RouteProp<RootTabParamList, "Home"> | RouteProp<RootTabParamList, "Solo">>();
 
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EventRow[]>([]);
@@ -226,6 +230,8 @@ export default function HomeScreen() {
   const [activeGlobalParticipants, setActiveGlobalParticipants] = useState(0);
   const [activeGlobalEvents, setActiveGlobalEvents] = useState(0);
   const [feedItems, setFeedItems] = useState<CommunityFeedItem[]>([]);
+  const [showFullFeed, setShowFullFeed] = useState(false);
+  const [showExpandedHome, setShowExpandedHome] = useState(false);
   const [preferredLanguage, setPreferredLanguage] = useState<HomeLanguage>("English");
   const [showCommunityFeed, setShowCommunityFeed] = useState(true);
   const [dailyIntention, setDailyIntention] = useState("peace and clarity");
@@ -249,9 +255,34 @@ export default function HomeScreen() {
   const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
   const [voiceAvailable, setVoiceAvailable] = useState<boolean | null>(null);
   const [voicePlaying, setVoicePlaying] = useState(false);
+  const [soloActiveLineIdx, setSoloActiveLineIdx] = useState(-1);
+  const lastJournalPromptTickRef = useRef(0);
   const homeLoadInFlightRef = useRef(false);
   const homeLoadQueuedRef = useRef(false);
   const voiceSessionRef = useRef(0);
+  const soloModalScrollRef = useRef<ScrollView | null>(null);
+  const soloLineYRef = useRef<Record<number, number>>({});
+
+  useFocusEffect(
+    useCallback(() => {
+      const params = ((route as any)?.params ?? {}) as { openSolo?: boolean; soloPreset?: string };
+      const fromSoloTab = (route as any)?.name === "Solo";
+      const wantsOpenSolo = !!params.openSolo || fromSoloTab;
+      const preset = String(params.soloPreset ?? "").trim();
+
+      if (!wantsOpenSolo && !preset) return;
+
+      if (preset) {
+        setSoloIntent(preset);
+        setSoloAiLines(null);
+      }
+      setSoloOpen(true);
+
+      if (params.openSolo || params.soloPreset) {
+        navigation.setParams?.({ openSolo: undefined, soloPreset: undefined });
+      }
+    }, [navigation, route])
+  );
 
   const liveEvents = useMemo(() => {
     const now = Date.now();
@@ -302,8 +333,12 @@ export default function HomeScreen() {
     return [...events]
       .filter((e) => safeTimeMs((e as any).end_time_utc) >= now)
       .sort((a, b) => safeTimeMs((a as any).start_time_utc) - safeTimeMs((b as any).start_time_utc))
-      .slice(0, 6);
+      .slice(0, 4);
   }, [events]);
+  const visibleFeedItems = useMemo(
+    () => (showFullFeed ? feedItems : feedItems.slice(0, 2)),
+    [feedItems, showFullFeed]
+  );
 
   const activeNow = useMemo(() => {
     return liveEvents.reduce((sum, e) => sum + Number((e as any).active_count_snapshot ?? 0), 0);
@@ -575,6 +610,20 @@ export default function HomeScreen() {
       }
     }
     setVoicePlaying(false);
+    setSoloActiveLineIdx(-1);
+  }, []);
+
+  const registerSoloLineLayout = useCallback((idx: number, e: LayoutChangeEvent) => {
+    soloLineYRef.current[idx] = e.nativeEvent.layout.y;
+  }, []);
+
+  const scrollToSoloLine = useCallback((idx: number) => {
+    const y = soloLineYRef.current[idx];
+    if (!Number.isFinite(y)) return;
+    soloModalScrollRef.current?.scrollTo({
+      y: Math.max(0, y - 180),
+      animated: true,
+    });
   }, []);
 
   React.useEffect(() => {
@@ -619,29 +668,48 @@ export default function HomeScreen() {
       Portuguese: `Vamos comecar. Sua intencao e ${intentCore}.`,
       French: `Commencons. Votre intention est ${intentCore}.`,
     };
-    const guidanceText = [introByLanguage[preferredLanguage], ...soloLines]
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .join(" ... ");
-
     const finishIfCurrent = () => {
       if (voiceSessionRef.current !== nextSessionId) return;
       setVoicePlaying(false);
+      setSoloActiveLineIdx(-1);
+    };
+
+    const speakScriptLine = (lineIndex: number) => {
+      if (voiceSessionRef.current !== nextSessionId) return;
+      if (lineIndex >= soloLines.length) {
+        finishIfCurrent();
+        return;
+      }
+
+      setSoloActiveLineIdx(lineIndex);
+      scrollToSoloLine(lineIndex);
+
+      speech.speak(soloLines[lineIndex], {
+        language: speechLanguageCode(preferredLanguage),
+        rate: breathMode === "Deep" ? 0.9 : 0.96,
+        pitch: 1,
+        onDone: () => speakScriptLine(lineIndex + 1),
+        onStopped: finishIfCurrent,
+        onError: () => {
+          finishIfCurrent();
+          Alert.alert("Voice playback failed", "Could not play voice guidance on this device.");
+        },
+      });
     };
 
     setVoicePlaying(true);
-    speech.speak(guidanceText, {
+    speech.speak(introByLanguage[preferredLanguage], {
       language: speechLanguageCode(preferredLanguage),
-      rate: breathMode === "Deep" ? 0.92 : 0.98,
+      rate: breathMode === "Deep" ? 0.9 : 0.96,
       pitch: 1,
-      onDone: finishIfCurrent,
+      onDone: () => speakScriptLine(0),
       onStopped: finishIfCurrent,
       onError: () => {
         finishIfCurrent();
         Alert.alert("Voice playback failed", "Could not play voice guidance on this device.");
       },
     });
-  }, [breathMode, preferredLanguage, soloIntent, soloLines, voiceModeEnabled]);
+  }, [breathMode, preferredLanguage, soloIntent, soloLines, voiceModeEnabled, scrollToSoloLine]);
 
   const closeSoloModal = useCallback(() => {
     stopSoloVoice();
@@ -747,9 +815,7 @@ export default function HomeScreen() {
       });
       Alert.alert(
         "Guidance ready",
-        generated.source === "openai"
-          ? "Generated with OpenAI. Start whenever you are ready."
-          : "Generated with local fallback. Start whenever you are ready."
+        "Your Egregor guidance is ready. Start whenever you are ready."
       );
     } catch (e: any) {
       void logMonetizationEvent({
@@ -764,7 +830,7 @@ export default function HomeScreen() {
           isPremium: isCircleMember,
         },
       });
-      Alert.alert("Could not generate guidance", e?.message ?? "Please try again.");
+      Alert.alert("Could not generate guidance", "Please try again.");
     } finally {
       setSoloGeneratingAi(false);
       void refreshSoloAiQuota();
@@ -811,14 +877,44 @@ export default function HomeScreen() {
     soloIntent,
   ]);
 
+  React.useEffect(() => {
+    if (!soloCompletionTick) return;
+    if (lastJournalPromptTickRef.current === soloCompletionTick) return;
+    lastJournalPromptTickRef.current = soloCompletionTick;
+    const navToUse = navigation.getParent?.() ?? navigation;
+
+    Alert.alert(
+      "Session complete",
+      "Beautiful focus. Would you like to journal this moment while it is still fresh?",
+      [
+        { text: "Later", style: "cancel" },
+        {
+          text: "Journal now",
+          onPress: () =>
+            (navToUse as any).navigate("JournalCompose", {
+              source: "solo",
+              prefill: `Intention: ${soloIntent.trim() || "peace and healing"}\n\nReflection:`,
+            }),
+        },
+      ]
+    );
+  }, [navigation, soloCompletionTick, soloIntent]);
+
   const renderEvent = ({ item }: { item: EventRow }) => {
     const startMs = safeTimeMs((item as any).start_time_utc);
     const label = startMs ? new Date(startMs).toLocaleString() : "Unknown time";
     const isNewsEvent = String((item as any).source ?? "").trim().toLowerCase() === "news";
+    const intentionPreview = truncate(
+      String((item as any).intention_statement ?? "").trim() ||
+        `Host ${shortId(String((item as any).host_user_id ?? ""))}`,
+      120
+    );
     return (
       <Pressable style={[styles.eventCard, { backgroundColor: c.card, borderColor: c.border }]} onPress={() => openEventRoom(item.id)}>
         <View style={styles.eventTitleRow}>
-          <Text style={[styles.eventTitle, { color: c.text }]}>{String((item as any).title ?? "Untitled")}</Text>
+          <Text style={[styles.eventTitle, { color: c.text }]} numberOfLines={2}>
+            {String((item as any).title ?? "Untitled")}
+          </Text>
           {isNewsEvent ? (
             <View style={[styles.eventBadge, { borderColor: c.primary, backgroundColor: c.cardAlt }]}>
               <Text style={[styles.eventBadgeText, { color: c.primary }]}>Crisis response</Text>
@@ -826,10 +922,8 @@ export default function HomeScreen() {
           ) : null}
         </View>
         <Text style={[styles.eventMeta, { color: c.textMuted }]}>{label}</Text>
-        <Text style={[styles.eventMeta, { color: c.text }]}>
-          {(item as any).intention_statement
-            ? String((item as any).intention_statement)
-            : `Host ${shortId(String((item as any).host_user_id ?? ""))}`}
+        <Text style={[styles.eventMeta, { color: c.text }]} numberOfLines={2}>
+          {intentionPreview}
         </Text>
       </Pressable>
     );
@@ -862,9 +956,17 @@ export default function HomeScreen() {
             </View>
             <Text style={[styles.hero, { color: c.text }]}>{ui.hero}</Text>
             <Text style={[styles.subtitle, { color: c.text }]}>{ui.subtitle}</Text>
+            <View style={[styles.dayPhasePill, { borderColor: c.border, backgroundColor: c.cardAlt }]}>
+              <Text style={[styles.dayPhaseText, { color: c.text }]}>
+                {c.dayPeriod === "day" ? "Day Flow - Home" : "Evening Flow - Home"}
+              </Text>
+            </View>
             <View style={[styles.sectionCard, { backgroundColor: c.cardAlt, borderColor: c.border, marginTop: 0 }]}>
               <Text style={[styles.sectionMeta, { color: c.textMuted, marginTop: 0 }]}>Today's intention</Text>
               <Text style={[styles.sectionTitle, { color: c.text }]}>{dailyIntention}</Text>
+              <Text style={[styles.sectionMeta, { color: c.textMuted }]}>
+                Intention becomes impact when many people hold it together.
+              </Text>
             </View>
 
             <View style={styles.row}>
@@ -880,88 +982,124 @@ export default function HomeScreen() {
             </View>
             <Pressable
               style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
-              onPress={() => setSoloOpen(true)}
+              onPress={() =>
+                (navigation.getParent?.() ?? navigation).navigate("SoloSession", {
+                  title: "Quick Solo Prayer",
+                  intention: dailyIntention,
+                  category: "Wellbeing",
+                  minutes: 3,
+                })
+              }
             >
               <Text style={[styles.secondaryBtnText, { color: c.text }]}>{ui.quickSolo}</Text>
             </Pressable>
 
-            <View style={styles.metricsRow}>
-              <View style={[styles.metricCard, { backgroundColor: c.card, borderColor: c.border }]}>
-                <Text style={[styles.metricValue, { color: c.text }]}>{liveEvents.length}</Text>
-                <Text style={[styles.metricLabel, { color: c.textMuted }]}>Live circles</Text>
-              </View>
-              <View style={[styles.metricCard, { backgroundColor: c.card, borderColor: c.border }]}>
-                <Text style={[styles.metricValue, { color: c.text }]}>
-                  {activeGlobalParticipants || activeNow}
-                </Text>
-                <Text style={[styles.metricLabel, { color: c.textMuted }]}>Active now</Text>
-              </View>
-              <View style={[styles.metricCard, { backgroundColor: c.card, borderColor: c.border }]}>
-                <Text style={[styles.metricValue, { color: c.text }]}>{weeklyImpact}</Text>
-                <Text style={[styles.metricLabel, { color: c.textMuted }]}>Prayers this week</Text>
-              </View>
-            </View>
-            <Text style={[styles.liveMeta, { color: c.textMuted }]}>
-              Live presence across {activeGlobalEvents} event{activeGlobalEvents === 1 ? "" : "s"} (last 90 seconds).
-            </Text>
-            <Text style={[styles.liveMeta, { color: c.textMuted }]}>{impactDeltaLabel}</Text>
+            <Pressable
+              style={[styles.viewToggleBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+              onPress={() => setShowExpandedHome((v) => !v)}
+            >
+              <Text style={[styles.viewToggleText, { color: c.text }]}>
+                {showExpandedHome ? "Hide insights" : "Show insights"}
+              </Text>
+            </Pressable>
 
-            <View style={[styles.sectionCard, { backgroundColor: c.card, borderColor: c.border }]}>
-              <Text style={[styles.sectionTitle, { color: c.text }]}>{ui.communityFeed}</Text>
-              {!showCommunityFeed ? (
-                <Text style={[styles.sectionMeta, { color: c.textMuted }]}>
-                  Community feed is hidden by your privacy preference. You can re-enable it in Profile.
-                </Text>
-              ) : (
-                <>
-                  <Text style={[styles.sectionMeta, { color: c.textMuted }]}>
-                    Recent shared intentions from live circles and anonymous journal shares.
+            {showExpandedHome ? (
+              <>
+                <View style={[styles.sectionCard, { backgroundColor: c.card, borderColor: c.border }]}>
+                  <Text style={[styles.sectionMeta, { color: c.textMuted, marginTop: 0 }]}>
+                    {activeGlobalParticipants || activeNow} active across {activeGlobalEvents} live event
+                    {activeGlobalEvents === 1 ? "" : "s"} right now.
                   </Text>
-                  {feedItems.length === 0 ? (
-                    <Text style={[styles.sectionMeta, { color: c.textMuted, marginTop: 8 }]}>{ui.noShares}</Text>
+                  <Text style={[styles.sectionMeta, { color: c.textMuted }]}>{impactDeltaLabel}</Text>
+                </View>
+                <View style={styles.metricsRow}>
+                  <View style={[styles.metricCard, { backgroundColor: c.card, borderColor: c.border }]}>
+                    <Text style={[styles.metricValue, { color: c.text }]}>{liveEvents.length}</Text>
+                    <Text style={[styles.metricLabel, { color: c.textMuted }]}>Live circles</Text>
+                  </View>
+                  <View style={[styles.metricCard, { backgroundColor: c.card, borderColor: c.border }]}>
+                    <Text style={[styles.metricValue, { color: c.text }]}>
+                      {activeGlobalParticipants || activeNow}
+                    </Text>
+                    <Text style={[styles.metricLabel, { color: c.textMuted }]}>Active now</Text>
+                  </View>
+                  <View style={[styles.metricCard, { backgroundColor: c.card, borderColor: c.border }]}>
+                    <Text style={[styles.metricValue, { color: c.text }]}>{weeklyImpact}</Text>
+                    <Text style={[styles.metricLabel, { color: c.textMuted }]}>Prayers this week</Text>
+                  </View>
+                </View>
+                <Text style={[styles.liveMeta, { color: c.textMuted }]}>
+                  Live presence across {activeGlobalEvents} event{activeGlobalEvents === 1 ? "" : "s"} (last 90 seconds).
+                </Text>
+
+                <View style={[styles.sectionCard, { backgroundColor: c.card, borderColor: c.border }]}>
+                  <Text style={[styles.sectionTitle, { color: c.text }]}>{ui.communityFeed}</Text>
+                  {!showCommunityFeed ? (
+                    <Text style={[styles.sectionMeta, { color: c.textMuted }]}>
+                      Community feed is hidden by your privacy preference. You can re-enable it in Profile.
+                    </Text>
                   ) : (
-                    <View style={{ gap: 8, marginTop: 8 }}>
-                      {feedItems.map((item) => {
-                        const canOpenEvent = item.source === "chat" && !!item.eventId && isLikelyUuid(item.eventId);
-                        const metaPrefix =
-                          item.source === "journal"
-                            ? `${item.displayName} in ${item.eventTitle} (anonymous)`
-                            : `${item.displayName} in ${item.eventTitle}`;
+                    <>
+                      <Text style={[styles.sectionMeta, { color: c.textMuted }]}>
+                        Recent shared intentions from live circles and anonymous journal shares.
+                      </Text>
+                      {feedItems.length === 0 ? (
+                        <Text style={[styles.sectionMeta, { color: c.textMuted, marginTop: 8 }]}>{ui.noShares}</Text>
+                      ) : (
+                        <View style={{ gap: 8, marginTop: 8 }}>
+                          {visibleFeedItems.map((item) => {
+                            const canOpenEvent = item.source === "chat" && !!item.eventId && isLikelyUuid(item.eventId);
+                            const metaPrefix =
+                              item.source === "journal"
+                                ? `${item.displayName} in ${item.eventTitle} (anonymous)`
+                                : `${item.displayName} in ${item.eventTitle}`;
 
-                        if (!canOpenEvent) {
-                          return (
-                            <View
-                              key={item.id}
-                              style={[styles.feedCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}
+                            if (!canOpenEvent) {
+                              return (
+                                <View
+                                  key={item.id}
+                                  style={[styles.feedCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}
+                                >
+                                  <Text style={[styles.feedMeta, { color: c.textMuted }]}>
+                                    {metaPrefix} -{" "}
+                                    {item.createdAt ? new Date(item.createdAt).toLocaleTimeString() : "now"}
+                                  </Text>
+                                  <Text style={[styles.feedBody, { color: c.text }]}>{truncate(item.body, 160)}</Text>
+                                </View>
+                              );
+                            }
+
+                            return (
+                              <Pressable
+                                key={item.id}
+                                style={[styles.feedCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}
+                                onPress={() => openEventRoom(item.eventId!)}
+                              >
+                                <Text style={[styles.feedMeta, { color: c.textMuted }]}>
+                                  {metaPrefix} -{" "}
+                                  {item.createdAt ? new Date(item.createdAt).toLocaleTimeString() : "now"}
+                                </Text>
+                                <Text style={[styles.feedBody, { color: c.text }]}>{truncate(item.body, 160)}</Text>
+                              </Pressable>
+                            );
+                          })}
+                          {feedItems.length > 2 ? (
+                            <Pressable
+                              onPress={() => setShowFullFeed((v) => !v)}
+                              style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
                             >
-                              <Text style={[styles.feedMeta, { color: c.textMuted }]}>
-                                {metaPrefix} -{" "}
-                                {item.createdAt ? new Date(item.createdAt).toLocaleTimeString() : "now"}
+                              <Text style={[styles.secondaryBtnText, { color: c.text }]}>
+                                {showFullFeed ? "Show less" : `Show ${feedItems.length - 2} more`}
                               </Text>
-                              <Text style={[styles.feedBody, { color: c.text }]}>{truncate(item.body, 160)}</Text>
-                            </View>
-                          );
-                        }
-
-                        return (
-                          <Pressable
-                            key={item.id}
-                            style={[styles.feedCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}
-                            onPress={() => openEventRoom(item.eventId!)}
-                          >
-                            <Text style={[styles.feedMeta, { color: c.textMuted }]}>
-                              {metaPrefix} -{" "}
-                              {item.createdAt ? new Date(item.createdAt).toLocaleTimeString() : "now"}
-                            </Text>
-                            <Text style={[styles.feedBody, { color: c.text }]}>{truncate(item.body, 160)}</Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
+                            </Pressable>
+                          ) : null}
+                        </View>
+                      )}
+                    </>
                   )}
-                </>
-              )}
-            </View>
+                </View>
+              </>
+            ) : null}
 
             <View style={[styles.sectionCard, { backgroundColor: c.chip, borderColor: c.border }]}>
               <Text style={[styles.sectionTitle, { color: c.chipText }]}>Recommended Events</Text>
@@ -986,202 +1124,217 @@ export default function HomeScreen() {
       <Modal visible={soloOpen} animationType="slide" transparent onRequestClose={closeSoloModal}>
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border }]}>
-            <Text style={[styles.modalTitle, { color: c.text }]}>Solo Guided Prayer</Text>
-            <Text style={[styles.modalMeta, { color: c.textMuted }]}>
-              {soloDurationMin}-minute rhythm. Keep breathing steady and stay with one intention.
-            </Text>
-
-            <View style={styles.row}>
-              {([3, 5, 10] as SoloDurationMin[]).map((minutes) => {
-                const on = soloDurationMin === minutes;
-                return (
-                  <Pressable
-                    key={`dur-${minutes}`}
-                    onPress={() => {
-                      stopSoloVoice();
-                      setSoloRunning(false);
-                      setSoloDurationMin(minutes);
-                      setSoloSecondsLeft(minutes * 60);
-                    }}
-                    style={[
-                      styles.ambientChip,
-                      { borderColor: c.border, backgroundColor: c.cardAlt },
-                      on && { borderColor: c.primary, backgroundColor: c.card },
-                    ]}
-                  >
-                    <Text style={[styles.ambientChipText, { color: c.text }]}>{minutes} min</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            <View style={styles.row}>
-              {(["Silence", "Rain", "Singing Bowls", "Binaural"] as AmbientPreset[]).map((preset) => {
-                const on = ambientPreset === preset;
-                return (
-                  <Pressable
-                    key={preset}
-                    onPress={() => setAmbientPreset(preset)}
-                    style={[
-                      styles.ambientChip,
-                      { borderColor: c.border, backgroundColor: c.cardAlt },
-                      on && { borderColor: c.primary, backgroundColor: c.card },
-                    ]}
-                  >
-                    <Text style={[styles.ambientChipText, { color: c.text }]}>{preset}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            <View style={styles.row}>
-              {(["Calm", "Deep"] as BreathMode[]).map((mode) => {
-                const on = breathMode === mode;
-                return (
-                  <Pressable
-                    key={mode}
-                    onPress={() => setBreathMode(mode)}
-                    style={[
-                      styles.ambientChip,
-                      { borderColor: c.border, backgroundColor: c.cardAlt },
-                      on && { borderColor: c.primary, backgroundColor: c.card },
-                    ]}
-                  >
-                    <Text style={[styles.ambientChipText, { color: c.text }]}>{mode} breath</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            <TextInput
-              value={soloIntent}
-              onChangeText={(next) => {
-                setSoloIntent(next);
-                setSoloAiLines(null);
-              }}
-              placeholder="What intention are you holding right now?"
-              placeholderTextColor={c.textMuted}
-              style={[styles.modalInput, { color: c.text, borderColor: c.border, backgroundColor: c.cardAlt }]}
-              multiline
-            />
-
-            <View style={[styles.timerChip, { borderColor: c.primary, backgroundColor: c.cardAlt }]}>
-              <Text style={[styles.timerValue, { color: c.text }]}>{formatClock(soloSecondsLeft)}</Text>
-            </View>
-            <Text style={[styles.modalMeta, { color: c.textMuted }]}>
-              {soloRunning ? `${breathGuide.phase} for ${breathGuide.secondsRemaining}s` : "Press Start to begin guided breathing"} - Ambient: {ambientPreset}
-            </Text>
-            <Text style={[styles.modalMeta, { color: c.textMuted, marginTop: -6 }]}>
-              Voice mode:{" "}
-              {voiceModeEnabled
-                ? voiceAvailable === false
-                  ? "Enabled, but speech module missing"
-                  : voicePlaying
-                    ? "Speaking now"
-                    : "Ready"
-                : "Off (enable in Profile)"}
-            </Text>
-
-            <View style={{ gap: 6, marginTop: 10 }}>
-              {soloLines.map((line, idx) => (
-                <Text key={`${idx}-${line}`} style={[styles.modalLine, { color: c.text }]}>
-                  {idx + 1}. {line}
-                </Text>
-              ))}
-            </View>
-
-            <View style={styles.row}>
-              <Pressable
-                style={[styles.primaryBtn, { backgroundColor: c.primary }]}
-                onPress={() => {
-                  if (!soloRunning && soloSecondsLeft <= 0) {
-                    setSoloSecondsLeft(selectedDurationSeconds);
-                  }
-                  setSoloRunning((v) => !v);
-                }}
-              >
-                <Text style={[styles.primaryBtnText, { color: "#FFFFFF" }]}>
-                  {soloRunning ? "Pause" : "Start"}
-                </Text>
-              </Pressable>
-              <Pressable
-                style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
-                onPress={() => {
-                  stopSoloVoice();
-                  setSoloRunning(false);
-                  setSoloSecondsLeft(selectedDurationSeconds);
-                }}
-              >
-                <Text style={[styles.secondaryBtnText, { color: c.text }]}>Reset</Text>
-              </Pressable>
-            </View>
-            <View style={styles.row}>
-              <Pressable
-                style={[
-                  styles.secondaryBtn,
-                  { borderColor: c.border, backgroundColor: c.cardAlt },
-                  !voiceModeEnabled && { opacity: 0.6 },
-                ]}
-                onPress={playSoloVoice}
-                disabled={!voiceModeEnabled}
-              >
-                <Text style={[styles.secondaryBtnText, { color: c.text }]}>{voicePlaying ? "Replay voice" : "Play voice"}</Text>
-              </Pressable>
-              <Pressable
-                style={[
-                  styles.secondaryBtn,
-                  { borderColor: c.border, backgroundColor: c.cardAlt },
-                  !voicePlaying && { opacity: 0.6 },
-                ]}
-                onPress={stopSoloVoice}
-                disabled={!voicePlaying}
-              >
-                <Text style={[styles.secondaryBtnText, { color: c.text }]}>Stop voice</Text>
-              </Pressable>
-            </View>
-
-            <Pressable
-              style={[
-                styles.secondaryBtn,
-                { borderColor: c.border, backgroundColor: c.cardAlt, marginTop: 10 },
-                soloGeneratingAi && { opacity: 0.5 },
-              ]}
-              onPress={handleGenerateSoloAi}
-              disabled={soloGeneratingAi}
+            <ScrollView
+              ref={soloModalScrollRef}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.modalScrollContent}
             >
-              <Text style={[styles.secondaryBtnText, { color: c.text }]}>
-                {soloGeneratingAi ? "Generating..." : "Generate AI guidance"}
+              <Text style={[styles.modalTitle, { color: c.text }]}>Solo Guided Prayer</Text>
+              <Text style={[styles.modalMeta, { color: c.textMuted }]}>
+                {soloDurationMin}-minute rhythm. Keep breathing steady and stay with one intention.
               </Text>
-            </Pressable>
-            <Text style={[styles.modalMeta, { color: c.textMuted }]}>
-              {isCircleMember
-                ? "Egregor Circle: unlimited AI solo guidance."
-                : `Free AI solo guidance today: ${soloAiQuota?.usedToday ?? 0}/${soloAiQuota?.limit ?? 2}`}
-            </Text>
 
-            <Pressable
-              style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt, marginTop: 10 }]}
-              onPress={closeSoloModal}
-            >
-              <Text style={[styles.secondaryBtnText, { color: c.text }]}>Close</Text>
-            </Pressable>
-            <Text style={[styles.modalMeta, { color: c.textMuted }]}>
-              Solo this week: {soloSessionsWeek} sessions ({soloMinutesWeek} min)
-            </Text>
-            <Text style={[styles.modalMeta, { color: c.textMuted }]}>
-              Last completed: {lastSoloAt ? new Date(lastSoloAt).toLocaleString() : "No completed session yet"}
-            </Text>
-            {soloRecent.length > 0 ? (
-              <View style={{ gap: 6, marginTop: 4 }}>
-                <Text style={[styles.modalMeta, { color: c.textMuted, marginBottom: 0 }]}>Recent sessions</Text>
-                {soloRecent.map((entry) => (
-                  <Text key={entry.id} style={[styles.modalLine, { color: c.textMuted }]}>
-                    {new Date(entry.completedAt).toLocaleString()} - {entry.minutes} min - {entry.ambientPreset} /{" "}
-                    {entry.breathMode}
+              <View style={styles.row}>
+                {([3, 5, 10] as SoloDurationMin[]).map((minutes) => {
+                  const on = soloDurationMin === minutes;
+                  return (
+                    <Pressable
+                      key={`dur-${minutes}`}
+                      onPress={() => {
+                        stopSoloVoice();
+                        setSoloRunning(false);
+                        setSoloDurationMin(minutes);
+                        setSoloSecondsLeft(minutes * 60);
+                      }}
+                      style={[
+                        styles.ambientChip,
+                        { borderColor: c.border, backgroundColor: c.cardAlt },
+                        on && { borderColor: c.primary, backgroundColor: c.card },
+                      ]}
+                    >
+                      <Text style={[styles.ambientChipText, { color: c.text }]}>{minutes} min</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <View style={styles.row}>
+                {(["Silence", "Rain", "Singing Bowls", "Binaural"] as AmbientPreset[]).map((preset) => {
+                  const on = ambientPreset === preset;
+                  return (
+                    <Pressable
+                      key={preset}
+                      onPress={() => setAmbientPreset(preset)}
+                      style={[
+                        styles.ambientChip,
+                        { borderColor: c.border, backgroundColor: c.cardAlt },
+                        on && { borderColor: c.primary, backgroundColor: c.card },
+                      ]}
+                    >
+                      <Text style={[styles.ambientChipText, { color: c.text }]}>{preset}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <View style={styles.row}>
+                {(["Calm", "Deep"] as BreathMode[]).map((mode) => {
+                  const on = breathMode === mode;
+                  return (
+                    <Pressable
+                      key={mode}
+                      onPress={() => setBreathMode(mode)}
+                      style={[
+                        styles.ambientChip,
+                        { borderColor: c.border, backgroundColor: c.cardAlt },
+                        on && { borderColor: c.primary, backgroundColor: c.card },
+                      ]}
+                    >
+                      <Text style={[styles.ambientChipText, { color: c.text }]}>{mode} breath</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <TextInput
+                value={soloIntent}
+                onChangeText={(next) => {
+                  setSoloIntent(next);
+                  setSoloAiLines(null);
+                }}
+                placeholder="What intention are you holding right now?"
+                placeholderTextColor={c.textMuted}
+                style={[styles.modalInput, { color: c.text, borderColor: c.border, backgroundColor: c.cardAlt }]}
+                multiline
+              />
+
+              <View style={[styles.timerChip, { borderColor: c.primary, backgroundColor: c.cardAlt }]}>
+                <Text style={[styles.timerValue, { color: c.text }]}>{formatClock(soloSecondsLeft)}</Text>
+              </View>
+              <Text style={[styles.modalMeta, { color: c.textMuted }]}>
+                {soloRunning ? `${breathGuide.phase} for ${breathGuide.secondsRemaining}s` : "Press Start to begin guided breathing"} - Ambient: {ambientPreset}
+              </Text>
+              <Text style={[styles.modalMeta, { color: c.textMuted, marginTop: -6 }]}>
+                Voice mode:{" "}
+                {voiceModeEnabled
+                  ? voiceAvailable === false
+                    ? "Enabled, but speech module missing"
+                    : voicePlaying
+                      ? "Speaking now"
+                      : "Ready"
+                  : "Off (enable in Profile)"}
+              </Text>
+
+              <View style={{ gap: 6, marginTop: 10 }}>
+                {soloLines.map((line, idx) => (
+                  <Text
+                    key={`${idx}-${line}`}
+                    onLayout={(e) => registerSoloLineLayout(idx, e)}
+                    style={[
+                      styles.modalLine,
+                      { color: c.text },
+                      idx === soloActiveLineIdx && [styles.modalLineActive, { borderColor: c.primary, backgroundColor: c.cardAlt }],
+                    ]}
+                  >
+                    {idx + 1}. {line}
                   </Text>
                 ))}
               </View>
-            ) : null}
+
+              <View style={styles.row}>
+                <Pressable
+                  style={[styles.primaryBtn, { backgroundColor: c.primary }]}
+                  onPress={() => {
+                    if (!soloRunning && soloSecondsLeft <= 0) {
+                      setSoloSecondsLeft(selectedDurationSeconds);
+                    }
+                    setSoloRunning((v) => !v);
+                  }}
+                >
+                  <Text style={[styles.primaryBtnText, { color: "#FFFFFF" }]}>
+                    {soloRunning ? "Pause" : "Start"}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+                  onPress={() => {
+                    stopSoloVoice();
+                    setSoloRunning(false);
+                    setSoloSecondsLeft(selectedDurationSeconds);
+                  }}
+                >
+                  <Text style={[styles.secondaryBtnText, { color: c.text }]}>Reset</Text>
+                </Pressable>
+              </View>
+              <View style={styles.row}>
+                <Pressable
+                  style={[
+                    styles.secondaryBtn,
+                    { borderColor: c.border, backgroundColor: c.cardAlt },
+                    !voiceModeEnabled && { opacity: 0.6 },
+                  ]}
+                  onPress={playSoloVoice}
+                  disabled={!voiceModeEnabled}
+                >
+                  <Text style={[styles.secondaryBtnText, { color: c.text }]}>{voicePlaying ? "Replay voice" : "Play voice"}</Text>
+                </Pressable>
+                <Pressable
+                  style={[
+                    styles.secondaryBtn,
+                    { borderColor: c.border, backgroundColor: c.cardAlt },
+                    !voicePlaying && { opacity: 0.6 },
+                  ]}
+                  onPress={stopSoloVoice}
+                  disabled={!voicePlaying}
+                >
+                  <Text style={[styles.secondaryBtnText, { color: c.text }]}>Stop voice</Text>
+                </Pressable>
+              </View>
+
+              <Pressable
+                style={[
+                  styles.secondaryBtn,
+                  { borderColor: c.border, backgroundColor: c.cardAlt, marginTop: 10 },
+                  soloGeneratingAi && { opacity: 0.5 },
+                ]}
+                onPress={handleGenerateSoloAi}
+                disabled={soloGeneratingAi}
+              >
+                <Text style={[styles.secondaryBtnText, { color: c.text }]}>
+                  {soloGeneratingAi ? "Generating..." : "Generate AI guidance"}
+                </Text>
+              </Pressable>
+              <Text style={[styles.modalMeta, { color: c.textMuted }]}>
+                {isCircleMember
+                  ? "Egregor Circle: unlimited AI solo guidance."
+                  : `Free AI solo guidance today: ${soloAiQuota?.usedToday ?? 0}/${soloAiQuota?.limit ?? 2}`}
+              </Text>
+
+              <Pressable
+                style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.cardAlt, marginTop: 10 }]}
+                onPress={closeSoloModal}
+              >
+                <Text style={[styles.secondaryBtnText, { color: c.text }]}>Close</Text>
+              </Pressable>
+              <Text style={[styles.modalMeta, { color: c.textMuted }]}>
+                Solo this week: {soloSessionsWeek} sessions ({soloMinutesWeek} min)
+              </Text>
+              <Text style={[styles.modalMeta, { color: c.textMuted }]}>
+                Last completed: {lastSoloAt ? new Date(lastSoloAt).toLocaleString() : "No completed session yet"}
+              </Text>
+              {soloRecent.length > 0 ? (
+                <View style={{ gap: 6, marginTop: 4 }}>
+                  <Text style={[styles.modalMeta, { color: c.textMuted, marginBottom: 0 }]}>Recent sessions</Text>
+                  {soloRecent.map((entry) => (
+                    <Text key={entry.id} style={[styles.modalLine, { color: c.textMuted }]}>
+                      {new Date(entry.completedAt).toLocaleString()} - {entry.minutes} min - {entry.ambientPreset} /{" "}
+                      {entry.breathMode}
+                    </Text>
+                  ))}
+                </View>
+              ) : null}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -1213,7 +1366,16 @@ const styles = StyleSheet.create({
   notifyBtnText: { fontSize: 11, fontWeight: "800" },
   hero: { fontSize: 30, fontWeight: "900", lineHeight: 36 },
   subtitle: { fontSize: 14, lineHeight: 20, marginBottom: 6 },
-  row: { flexDirection: "row", gap: 10 },
+  dayPhasePill: {
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 2,
+  },
+  dayPhaseText: { fontSize: 11, fontWeight: "800" },
+  row: { flexDirection: "row", gap: 10, flexWrap: "wrap" },
   primaryBtn: {
     flex: 1,
     borderRadius: 12,
@@ -1251,6 +1413,19 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { fontSize: 15, fontWeight: "800" },
   sectionMeta: { fontSize: 12, marginTop: 4 },
+  viewToggleBtn: {
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingVertical: 11,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 2,
+  },
+  viewToggleText: {
+    fontSize: 12,
+    fontWeight: "800",
+  },
   feedCard: {
     borderRadius: 10,
     borderWidth: 1,
@@ -1301,7 +1476,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: 16,
     paddingBottom: 28,
+    maxHeight: "92%",
   },
+  modalScrollContent: { paddingBottom: 12 },
   modalTitle: { fontSize: 22, fontWeight: "900" },
   modalMeta: { fontSize: 12, marginTop: 4, marginBottom: 10 },
   modalInput: {
@@ -1321,6 +1498,12 @@ const styles = StyleSheet.create({
   },
   timerValue: { fontSize: 22, fontWeight: "900" },
   modalLine: { fontSize: 13, lineHeight: 19 },
+  modalLineActive: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
   ambientChip: {
     borderRadius: 999,
     borderWidth: 1,

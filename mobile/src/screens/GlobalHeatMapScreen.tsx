@@ -1,5 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Switch, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Animated,
+  FlatList,
+  PanResponder,
+  Pressable,
+  StyleSheet,
+  Switch,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
@@ -44,6 +55,28 @@ const REGIONS: { key: RegionKey; label: string }[] = [
   { key: "Oceania", label: "Oceania" },
   { key: "Global", label: "Global / UTC" },
 ];
+
+const REGION_PLOT: Record<RegionKey, { xPct: number; yPct: number }> = {
+  Americas: { xPct: 20, yPct: 40 },
+  Europe: { xPct: 48, yPct: 29 },
+  Asia: { xPct: 70, yPct: 40 },
+  Africa: { xPct: 50, yPct: 53 },
+  Oceania: { xPct: 83, yPct: 68 },
+  Global: { xPct: 50, yPct: 17 },
+};
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function touchDistance(
+  t0: { pageX: number; pageY: number },
+  t1: { pageX: number; pageY: number }
+) {
+  const dx = t1.pageX - t0.pageX;
+  const dy = t1.pageY - t0.pageY;
+  return Math.sqrt(dx * dx + dy * dy);
+}
 
 function isLikelyUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
@@ -203,8 +236,129 @@ export default function GlobalHeatMapScreen() {
     "idle" | "syncing" | "enabled" | "permission_denied" | "error"
   >("idle");
   const [detectedRegion, setDetectedRegion] = useState<RegionKey | null>(null);
+  const [mapZoomLabel, setMapZoomLabel] = useState("World");
+  const mapScale = useRef(new Animated.Value(1)).current;
+  const mapTranslateX = useRef(new Animated.Value(0)).current;
+  const mapTranslateY = useRef(new Animated.Value(0)).current;
+  const mapScaleValueRef = useRef(1);
+  const mapScaleBaseRef = useRef(1);
+  const mapPanValueRef = useRef({ x: 0, y: 0 });
+  const mapPanBaseRef = useRef({ x: 0, y: 0 });
+  const pinchStartDistanceRef = useRef<number | null>(null);
+  const pulseValuesRef = useRef<Record<RegionKey, Animated.Value>>({
+    Americas: new Animated.Value(0),
+    Europe: new Animated.Value(0),
+    Asia: new Animated.Value(0),
+    Africa: new Animated.Value(0),
+    Oceania: new Animated.Value(0),
+    Global: new Animated.Value(0),
+  });
+  const pulseLoopsRef = useRef<Animated.CompositeAnimation[]>([]);
   const heatLoadInFlightRef = useRef(false);
   const queuedHeatLoadRef = useRef(false);
+
+  const setMapZoomLevel = useCallback(
+    (next: number) => {
+      const clamped = clamp(next, 1, 3);
+      mapScaleValueRef.current = clamped;
+      mapScale.setValue(clamped);
+      if (clamped >= 2.25) {
+        setMapZoomLabel("City");
+      } else if (clamped >= 1.7) {
+        setMapZoomLabel("Country");
+      } else if (clamped >= 1.3) {
+        setMapZoomLabel("Continent");
+      } else {
+        setMapZoomLabel("World");
+      }
+    },
+    [mapScale]
+  );
+
+  const resetMapTransform = useCallback(() => {
+    mapPanValueRef.current = { x: 0, y: 0 };
+    mapPanBaseRef.current = { x: 0, y: 0 };
+    mapTranslateX.setValue(0);
+    mapTranslateY.setValue(0);
+    mapScaleBaseRef.current = 1;
+    setMapZoomLevel(1);
+  }, [mapTranslateX, mapTranslateY, setMapZoomLevel]);
+
+  useEffect(() => {
+    if (pulseLoopsRef.current.length > 0) return;
+
+    const loops: Animated.CompositeAnimation[] = [];
+    for (const region of REGIONS) {
+      const value = pulseValuesRef.current[region.key];
+      const loop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(value, {
+            toValue: 1,
+            duration: 1400,
+            useNativeDriver: true,
+          }),
+          Animated.timing(value, {
+            toValue: 0,
+            duration: 1200,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      loops.push(loop);
+      loop.start();
+    }
+    pulseLoopsRef.current = loops;
+    return () => {
+      for (const loop of loops) loop.stop();
+      pulseLoopsRef.current = [];
+    };
+  }, []);
+
+  const mapPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (evt) => {
+          const touches = evt.nativeEvent.touches;
+          mapPanBaseRef.current = { ...mapPanValueRef.current };
+          if (touches.length >= 2) {
+            pinchStartDistanceRef.current = touchDistance(touches[0], touches[1]);
+            mapScaleBaseRef.current = mapScaleValueRef.current;
+          } else {
+            pinchStartDistanceRef.current = null;
+          }
+        },
+        onPanResponderMove: (evt, gesture) => {
+          const touches = evt.nativeEvent.touches;
+          if (touches.length >= 2) {
+            const currentDistance = touchDistance(touches[0], touches[1]);
+            const baseDistance = pinchStartDistanceRef.current ?? currentDistance;
+            if (!pinchStartDistanceRef.current) pinchStartDistanceRef.current = currentDistance;
+            const ratio = baseDistance > 0 ? currentDistance / baseDistance : 1;
+            setMapZoomLevel(mapScaleBaseRef.current * ratio);
+            return;
+          }
+
+          const nextX = mapPanBaseRef.current.x + gesture.dx;
+          const nextY = mapPanBaseRef.current.y + gesture.dy;
+          mapPanValueRef.current = { x: nextX, y: nextY };
+          mapTranslateX.setValue(nextX);
+          mapTranslateY.setValue(nextY);
+        },
+        onPanResponderRelease: () => {
+          pinchStartDistanceRef.current = null;
+          mapPanBaseRef.current = { ...mapPanValueRef.current };
+          mapScaleBaseRef.current = mapScaleValueRef.current;
+        },
+        onPanResponderTerminate: () => {
+          pinchStartDistanceRef.current = null;
+          mapPanBaseRef.current = { ...mapPanValueRef.current };
+          mapScaleBaseRef.current = mapScaleValueRef.current;
+        },
+      }),
+    [mapTranslateX, mapTranslateY, setMapZoomLevel]
+  );
 
   const openEventRoom = useCallback(
     (eventId: string) => {
@@ -290,15 +444,23 @@ export default function GlobalHeatMapScreen() {
         const { error } = await supabase.rpc("contribute_heatmap_region", { p_region: region });
         if (error) {
           setLocationSyncState("error");
-          if (showErrorAlert) Alert.alert("Location sync failed", error.message);
+          if (showErrorAlert) {
+            Alert.alert(
+              "Location sync failed",
+              "We couldn't update your anonymous region right now. Please try again."
+            );
+          }
           return false;
         }
         setLocationSyncState("enabled");
         return true;
-      } catch (e: any) {
+      } catch {
         setLocationSyncState("error");
         if (showErrorAlert) {
-          Alert.alert("Location sync failed", e?.message ?? "Could not update your anonymous region.");
+          Alert.alert(
+            "Location sync failed",
+            "We couldn't update your anonymous region right now. Please try again."
+          );
         }
         return false;
       }
@@ -422,6 +584,14 @@ export default function GlobalHeatMapScreen() {
     await AsyncStorage.setItem(KEY_LOCATION_OPT_IN, next ? "1" : "0");
   }, [syncLocationContribution]);
 
+  const zoomIn = useCallback(() => {
+    setMapZoomLevel(mapScaleValueRef.current * 1.25);
+  }, [setMapZoomLevel]);
+
+  const zoomOut = useCallback(() => {
+    setMapZoomLevel(mapScaleValueRef.current / 1.25);
+  }, [setMapZoomLevel]);
+
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
       <FlatList
@@ -467,32 +637,132 @@ export default function GlobalHeatMapScreen() {
             </View>
 
             <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
-              <Text style={[styles.sectionTitle, { color: c.text }]}>Regional Intensity</Text>
-              {REGIONS.map((region) => {
-                const value = activeByRegion[region.key] ?? 0;
-                const pct = Math.max(0, Math.min(100, Math.round((value / maxRegionValue) * 100)));
-                const selected = selectedRegion === region.key;
-                return (
-                  <Pressable
-                    key={region.key}
-                    style={[
-                      styles.regionRow,
-                      { borderColor: c.border, backgroundColor: selected ? c.cardAlt : c.background },
-                    ]}
-                    onPress={() => setSelectedRegion(region.key)}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <View style={styles.row}>
-                        <Text style={[styles.regionTitle, { color: c.text }]}>{region.label}</Text>
-                        <Text style={[styles.meta, { color: c.textMuted }]}>{value}</Text>
-                      </View>
-                      <View style={[styles.track, { backgroundColor: c.background, borderColor: c.border }]}>
-                        <View style={[styles.fill, { backgroundColor: c.primary, width: `${pct}%` }]} />
-                      </View>
-                    </View>
-                  </Pressable>
-                );
-              })}
+              <Text style={[styles.sectionTitle, { color: c.text }]}>Live Global Pulse</Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>
+                Pinch or drag to explore. Tap a pulse to focus a region.
+              </Text>
+
+              <View
+                style={[styles.mapViewport, { borderColor: c.border, backgroundColor: c.background }]}
+                {...mapPanResponder.panHandlers}
+              >
+                <Animated.View
+                  style={[
+                    styles.mapCanvas,
+                    {
+                      transform: [
+                        { translateX: mapTranslateX },
+                        { translateY: mapTranslateY },
+                        { scale: mapScale },
+                      ],
+                    },
+                  ]}
+                >
+                  <View style={[styles.continentBlob, styles.continentAmericas, { backgroundColor: c.cardAlt }]} />
+                  <View style={[styles.continentBlob, styles.continentEurope, { backgroundColor: c.cardAlt }]} />
+                  <View style={[styles.continentBlob, styles.continentAfrica, { backgroundColor: c.cardAlt }]} />
+                  <View style={[styles.continentBlob, styles.continentAsia, { backgroundColor: c.cardAlt }]} />
+                  <View style={[styles.continentBlob, styles.continentOceania, { backgroundColor: c.cardAlt }]} />
+
+                  {REGIONS.map((region) => {
+                    const value = activeByRegion[region.key] ?? 0;
+                    const selected = selectedRegion === region.key;
+                    const intensity = value <= 0 ? 0 : value / maxRegionValue;
+                    const pulseSize = 24 + Math.round(intensity * 64);
+                    const pulse = pulseValuesRef.current[region.key];
+
+                    return (
+                      <Pressable
+                        key={region.key}
+                        style={[
+                          styles.pulseAnchor,
+                          {
+                            left: `${REGION_PLOT[region.key].xPct}%`,
+                            top: `${REGION_PLOT[region.key].yPct}%`,
+                          },
+                        ]}
+                        onPress={() => setSelectedRegion(region.key)}
+                      >
+                        {value > 0 ? (
+                          <>
+                            <Animated.View
+                              style={[
+                                styles.pulseRing,
+                                {
+                                  width: pulseSize,
+                                  height: pulseSize,
+                                  marginLeft: -pulseSize / 2,
+                                  marginTop: -pulseSize / 2,
+                                  borderColor: selected ? c.primary : c.textMuted,
+                                  opacity: pulse.interpolate({
+                                    inputRange: [0, 1],
+                                    outputRange: [0.22, 0.56],
+                                  }),
+                                  transform: [
+                                    {
+                                      scale: pulse.interpolate({
+                                        inputRange: [0, 1],
+                                        outputRange: [0.9, 1.35],
+                                      }),
+                                    },
+                                  ],
+                                },
+                              ]}
+                            />
+                            <View
+                              style={[
+                                styles.pulseCore,
+                                {
+                                  backgroundColor: selected ? c.primary : c.text,
+                                  borderColor: c.background,
+                                },
+                              ]}
+                            />
+                          </>
+                        ) : (
+                          <View
+                            style={[
+                              styles.pulseCoreIdle,
+                              {
+                                borderColor: c.border,
+                                backgroundColor: c.card,
+                              },
+                            ]}
+                          />
+                        )}
+                        <Text style={[styles.pulseLabel, { color: selected ? c.text : c.textMuted }]}>
+                          {region.label}
+                        </Text>
+                        <Text style={[styles.pulseCount, { color: c.text }]}>
+                          {value}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </Animated.View>
+              </View>
+
+              <View style={styles.zoomRow}>
+                <Pressable
+                  onPress={zoomOut}
+                  style={[styles.zoomBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+                >
+                  <Text style={[styles.zoomBtnText, { color: c.text }]}>-</Text>
+                </Pressable>
+                <Pressable
+                  onPress={zoomIn}
+                  style={[styles.zoomBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+                >
+                  <Text style={[styles.zoomBtnText, { color: c.text }]}>+</Text>
+                </Pressable>
+                <Pressable
+                  onPress={resetMapTransform}
+                  style={[styles.zoomBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+                >
+                  <Text style={[styles.zoomBtnText, { color: c.text }]}>Reset</Text>
+                </Pressable>
+                <Text style={[styles.meta, { color: c.textMuted }]}>Zoom: {mapZoomLabel}</Text>
+              </View>
             </View>
 
             <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
@@ -570,27 +840,113 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   meta: { fontSize: 12 },
   metric: { fontSize: 20, fontWeight: "900", marginTop: 4 },
-  regionRow: {
-    borderRadius: 10,
-    borderWidth: 1,
-    padding: 10,
-    marginBottom: 8,
-  },
-  regionTitle: { fontSize: 14, fontWeight: "800" },
   windowChip: {
     borderRadius: 999,
     borderWidth: 1,
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
-  track: {
-    marginTop: 6,
-    height: 8,
+  mapViewport: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderRadius: 16,
+    overflow: "hidden",
+    height: 260,
+  },
+  mapCanvas: {
+    width: "100%",
+    height: "100%",
+    backgroundColor: "#0D1328",
+  },
+  continentBlob: {
+    position: "absolute",
+    borderRadius: 40,
+    opacity: 0.82,
+  },
+  continentAmericas: {
+    left: "10%",
+    top: "22%",
+    width: 80,
+    height: 120,
+  },
+  continentEurope: {
+    left: "43%",
+    top: "20%",
+    width: 50,
+    height: 48,
+  },
+  continentAfrica: {
+    left: "46%",
+    top: "38%",
+    width: 56,
+    height: 78,
+  },
+  continentAsia: {
+    left: "58%",
+    top: "24%",
+    width: 95,
+    height: 95,
+  },
+  continentOceania: {
+    left: "78%",
+    top: "58%",
+    width: 44,
+    height: 36,
+  },
+  pulseAnchor: {
+    position: "absolute",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 120,
+    marginLeft: -60,
+    marginTop: -26,
+  },
+  pulseRing: {
+    position: "absolute",
     borderRadius: 999,
     borderWidth: 1,
-    overflow: "hidden",
   },
-  fill: { height: "100%", borderRadius: 999 },
+  pulseCore: {
+    width: 12,
+    height: 12,
+    borderRadius: 999,
+    borderWidth: 2,
+  },
+  pulseCoreIdle: {
+    width: 9,
+    height: 9,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  pulseLabel: {
+    fontSize: 11,
+    marginTop: 6,
+    fontWeight: "700",
+  },
+  pulseCount: {
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  zoomRow: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  zoomBtn: {
+    borderWidth: 1,
+    borderRadius: 999,
+    minWidth: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  zoomBtnText: {
+    fontSize: 12,
+    fontWeight: "900",
+  },
   manifestCard: {
     borderRadius: 10,
     borderWidth: 1,

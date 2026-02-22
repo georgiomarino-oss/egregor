@@ -164,7 +164,7 @@ async function ensureConfigured(userId: string): Promise<EnsureConfiguredResult>
       ok: false,
       available: false,
       configured: false,
-      error: "RevenueCat is available on iOS/Android only.",
+      error: "In-app purchases are available on iOS and Android only.",
     };
   }
 
@@ -174,7 +174,7 @@ async function ensureConfigured(userId: string): Promise<EnsureConfiguredResult>
       ok: false,
       available: false,
       configured: false,
-      error: "RevenueCat API key is not configured.",
+      error: "In-app purchases are not configured for this build.",
     };
   }
 
@@ -184,7 +184,7 @@ async function ensureConfigured(userId: string): Promise<EnsureConfiguredResult>
       ok: false,
       available: false,
       configured: false,
-      error: "RevenueCat native module is unavailable on this build.",
+      error: "In-app purchase services are unavailable on this build.",
     };
   }
 
@@ -221,7 +221,7 @@ async function ensureConfigured(userId: string): Promise<EnsureConfiguredResult>
       ok: false,
       available: true,
       configured: false,
-      error: String(e?.message ?? "RevenueCat setup failed."),
+      error: "We couldn't initialize in-app purchases right now.",
     };
   }
 }
@@ -241,7 +241,7 @@ export async function refreshBillingSnapshot(userId: string): Promise<BillingSna
     return baseSnapshot({
       available: false,
       configured: false,
-      error: "RevenueCat native module is unavailable on this build.",
+      error: "In-app purchase services are unavailable on this build.",
     });
   }
 
@@ -263,7 +263,7 @@ export async function refreshBillingSnapshot(userId: string): Promise<BillingSna
     return baseSnapshot({
       available: true,
       configured: true,
-      error: String(e?.message ?? "Failed to load billing status."),
+      error: "We couldn't load your billing status right now.",
     });
   }
 }
@@ -286,7 +286,7 @@ export async function purchaseCircleMembership(args: {
     return baseSnapshot({
       available: false,
       configured: false,
-      error: "RevenueCat native module is unavailable on this build.",
+      error: "In-app purchase services are unavailable on this build.",
     });
   }
 
@@ -317,7 +317,7 @@ export async function purchaseCircleMembership(args: {
     return baseSnapshot({
       available: true,
       configured: true,
-      error: isCancel ? "Purchase cancelled." : String(e?.message ?? "Purchase failed."),
+      error: isCancel ? "Purchase cancelled." : "We couldn't complete this purchase right now.",
     });
   }
 }
@@ -337,7 +337,7 @@ export async function restoreCircleMembership(userId: string): Promise<BillingSn
     return baseSnapshot({
       available: false,
       configured: false,
-      error: "RevenueCat native module is unavailable on this build.",
+      error: "In-app purchase services are unavailable on this build.",
     });
   }
 
@@ -359,7 +359,7 @@ export async function restoreCircleMembership(userId: string): Promise<BillingSn
     return baseSnapshot({
       available: true,
       configured: true,
-      error: String(e?.message ?? "Restore failed."),
+      error: "We couldn't restore purchases right now.",
     });
   }
 }

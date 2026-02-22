@@ -18,7 +18,7 @@ import {
   AppState,
   AppStateStatus,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { supabase } from "../supabase/client";
 import type { RootStackParamList } from "../types";
@@ -160,6 +160,7 @@ type ProfileMini = Pick<ProfileRow, "id" | "display_name" | "avatar_url">;
 export default function EventRoomScreen({ route, navigation }: Props) {
   const { theme, highContrast } = useAppState();
   const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
+  const insets = useSafeAreaInsets();
   const eventId = route.params?.eventId ?? "";
   const hasValidEventId = !!eventId && isLikelyUuid(eventId);
   const activeEventIdRef = useRef(eventId);
@@ -532,7 +533,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         setEvent(null);
         setScript(null);
         setScriptDbRow(null);
-        Alert.alert("Event load failed", evErr?.message ?? "Event not found");
+        Alert.alert("Event load failed", "This event is unavailable right now.");
         return;
       }
 
@@ -553,10 +554,10 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       setLoading(false);
       // initial scroll only once; assume user wants latest
       jumpToLatestMessages();
-    } catch (e: any) {
+    } catch {
       if (isStale()) return;
       setLoading(false);
-      Alert.alert("Load failed", e?.message ?? "Unknown error");
+      Alert.alert("Load failed", "We couldn't load this event right now. Please try again.");
     }
   }, [
     eventId,
@@ -737,8 +738,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
         try {
           setRunErr("");
           await hostGoTo(idx);
-        } catch (e: any) {
-          setRunErr(e?.message ?? "Failed to change section.");
+        } catch {
+          setRunErr("Couldn't change section right now. Please try again.");
         }
         return;
       }
@@ -757,8 +758,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       try {
         setRunErr("");
         await hostGoTo(hostSectionIdx - 1);
-      } catch (e: any) {
-        setRunErr(e?.message ?? "Failed to move to previous section.");
+      } catch {
+        setRunErr("Couldn't move to the previous section right now.");
       }
       return;
     }
@@ -774,8 +775,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
       try {
         setRunErr("");
         await hostGoTo(hostSectionIdx + 1);
-      } catch (e: any) {
-        setRunErr(e?.message ?? "Failed to move to next section.");
+      } catch {
+        setRunErr("Couldn't move to the next section right now.");
       }
       return;
     }
@@ -809,8 +810,8 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
     try {
       await Share.share({ message: lines.join("\n") });
-    } catch (e: any) {
-      Alert.alert("Share failed", e?.message ?? "Could not open share sheet.");
+    } catch {
+      Alert.alert("Share failed", "Could not open the share sheet right now.");
     }
   }, [event, eventId]);
 
@@ -1246,7 +1247,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 0}
       >
         <FlatList
@@ -1254,6 +1255,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           data={messages}
           keyExtractor={(m) => String((m as any).id)}
           renderItem={renderMsg}
+          style={{ flex: 1 }}
           refreshing={loading}
           onRefresh={loadEventRoom}
           ListHeaderComponent={Header}
@@ -1262,9 +1264,19 @@ export default function EventRoomScreen({ route, navigation }: Props) {
           onScroll={onChatScroll}
           scrollEventThrottle={16}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
         />
 
-        <View style={[styles.chatComposerDock, { backgroundColor: c.background, borderTopColor: c.border }]}>
+        <View
+          style={[
+            styles.chatComposerDock,
+            {
+              backgroundColor: c.background,
+              borderTopColor: c.border,
+              paddingBottom: Math.max(insets.bottom, 10),
+            },
+          ]}
+        >
           {pendingMessageCount > 0 ? (
             <Pressable style={[styles.newMessagesBadge, { backgroundColor: c.primary, borderColor: c.primary }]} onPress={jumpToLatestMessages}>
               <Text style={styles.newMessagesBadgeText}>
@@ -1298,11 +1310,14 @@ export default function EventRoomScreen({ route, navigation }: Props) {
             <TextInput
               value={chatText}
               onChangeText={setChatText}
+              onFocus={jumpToLatestMessages}
               style={[styles.chatInput, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
               placeholder="Message..."
               placeholderTextColor={c.textMuted}
               maxLength={CHAT_MAX_CHARS}
               multiline
+              textAlignVertical="top"
+              blurOnSubmit={false}
             />
             <Text style={[styles.chatCounter, { color: c.textMuted }, chatChars > CHAT_MAX_CHARS * 0.9 && styles.chatCounterWarn]}>
               {chatChars}/{CHAT_MAX_CHARS}
@@ -1323,7 +1338,7 @@ export default function EventRoomScreen({ route, navigation }: Props) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B1020" },
-  content: { padding: 16, paddingBottom: 120 },
+  content: { padding: 16, paddingBottom: 16 },
 
   center: { flex: 1, justifyContent: "center", alignItems: "center", gap: 10 },
 
@@ -1531,12 +1546,9 @@ const styles = StyleSheet.create({
 
   // Docked composer (outside FlatList)
   chatComposerDock: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    padding: 12,
-    paddingBottom: 14,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 10,
     backgroundColor: "#0B1020",
     borderTopWidth: 1,
     borderTopColor: "#243258",

@@ -6,6 +6,30 @@ import { useAppState } from "../state";
 import { getAppColors } from "../theme/appearance";
 
 type Mode = "signin" | "signup";
+const AUTH_REDIRECT_URL =
+  process.env.EXPO_PUBLIC_AUTH_REDIRECT_URL?.trim() || "egregor://auth/callback";
+
+function getAuthErrorMessage(mode: Mode, rawMessage: string | undefined) {
+  const message = String(rawMessage ?? "").toLowerCase();
+
+  if (mode === "signin") {
+    if (message.includes("invalid login credentials")) {
+      return "Your email or password is incorrect.";
+    }
+    if (message.includes("email not confirmed")) {
+      return "Please confirm your email address before signing in.";
+    }
+    return "We couldn't sign you in right now. Please try again.";
+  }
+
+  if (message.includes("user already registered")) {
+    return "This email is already registered. Try signing in instead.";
+  }
+  if (message.includes("password")) {
+    return "Please use a stronger password and try again.";
+  }
+  return "We couldn't create your account right now. Please try again.";
+}
 
 export default function AuthScreen() {
   const { user, signOut, theme, highContrast } = useAppState();
@@ -44,19 +68,23 @@ export default function AuthScreen() {
       if (mode === "signin") {
         const { error } = await supabase.auth.signInWithPassword({ email: e, password });
         if (error) {
-          Alert.alert("Sign in failed", error.message);
+          Alert.alert("Sign in failed", getAuthErrorMessage("signin", error.message));
           return;
         }
       } else {
-        const { error } = await supabase.auth.signUp({ email: e, password });
+        const { error } = await supabase.auth.signUp({
+          email: e,
+          password,
+          options: { emailRedirectTo: AUTH_REDIRECT_URL },
+        });
         if (error) {
-          Alert.alert("Sign up failed", error.message);
+          Alert.alert("Sign up failed", getAuthErrorMessage("signup", error.message));
           return;
         }
 
         Alert.alert(
           "Account created",
-          "If email confirmation is enabled in Supabase, check your inbox. If not, you should be signed in immediately."
+          "You are all set. If account confirmation is required, check your inbox for the confirmation link."
         );
       }
     } finally {
@@ -68,8 +96,8 @@ export default function AuthScreen() {
     setLoading(true);
     try {
       await signOut();
-    } catch (e: any) {
-      Alert.alert("Sign out failed", e?.message ?? "Unknown error");
+    } catch {
+      Alert.alert("Sign out failed", "We couldn't sign you out right now. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -187,7 +215,7 @@ export default function AuthScreen() {
               </Pressable>
 
               <Text style={[styles.hint, { color: c.textMuted }]}>
-                Tip: if you disabled email confirmation in Supabase, Sign up should immediately sign you in.
+                Tip: check your inbox after sign up for a confirmation link if your account needs verification.
               </Text>
             </>
           )}

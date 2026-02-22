@@ -15,13 +15,13 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 
 import { supabase } from "../supabase/client";
 import type { Database } from "../types/db";
-import type { RootStackParamList } from "../types";
+import type { RootStackParamList, RootTabParamList } from "../types";
 import { useAppState } from "../state";
-import { getAppColors } from "../theme/appearance";
+import { getScreenColors } from "../theme/appearance";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type ScriptRow = Database["public"]["Tables"]["scripts"]["Row"];
@@ -163,8 +163,9 @@ export default function EventsScreen() {
   // EventsScreen is inside Tabs. We must navigate to EventRoom using the PARENT Stack navigator,
   // otherwise params can be missing and EventRoom shows "missing or invalid event id".
   const navigation = useNavigation<any>();
+  const route = useRoute<RouteProp<RootTabParamList, "Events">>();
   const { theme, highContrast } = useAppState();
-  const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
+  const c = useMemo(() => getScreenColors(theme, highContrast, "group"), [theme, highContrast]);
 
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<EventRow[]>([]);
@@ -210,6 +211,7 @@ export default function EventsScreen() {
   const [hostedOnly, setHostedOnly] = useState(false);
   const [eventQuery, setEventQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<EventCategory>("All");
+  const [showManagePanels, setShowManagePanels] = useState(false);
 
   // Attach modal state
   const [attachOpen, setAttachOpen] = useState(false);
@@ -223,6 +225,50 @@ export default function EventsScreen() {
   const [editStartLocal, setEditStartLocal] = useState("");
   const [editEndLocal, setEditEndLocal] = useState("");
   const [editTimezone, setEditTimezone] = useState(defaultTimezone());
+
+  useFocusEffect(
+    useCallback(() => {
+      const params = ((route as any)?.params ?? {}) as RootTabParamList["Events"];
+      if (!params) return;
+
+      const hasPrefill =
+        !!params.openCreate ||
+        !!String(params.prefillTitle ?? "").trim() ||
+        !!String(params.prefillIntention ?? "").trim() ||
+        !!String(params.prefillDescription ?? "").trim();
+      if (!hasPrefill) return;
+
+      const minutesRaw = Number(params.prefillMinutes ?? 20);
+      const minutes = Number.isFinite(minutesRaw) ? Math.max(3, Math.min(120, Math.round(minutesRaw))) : 20;
+
+      const nextStart = plusMinutesToLocalInput(10);
+      const nextStartIso = localInputToIso(nextStart) ?? new Date(Date.now() + 10 * 60_000).toISOString();
+      const nextEndIso = new Date(new Date(nextStartIso).getTime() + minutes * 60_000).toISOString();
+
+      const nextTitle = String(params.prefillTitle ?? "").trim();
+      const nextIntention = String(params.prefillIntention ?? "").trim();
+      const nextDescription = String(params.prefillDescription ?? "").trim();
+
+      if (nextTitle) setTitle(nextTitle.slice(0, EVENT_TITLE_MAX));
+      if (nextIntention) setIntention(nextIntention.slice(0, EVENT_INTENTION_MAX));
+      if (nextDescription) setDescription(nextDescription.slice(0, EVENT_DESCRIPTION_MAX));
+      setStartLocal(nextStart);
+      setEndLocal(isoToLocalInput(nextEndIso));
+      setTimezone(defaultTimezone());
+
+      if (params.openCreate) {
+        Alert.alert("Invitation ready", "Your group invitation is prefilled. Review and tap Create event.");
+      }
+
+      navigation.setParams?.({
+        openCreate: undefined,
+        prefillTitle: undefined,
+        prefillIntention: undefined,
+        prefillDescription: undefined,
+        prefillMinutes: undefined,
+      });
+    }, [navigation, route])
+  );
 
   // Ticker: refresh LIVE/Soon/Today labels + sorting while screen is open
   const [nowTick, setNowTick] = useState(0);
@@ -367,7 +413,7 @@ export default function EventsScreen() {
       .order("start_time_utc", { ascending: true });
 
     if (error) {
-      Alert.alert("Load events failed", error.message);
+      Alert.alert("Load events failed", "We couldn't load events right now. Please try again.");
       return;
     }
 
@@ -674,14 +720,14 @@ export default function EventsScreen() {
       const { error } = await supabase.from("events").insert(payload);
 
       if (error) {
-        Alert.alert("Create event failed", error.message);
+        Alert.alert("Create event failed", "We couldn't create this event right now. Please try again.");
         return;
       }
 
       Alert.alert("Success", "Event created.");
       await refreshAll();
-    } catch (e: any) {
-      Alert.alert("Create event failed", e?.message ?? "Unknown error");
+    } catch {
+      Alert.alert("Create event failed", "We couldn't create this event right now. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -705,8 +751,8 @@ export default function EventsScreen() {
       setIsJoined(true);
       setJoinedEventId(selectedEventId);
       setPresenceStatus("Joined live.");
-    } catch (e: any) {
-      setPresenceError(e?.message ?? "Failed to join");
+    } catch {
+      setPresenceError("Couldn't join right now. Please try again.");
     }
   }, [selectedEventId, upsertPresence, joinedEventId, myUserId]);
 
@@ -733,15 +779,15 @@ export default function EventsScreen() {
         .eq("user_id", user.id);
 
       if (error) {
-        setPresenceError(error.message);
+        setPresenceError("Couldn't leave right now. Please try again.");
         return;
       }
 
       setIsJoined(false);
       if (joinedEventId === targetEventId) setJoinedEventId("");
       setPresenceStatus("Left live.");
-    } catch (e: any) {
-      setPresenceError(e?.message ?? "Failed to leave");
+    } catch {
+      setPresenceError("Couldn't leave right now. Please try again.");
     }
   }, [selectedEventId, joinedEventId]);
 
@@ -775,7 +821,7 @@ export default function EventsScreen() {
 
       const { error } = await supabase.from("event_messages").insert(payload);
       if (error) {
-        setEnergyError(error.message);
+        setEnergyError("Couldn't send energy right now. Please try again.");
         return;
       }
 
@@ -821,8 +867,8 @@ export default function EventsScreen() {
       await Share.share({
         message: lines.join("\n"),
       });
-    } catch (e: any) {
-      Alert.alert("Share failed", e?.message ?? "Could not open share sheet.");
+    } catch {
+      Alert.alert("Share failed", "Could not open the share sheet right now.");
     }
   }, []);
 
@@ -872,7 +918,7 @@ export default function EventsScreen() {
           .eq("id", event.id);
 
         if (error) {
-          Alert.alert("Update failed", error.message);
+          Alert.alert("Update failed", "We couldn't update this event right now. Please try again.");
           return;
         }
 
@@ -1020,7 +1066,7 @@ export default function EventsScreen() {
 
       const { error } = await supabase.from("events").update(payload).eq("id", editEvent.id);
       if (error) {
-        Alert.alert("Update failed", error.message);
+        Alert.alert("Update failed", "We couldn't update this event right now. Please try again.");
         return;
       }
 
@@ -1068,7 +1114,7 @@ export default function EventsScreen() {
             try {
               const { error } = await supabase.from("events").delete().eq("id", event.id);
               if (error) {
-                Alert.alert("Delete failed", error.message);
+                Alert.alert("Delete failed", "We couldn't delete this event right now. Please try again.");
                 return;
               }
               if (selectedEventId === event.id) {
@@ -1210,10 +1256,14 @@ export default function EventsScreen() {
   const renderEvent = ({ item }: { item: EventRow }) => {
     void nowTick;
     const nowMs = Date.now();
+    const compactDiscover = !showManagePanels;
 
     const isHost = !!myUserId && item.host_user_id === myUserId;
     const isNewsEvent = String((item as any).source ?? "").trim().toLowerCase() === "news";
     const hostLabel = displayNameForUserId((item as any).host_user_id as string);
+    const eventTitle = String((item as any).title ?? "").trim() || "Untitled event";
+    const intentionSummary = String(item.intention_statement ?? "").trim();
+    const scheduleSummary = `${new Date(item.start_time_utc).toLocaleString()} -> ${new Date(item.end_time_utc).toLocaleString()} (${item.timezone ?? "UTC"})`;
 
     const when = formatWhenLabel(item, nowMs);
 
@@ -1228,108 +1278,116 @@ export default function EventsScreen() {
         ]}
       >
         <View style={styles.cardTopRow}>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <Text style={[styles.cardTitle, { color: c.text }]} numberOfLines={1}>
-                {item.title}
-              </Text>
+          <Text style={[styles.cardTitle, { color: c.text }]} numberOfLines={2}>
+            {eventTitle}
+          </Text>
 
-              {isHost ? (
-                <View style={styles.chip}>
-                  <Text style={styles.chipText}>HOST</Text>
-                </View>
-              ) : null}
-
-              <View
-                style={[
-                  styles.whenPill,
-                  when.kind === "live"
-                    ? styles.whenLive
-                    : when.kind === "soon"
-                    ? styles.whenSoon
-                    : when.kind === "today"
-                    ? styles.whenToday
-                    : when.kind === "past"
-                    ? styles.whenPast
-                    : styles.whenUpcoming,
-                ]}
-              >
-                <Text style={styles.whenText}>{when.text}</Text>
+          <View style={styles.cardTagRow}>
+            {isHost ? (
+              <View style={styles.chip}>
+                <Text style={styles.chipText}>HOST</Text>
               </View>
+            ) : null}
 
-              {isNewsEvent ? (
-                <View style={[styles.whenPill, styles.whenNews]}>
-                  <Text style={styles.whenText}>Crisis response</Text>
-                </View>
-              ) : null}
+            <View
+              style={[
+                styles.whenPill,
+                when.kind === "live"
+                  ? styles.whenLive
+                  : when.kind === "soon"
+                  ? styles.whenSoon
+                  : when.kind === "today"
+                  ? styles.whenToday
+                  : when.kind === "past"
+                  ? styles.whenPast
+                  : styles.whenUpcoming,
+              ]}
+            >
+              <Text style={styles.whenText}>{when.text}</Text>
             </View>
 
-            <Text style={[styles.meta, { color: c.textMuted }]}>
-              Hosted by: <Text style={{ color: c.text, fontWeight: "800" }}>{hostLabel}</Text>
-            </Text>
-          </View>
-
-          <View style={{ flexDirection: "row", gap: 8 }}>
-            <Pressable
-              onPress={() => openRoom(item.id)}
-              style={[styles.smallBtn, styles.smallBtnPrimary, { backgroundColor: c.primary }]}
-            >
-              <Text style={styles.smallBtnText}>Open</Text>
-            </Pressable>
-
-            <Pressable
-              onPress={() => shareEvent(item)}
-              style={[styles.smallBtn, styles.smallBtnGhost]}
-            >
-              <Text style={styles.smallBtnGhostText}>Share</Text>
-            </Pressable>
-
-            {isHost ? (
-              <Pressable
-                onPress={() => openEditForEvent(item)}
-                style={[styles.smallBtn, styles.smallBtnGhost, loading && styles.disabled]}
-                disabled={loading}
-              >
-                <Text style={styles.smallBtnGhostText}>Edit</Text>
-              </Pressable>
-            ) : null}
-
-            {isHost ? (
-              <Pressable
-                onPress={() => openAttachForEvent(item.id)}
-                style={[styles.smallBtn, styles.smallBtnGhost, loading && styles.disabled]}
-                disabled={loading}
-              >
-                <Text style={styles.smallBtnGhostText}>
-                  {item.script_id ? "Change" : "Attach"}
-                </Text>
-              </Pressable>
-            ) : null}
-
-            {isHost ? (
-              <Pressable
-                onPress={() => deleteEvent(item)}
-                style={[styles.smallBtn, styles.smallBtnDanger, loading && styles.disabled]}
-                disabled={loading}
-              >
-                <Text style={styles.smallBtnText}>Delete</Text>
-              </Pressable>
+            {isNewsEvent ? (
+              <View style={[styles.whenPill, styles.whenNews]}>
+                <Text style={styles.whenText}>Crisis response</Text>
+              </View>
             ) : null}
           </View>
+
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            Hosted by: <Text style={{ color: c.text, fontWeight: "800" }}>{hostLabel}</Text>
+          </Text>
         </View>
 
-        {!!item.description && <Text style={[styles.cardText, { color: c.text }]}>{item.description}</Text>}
+        <View style={styles.cardActionRow}>
+          <Pressable
+            onPress={() => openRoom(item.id)}
+            style={[styles.smallBtn, styles.smallBtnPrimary, { backgroundColor: c.primary }]}
+          >
+            <Text style={[styles.smallBtnText, { color: "#FFFFFF" }]}>Open</Text>
+          </Pressable>
 
-        <Text style={[styles.cardText, { color: c.text }]}>Intention: {item.intention_statement}</Text>
+          <Pressable
+            onPress={() => shareEvent(item)}
+            style={[styles.smallBtn, styles.smallBtnGhost, { borderColor: c.border }]}
+          >
+            <Text style={[styles.smallBtnGhostText, { color: c.text }]}>Share</Text>
+          </Pressable>
 
-        <Text style={[styles.meta, { color: c.textMuted }]}>{new Date(item.start_time_utc).toLocaleString()} {"->"} {new Date(item.end_time_utc).toLocaleString()} ({item.timezone ?? "UTC"})</Text>
+          {isHost && !compactDiscover ? (
+            <Pressable
+              onPress={() => openEditForEvent(item)}
+              style={[styles.smallBtn, styles.smallBtnGhost, { borderColor: c.border }, loading && styles.disabled]}
+              disabled={loading}
+            >
+              <Text style={[styles.smallBtnGhostText, { color: c.text }]}>Edit</Text>
+            </Pressable>
+          ) : null}
 
-        <Text style={[styles.meta, { color: c.textMuted }]}>Duration: {item.duration_minutes ?? 0} min</Text>
+          {isHost && !compactDiscover ? (
+            <Pressable
+              onPress={() => openAttachForEvent(item.id)}
+              style={[styles.smallBtn, styles.smallBtnGhost, { borderColor: c.border }, loading && styles.disabled]}
+              disabled={loading}
+            >
+              <Text style={[styles.smallBtnGhostText, { color: c.text }]}>
+                {item.script_id ? "Change" : "Attach"}
+              </Text>
+            </Pressable>
+          ) : null}
 
-        <Text style={[styles.meta, { color: c.textMuted }]}>Active snapshot: {item.active_count_snapshot ?? 0} | Total joined: {" "}{item.total_join_count ?? 0}</Text>
+          {isHost && !compactDiscover ? (
+            <Pressable
+              onPress={() => deleteEvent(item)}
+              style={[styles.smallBtn, styles.smallBtnDanger, loading && styles.disabled]}
+              disabled={loading}
+            >
+              <Text style={[styles.smallBtnText, { color: "#FFFFFF" }]}>Delete</Text>
+            </Pressable>
+          ) : null}
+        </View>
 
-        <Text style={[styles.meta, { color: c.textMuted }]}>Script: {getScriptLabel(item.script_id)}</Text>
-        <Text style={[styles.meta, { color: c.textMuted }]}>ID: {item.id}</Text>
+        <Text style={[styles.cardText, { color: c.text }]} numberOfLines={compactDiscover ? 2 : undefined}>
+          Intention: {intentionSummary || "No intention statement yet."}
+        </Text>
+
+        {compactDiscover ? (
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            {scheduleSummary}
+          </Text>
+        ) : (
+          <>
+            {!!item.description && (
+              <Text style={[styles.cardText, { color: c.text }]}>{item.description}</Text>
+            )}
+            <Text style={[styles.meta, { color: c.textMuted }]}>{scheduleSummary}</Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>Duration: {item.duration_minutes ?? 0} min</Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>
+              Active snapshot: {item.active_count_snapshot ?? 0} | Total joined: {item.total_join_count ?? 0}
+            </Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>Script: {getScriptLabel(item.script_id)}</Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>ID: {item.id}</Text>
+          </>
+        )}
       </Pressable>
     );
   };
@@ -1345,67 +1403,100 @@ export default function EventsScreen() {
         onRefresh={refreshAll}
         ListHeaderComponent={
           <View>
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Create Event</Text>
-
-              <Text style={styles.label}>Title</Text>
-              <TextInput
-                style={styles.input}
-                value={title}
-                onChangeText={setTitle}
-                maxLength={EVENT_TITLE_MAX}
-              />
-              <Text style={styles.meta}>{title.trim().length}/{EVENT_TITLE_MAX}</Text>
-
-              <Text style={styles.label}>Intention</Text>
-              <TextInput
-                style={[styles.input, styles.multi]}
-                value={intention}
-                onChangeText={setIntention}
-                multiline
-                maxLength={EVENT_INTENTION_MAX}
-              />
-              <Text style={styles.meta}>{intention.trim().length}/{EVENT_INTENTION_MAX}</Text>
-
-              <Text style={styles.label}>Description</Text>
-              <TextInput
-                style={[styles.input, styles.multi]}
-                value={description}
-                onChangeText={setDescription}
-                multiline
-                maxLength={EVENT_DESCRIPTION_MAX}
-              />
-              <Text style={styles.meta}>{description.trim().length}/{EVENT_DESCRIPTION_MAX}</Text>
-
-              <Text style={styles.label}>Start local (YYYY-MM-DDTHH:mm)</Text>
-              <TextInput style={styles.input} value={startLocal} onChangeText={setStartLocal} />
-
-              <Text style={styles.label}>End local (YYYY-MM-DDTHH:mm)</Text>
-              <TextInput style={styles.input} value={endLocal} onChangeText={setEndLocal} />
-
-              <Text style={styles.label}>Timezone</Text>
-              <TextInput style={styles.input} value={timezone} onChangeText={setTimezone} />
-
-              <View style={styles.row}>
+            <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+              <Text style={[styles.sectionTitle, { color: c.text }]}>Group Flow</Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>
+                {c.dayPeriod === "day" ? "Day Flow - Group" : "Evening Flow - Group"}
+              </Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>
+                Collective intention in action. Discover mode keeps this screen focused on active and upcoming events.
+              </Text>
+              <View style={styles.filterRow}>
                 <Pressable
-                  style={[styles.btn, styles.btnPrimary, loading && styles.disabled]}
-                  onPress={handleCreateEvent}
-                  disabled={loading}
+                  onPress={() => setShowManagePanels(false)}
+                  style={[
+                    styles.filterPill,
+                    !showManagePanels ? styles.filterPillOn : styles.filterPillOff,
+                  ]}
                 >
-                  <Text style={styles.btnText}>{loading ? "Working..." : "Create event"}</Text>
+                  <Text style={!showManagePanels ? styles.filterTextOn : styles.filterTextOff}>
+                    Discover
+                  </Text>
                 </Pressable>
-
+                <Pressable
+                  onPress={() => setShowManagePanels(true)}
+                  style={[
+                    styles.filterPill,
+                    showManagePanels ? styles.filterPillOn : styles.filterPillOff,
+                  ]}
+                >
+                  <Text style={showManagePanels ? styles.filterTextOn : styles.filterTextOff}>
+                    Manage
+                  </Text>
+                </Pressable>
                 <Pressable
                   style={[styles.btn, styles.btnGhost, loading && styles.disabled]}
                   onPress={refreshAll}
                   disabled={loading}
                 >
-                  <Text style={styles.btnGhostText}>Refresh</Text>
+                  <Text style={styles.btnGhostText}>{loading ? "Refreshing..." : "Refresh"}</Text>
                 </Pressable>
-
-                {loading ? <ActivityIndicator /> : null}
               </View>
             </View>
+
+            {showManagePanels ? (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Create Event</Text>
+
+                <Text style={styles.label}>Title</Text>
+                <TextInput
+                  style={styles.input}
+                  value={title}
+                  onChangeText={setTitle}
+                  maxLength={EVENT_TITLE_MAX}
+                />
+                <Text style={styles.meta}>{title.trim().length}/{EVENT_TITLE_MAX}</Text>
+
+                <Text style={styles.label}>Intention</Text>
+                <TextInput
+                  style={[styles.input, styles.multi]}
+                  value={intention}
+                  onChangeText={setIntention}
+                  multiline
+                  maxLength={EVENT_INTENTION_MAX}
+                />
+                <Text style={styles.meta}>{intention.trim().length}/{EVENT_INTENTION_MAX}</Text>
+
+                <Text style={styles.label}>Description</Text>
+                <TextInput
+                  style={[styles.input, styles.multi]}
+                  value={description}
+                  onChangeText={setDescription}
+                  multiline
+                  maxLength={EVENT_DESCRIPTION_MAX}
+                />
+                <Text style={styles.meta}>{description.trim().length}/{EVENT_DESCRIPTION_MAX}</Text>
+
+                <Text style={styles.label}>Start local (YYYY-MM-DDTHH:mm)</Text>
+                <TextInput style={styles.input} value={startLocal} onChangeText={setStartLocal} />
+
+                <Text style={styles.label}>End local (YYYY-MM-DDTHH:mm)</Text>
+                <TextInput style={styles.input} value={endLocal} onChangeText={setEndLocal} />
+
+                <Text style={styles.label}>Timezone</Text>
+                <TextInput style={styles.input} value={timezone} onChangeText={setTimezone} />
+
+                <View style={styles.row}>
+                  <Pressable
+                    style={[styles.btn, styles.btnPrimary, loading && styles.disabled]}
+                    onPress={handleCreateEvent}
+                    disabled={loading}
+                  >
+                    <Text style={styles.btnText}>{loading ? "Working..." : "Create event"}</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
 
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Filters</Text>
@@ -1469,85 +1560,87 @@ export default function EventsScreen() {
               </Text>
             </View>
 
-            <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
-              <Text style={[styles.sectionTitle, { color: c.text }]}>Live Presence</Text>
-              <Text style={[styles.meta, { color: c.textMuted }]}>
-                Selected: {selectedEvent ? selectedEvent.title : "(none)"}
-              </Text>
-              <Text style={[styles.meta, { color: c.textMuted }]}>
-                Joined:{" "}
-                <Text style={{ color: c.text, fontWeight: "800" }}>
-                  {joinedEvent ? joinedEvent.title : "(not joined)"}
+            {showManagePanels ? (
+              <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+                <Text style={[styles.sectionTitle, { color: c.text }]}>Live Presence</Text>
+                <Text style={[styles.meta, { color: c.textMuted }]}>
+                  Selected: {selectedEvent ? (String((selectedEvent as any).title ?? "").trim() || "Untitled event") : "(none)"}
                 </Text>
-              </Text>
+                <Text style={[styles.meta, { color: c.textMuted }]}>
+                  Joined:{" "}
+                  <Text style={{ color: c.text, fontWeight: "800" }}>
+                    {joinedEvent ? (String((joinedEvent as any).title ?? "").trim() || "Untitled event") : "(not joined)"}
+                  </Text>
+                </Text>
 
-              <View style={styles.row}>
-                <Pressable
-                  style={[
-                    styles.btn,
-                    styles.btnPrimary,
-                    { backgroundColor: c.primary },
-                    (!selectedEventId || isJoined) && styles.disabled,
-                  ]}
-                  onPress={handleJoin}
-                  disabled={!selectedEventId || isJoined}
-                >
-                  <Text style={styles.btnText}>Join live</Text>
-                </Pressable>
-
-                <Pressable
-                  style={[
-                    styles.btn,
-                    styles.btnGhost,
-                    { borderColor: c.border },
-                    (!selectedEventId || !isJoined) && styles.disabled,
-                  ]}
-                  onPress={handleLeave}
-                  disabled={!selectedEventId || !isJoined}
-                >
-                  <Text style={[styles.btnGhostText, { color: c.text }]}>Leave live</Text>
-                </Pressable>
-
-                <Pressable
-                  style={[styles.btn, styles.btnGhost, { borderColor: c.border }, !selectedEventId && styles.disabled]}
-                  onPress={() => {
-                    if (!selectedEventId) {
-                      Alert.alert("Select event", "Please select an event first.");
-                      return;
-                    }
-                    openRoom(selectedEventId);
-                  }}
-                  disabled={!selectedEventId}
-                >
-                  <Text style={[styles.btnGhostText, { color: c.text }]}>Open room</Text>
-                </Pressable>
-              </View>
-
-              <View style={styles.row}>
-                {[1, 3, 7].map((amount) => (
+                <View style={styles.row}>
                   <Pressable
-                    key={amount}
+                    style={[
+                      styles.btn,
+                      styles.btnPrimary,
+                      { backgroundColor: c.primary },
+                      (!selectedEventId || isJoined) && styles.disabled,
+                    ]}
+                    onPress={handleJoin}
+                    disabled={!selectedEventId || isJoined}
+                  >
+                    <Text style={styles.btnText}>Join live</Text>
+                  </Pressable>
+
+                  <Pressable
                     style={[
                       styles.btn,
                       styles.btnGhost,
                       { borderColor: c.border },
-                      (!selectedEventId || !!sendingEnergy) && styles.disabled,
+                      (!selectedEventId || !isJoined) && styles.disabled,
                     ]}
-                    onPress={() => void handleSendEnergy(amount)}
-                    disabled={!selectedEventId || !!sendingEnergy}
+                    onPress={handleLeave}
+                    disabled={!selectedEventId || !isJoined}
                   >
-                    <Text style={[styles.btnGhostText, { color: c.text }]}>
-                      {sendingEnergy === amount ? "Sending..." : `+${amount} energy`}
-                    </Text>
+                    <Text style={[styles.btnGhostText, { color: c.text }]}>Leave live</Text>
                   </Pressable>
-                ))}
-              </View>
 
-              {!!presenceStatus && <Text style={styles.ok}>{presenceStatus}</Text>}
-              {!!presenceError && <Text style={styles.err}>{presenceError}</Text>}
-              {!!energyStatus && <Text style={styles.ok}>{energyStatus}</Text>}
-              {!!energyError && <Text style={styles.err}>{energyError}</Text>}
-            </View>
+                  <Pressable
+                    style={[styles.btn, styles.btnGhost, { borderColor: c.border }, !selectedEventId && styles.disabled]}
+                    onPress={() => {
+                      if (!selectedEventId) {
+                        Alert.alert("Select event", "Please select an event first.");
+                        return;
+                      }
+                      openRoom(selectedEventId);
+                    }}
+                    disabled={!selectedEventId}
+                  >
+                    <Text style={[styles.btnGhostText, { color: c.text }]}>Open room</Text>
+                  </Pressable>
+                </View>
+
+                <View style={styles.row}>
+                  {[1, 3, 7].map((amount) => (
+                    <Pressable
+                      key={amount}
+                      style={[
+                        styles.btn,
+                        styles.btnGhost,
+                        { borderColor: c.border },
+                        (!selectedEventId || !!sendingEnergy) && styles.disabled,
+                      ]}
+                      onPress={() => void handleSendEnergy(amount)}
+                      disabled={!selectedEventId || !!sendingEnergy}
+                    >
+                      <Text style={[styles.btnGhostText, { color: c.text }]}>
+                        {sendingEnergy === amount ? "Sending..." : `+${amount} energy`}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+
+                {!!presenceStatus && <Text style={styles.ok}>{presenceStatus}</Text>}
+                {!!presenceError && <Text style={styles.err}>{presenceError}</Text>}
+                {!!energyStatus && <Text style={styles.ok}>{energyStatus}</Text>}
+                {!!energyError && <Text style={styles.err}>{energyError}</Text>}
+              </View>
+            ) : null}
 
             <Text style={[styles.sectionTitle, { color: c.text }]}>All Events</Text>
           </View>
@@ -1797,16 +1890,14 @@ const styles = StyleSheet.create({
   },
   cardSelected: { borderColor: "#6EA1FF", backgroundColor: "#1A2C5F" },
   cardTopRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: 10,
+    gap: 8,
   },
+  cardTagRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  cardActionRow: { flexDirection: "row", gap: 8, flexWrap: "wrap", marginTop: 8 },
   cardTitle: {
     color: "white",
     fontSize: 16,
     fontWeight: "900",
-    maxWidth: 220,
   },
   cardText: { color: "#C6D0F5", marginBottom: 6 },
   meta: { color: "#93A3D9", fontSize: 12, marginTop: 4 },
@@ -1817,6 +1908,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     alignItems: "center",
     justifyContent: "center",
+    minWidth: 72,
+    flexShrink: 0,
   },
   smallBtnPrimary: { backgroundColor: "#5B8CFF" },
   smallBtnGhost: {
@@ -1825,8 +1918,8 @@ const styles = StyleSheet.create({
     borderColor: "#3E4C78",
   },
   smallBtnDanger: { backgroundColor: "#FB7185" },
-  smallBtnText: { color: "white", fontWeight: "800" },
-  smallBtnGhostText: { color: "#C8D3FF", fontWeight: "800" },
+  smallBtnText: { color: "white", fontWeight: "800", fontSize: 12 },
+  smallBtnGhostText: { color: "#C8D3FF", fontWeight: "800", fontSize: 12 },
 
   chip: {
     borderWidth: 1,

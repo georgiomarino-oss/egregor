@@ -6,6 +6,7 @@ import {
   FlatList,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -260,7 +261,7 @@ export default function ScriptsScreen() {
       .order("created_at", { ascending: false });
 
     if (error) {
-      Alert.alert("Load scripts failed", error.message);
+      Alert.alert("Load scripts failed", "We couldn't load scripts right now. Please try again.");
       return;
     }
     setScripts(sortScripts((data ?? []) as ScriptRow[]));
@@ -294,7 +295,7 @@ export default function ScriptsScreen() {
       .order("start_time_utc", { ascending: false });
 
     if (error) {
-      Alert.alert("Load events failed", error.message);
+      Alert.alert("Load events failed", "We couldn't load events right now. Please try again.");
       return;
     }
     setMyEvents(sortEvents((data ?? []) as EventRow[]));
@@ -482,15 +483,15 @@ export default function ScriptsScreen() {
       const { error } = await supabase.from("scripts").insert(payload);
 
       if (error) {
-        Alert.alert("Create script failed", error.message);
+        Alert.alert("Create script failed", "We couldn't create this script right now. Please try again.");
         return;
       }
 
       Alert.alert("Success", "Script created.");
       setCreateSectionsOverride(null);
       await refreshAll();
-    } catch (e: any) {
-      Alert.alert("Create script failed", e?.message ?? "Unknown error");
+    } catch {
+      Alert.alert("Create script failed", "We couldn't create this script right now. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -605,9 +606,7 @@ export default function ScriptsScreen() {
       });
       Alert.alert(
         "AI script ready",
-        generated.source === "openai"
-          ? "Generated with OpenAI. Review and create when ready."
-          : "Generated with local fallback. Review and create when ready."
+        "Your Egregor guidance is ready. Review and create when ready."
       );
     } catch (e: any) {
       void logMonetizationEvent({
@@ -622,7 +621,7 @@ export default function ScriptsScreen() {
           isPremium: isCircleMember,
         },
       });
-      Alert.alert("AI generation failed", e?.message ?? "Could not generate script.");
+      Alert.alert("AI generation failed", "We couldn't generate a script right now. Please try again.");
     } finally {
       setGeneratingAi(false);
       void refreshCreateAiQuota(user.id);
@@ -697,7 +696,7 @@ export default function ScriptsScreen() {
 
       const { error } = await supabase.from("scripts").update(payload as any).eq("id", editingScript.id);
       if (error) {
-        Alert.alert("Update failed", error.message);
+        Alert.alert("Update failed", "We couldn't save these changes right now. Please try again.");
         return;
       }
       setEditOpen(false);
@@ -730,7 +729,7 @@ export default function ScriptsScreen() {
             try {
               const { error } = await supabase.from("scripts").delete().eq("id", script.id);
               if (error) {
-                Alert.alert("Delete failed", error.message);
+                Alert.alert("Delete failed", "We couldn't delete this script right now. Please try again.");
                 return;
               }
               await refreshAll();
@@ -782,7 +781,7 @@ export default function ScriptsScreen() {
 
         const { error } = await supabase.from("scripts").insert(payload);
         if (error) {
-          Alert.alert("Duplicate failed", error.message);
+          Alert.alert("Duplicate failed", "We couldn't duplicate this script right now. Please try again.");
           return;
         }
         await refreshAll();
@@ -819,7 +818,7 @@ export default function ScriptsScreen() {
           .eq("id", event.id);
 
         if (error) {
-          Alert.alert("Update failed", error.message);
+          Alert.alert("Update failed", "We couldn't update this event right now. Please try again.");
           return false;
         }
 
@@ -1231,109 +1230,115 @@ export default function ScriptsScreen() {
       >
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, { backgroundColor: c.background, borderColor: c.border }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: c.text }]}>Edit Script</Text>
-              <Pressable
-                onPress={() => setEditOpen(false)}
-                style={[styles.modalClose, { backgroundColor: c.cardAlt }]}
-                disabled={loading}
-              >
-                <Text style={styles.btnText}>Close</Text>
-              </Pressable>
-            </View>
-
-            <Text style={[styles.label, { color: c.textMuted }]}>Title</Text>
-            <TextInput
-              value={editTitle}
-              onChangeText={setEditTitle}
-              style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
-              placeholder="Script title"
-              placeholderTextColor={c.textMuted}
-              maxLength={SCRIPT_TITLE_MAX}
-            />
-            <Text style={[styles.meta, { color: c.textMuted }]}>{editTitle.trim().length}/{SCRIPT_TITLE_MAX}</Text>
-
-            <Text style={[styles.label, { color: c.textMuted }]}>Intention</Text>
-            <TextInput
-              value={editIntention}
-              onChangeText={setEditIntention}
-              style={[styles.input, styles.multi, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
-              multiline
-              placeholder="What is this script for?"
-              placeholderTextColor={c.textMuted}
-              maxLength={SCRIPT_INTENTION_MAX}
-            />
-            <Text style={[styles.meta, { color: c.textMuted }]}>{editIntention.trim().length}/{SCRIPT_INTENTION_MAX}</Text>
-
-            <View style={styles.row}>
-              <View style={{ flex: 1, minWidth: 140 }}>
-                <Text style={[styles.label, { color: c.textMuted }]}>Duration (minutes)</Text>
-                <TextInput
-                  value={editDurationMinutes}
-                  onChangeText={setEditDurationMinutes}
-                  keyboardType="numeric"
-                  style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
-                  placeholder="20"
-                  placeholderTextColor={c.textMuted}
-                  maxLength={3}
-                />
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.modalScrollContent}
+            >
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: c.text }]}>Edit Script</Text>
+                <Pressable
+                  onPress={() => setEditOpen(false)}
+                  style={[styles.modalClose, { backgroundColor: c.cardAlt }]}
+                  disabled={loading}
+                >
+                  <Text style={styles.btnText}>Close</Text>
+                </Pressable>
               </View>
 
-              <View style={{ flex: 1, minWidth: 140 }}>
-                <Text style={[styles.label, { color: c.textMuted }]}>Tone</Text>
-                <TextInput
-                  value={editTone}
-                  onChangeText={setEditTone}
-                  style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
-                  placeholder="calm"
-                  placeholderTextColor={c.textMuted}
-                  maxLength={SCRIPT_TONE_MAX}
-                />
-              </View>
-            </View>
+              <Text style={[styles.label, { color: c.textMuted }]}>Title</Text>
+              <TextInput
+                value={editTitle}
+                onChangeText={setEditTitle}
+                style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+                placeholder="Script title"
+                placeholderTextColor={c.textMuted}
+                maxLength={SCRIPT_TITLE_MAX}
+              />
+              <Text style={[styles.meta, { color: c.textMuted }]}>{editTitle.trim().length}/{SCRIPT_TITLE_MAX}</Text>
 
-            <Text style={[styles.label, { color: c.textMuted }]}>Language</Text>
-            <View style={styles.row}>
-              {SCRIPT_LANGUAGES.map((lang) => {
-                const on = editLanguage === lang;
-                return (
-                  <Pressable
-                    key={lang}
-                    onPress={() => setEditLanguage(lang)}
-                    style={[
-                      styles.btn,
-                      on ? [styles.btnPrimary, { backgroundColor: c.primary }] : [styles.btnGhost, { borderColor: c.border }],
-                    ]}
-                  >
-                    <Text style={on ? styles.btnText : [styles.btnGhostText, { color: c.textMuted }]}>{lang}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+              <Text style={[styles.label, { color: c.textMuted }]}>Intention</Text>
+              <TextInput
+                value={editIntention}
+                onChangeText={setEditIntention}
+                style={[styles.input, styles.multi, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+                multiline
+                placeholder="What is this script for?"
+                placeholderTextColor={c.textMuted}
+                maxLength={SCRIPT_INTENTION_MAX}
+              />
+              <Text style={[styles.meta, { color: c.textMuted }]}>{editIntention.trim().length}/{SCRIPT_INTENTION_MAX}</Text>
 
-            <Text style={[styles.label, { color: c.textMuted }]}>Section preview</Text>
-            <View style={[styles.section, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
-              {previewEditSections.map((s, idx) => (
-                <View key={`${s.name}-${idx}`} style={{ marginBottom: 8 }}>
-                  <Text style={[styles.meta, { color: c.text }]}>
-                    {idx + 1}. {s.name} ({s.minutes}m)
-                  </Text>
-                  <Text style={[styles.meta, { color: c.textMuted }]} numberOfLines={2}>
-                    {s.text}
-                  </Text>
+              <View style={styles.row}>
+                <View style={{ flex: 1, minWidth: 140 }}>
+                  <Text style={[styles.label, { color: c.textMuted }]}>Duration (minutes)</Text>
+                  <TextInput
+                    value={editDurationMinutes}
+                    onChangeText={setEditDurationMinutes}
+                    keyboardType="numeric"
+                    style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+                    placeholder="20"
+                    placeholderTextColor={c.textMuted}
+                    maxLength={3}
+                  />
                 </View>
-              ))}
-            </View>
 
-            <View style={styles.row}>
-              <Pressable
-                onPress={saveScriptEdit}
-                style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, loading && styles.disabled]}
-                disabled={loading || !editingScript}
-              >
-                <Text style={styles.btnText}>{loading ? "Working..." : "Save changes"}</Text>
-              </Pressable>
-            </View>
+                <View style={{ flex: 1, minWidth: 140 }}>
+                  <Text style={[styles.label, { color: c.textMuted }]}>Tone</Text>
+                  <TextInput
+                    value={editTone}
+                    onChangeText={setEditTone}
+                    style={[styles.input, { backgroundColor: c.cardAlt, borderColor: c.border, color: c.text }]}
+                    placeholder="calm"
+                    placeholderTextColor={c.textMuted}
+                    maxLength={SCRIPT_TONE_MAX}
+                  />
+                </View>
+              </View>
+
+              <Text style={[styles.label, { color: c.textMuted }]}>Language</Text>
+              <View style={styles.row}>
+                {SCRIPT_LANGUAGES.map((lang) => {
+                  const on = editLanguage === lang;
+                  return (
+                    <Pressable
+                      key={lang}
+                      onPress={() => setEditLanguage(lang)}
+                      style={[
+                        styles.btn,
+                        on ? [styles.btnPrimary, { backgroundColor: c.primary }] : [styles.btnGhost, { borderColor: c.border }],
+                      ]}
+                    >
+                      <Text style={on ? styles.btnText : [styles.btnGhostText, { color: c.textMuted }]}>{lang}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <Text style={[styles.label, { color: c.textMuted }]}>Section preview</Text>
+              <View style={[styles.section, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+                {previewEditSections.map((s, idx) => (
+                  <View key={`${s.name}-${idx}`} style={{ marginBottom: 8 }}>
+                    <Text style={[styles.meta, { color: c.text }]}>
+                      {idx + 1}. {s.name} ({s.minutes}m)
+                    </Text>
+                    <Text style={[styles.meta, { color: c.textMuted }]} numberOfLines={2}>
+                      {s.text}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+
+              <View style={styles.row}>
+                <Pressable
+                  onPress={saveScriptEdit}
+                  style={[styles.btn, styles.btnPrimary, { backgroundColor: c.primary }, loading && styles.disabled]}
+                  disabled={loading || !editingScript}
+                >
+                  <Text style={styles.btnText}>{loading ? "Working..." : "Save changes"}</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -1453,6 +1458,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   modalMeta: { color: "#B9C3E6", marginBottom: 10 },
+  modalScrollContent: { paddingBottom: 12 },
 
   eventCard: {
     backgroundColor: "#121A31",

@@ -6,7 +6,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { supabase } from "../supabase/client";
 import { useAppState } from "../state";
-import { getAppColors } from "../theme/appearance";
+import { getScreenColors } from "../theme/appearance";
 import type { RootStackParamList } from "../types";
 import type { Database } from "../types/db";
 import { logMonetizationEvent } from "../features/billing/billingAnalyticsRepo";
@@ -172,7 +172,7 @@ export default function ProfileScreen() {
     restoreCircle,
     signOut,
   } = useAppState();
-  const c = useMemo(() => getAppColors(theme, highContrast), [theme, highContrast]);
+  const c = useMemo(() => getScreenColors(theme, highContrast, "profile"), [theme, highContrast]);
   const [loading, setLoading] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
   const [deletingAccount, setDeletingAccount] = useState(false);
@@ -206,6 +206,8 @@ export default function ProfileScreen() {
   const [soloMinutesWeek, setSoloMinutesWeek] = useState(0);
   const [soloRecent, setSoloRecent] = useState<SoloHistoryEntry[]>([]);
   const [rhythmByDay, setRhythmByDay] = useState<RhythmDay[]>(emptyRhythmDays());
+  const [showInsights, setShowInsights] = useState(false);
+  const [showAdvancedTools, setShowAdvancedTools] = useState(false);
   const statsRefreshInFlightRef = useRef(false);
   const statsRefreshQueuedRef = useRef(false);
   const paywallViewSignatureRef = useRef("");
@@ -1209,54 +1211,73 @@ export default function ProfileScreen() {
           </Text>
         </View>
 
-        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
-          <Text style={[styles.sectionTitle, { color: c.text }]}>Weekly Rhythm</Text>
-          <Text style={[styles.meta, { color: c.textMuted }]}>
-            Presence activity over the last 14 days by weekday.
-          </Text>
-          <View style={{ gap: 6 }}>
-            {rhythmByDay.map((d) => {
-              const max = Math.max(1, ...rhythmByDay.map((x) => x.value));
-              const pct = Math.max(6, Math.round((d.value / max) * 100));
-              return (
-                <View key={d.label} style={styles.row}>
-                  <Text style={[styles.meta, { color: c.textMuted, width: 34 }]}>{d.label}</Text>
-                  <View style={[styles.rhythmTrack, { borderColor: c.border, backgroundColor: c.cardAlt }]}>
-                    <View style={[styles.rhythmFill, { backgroundColor: c.primary, width: `${pct}%` }]} />
-                  </View>
-                  <Text style={[styles.meta, { color: c.text, width: 24, textAlign: "right" }]}>{d.value}</Text>
-                </View>
-              );
-            })}
+        <View style={[styles.sectionToggleCard, { backgroundColor: c.card, borderColor: c.border }]}>
+          <View style={{ flex: 1, gap: 4 }}>
+            <Text style={[styles.sectionTitle, { color: c.text }]}>Insights</Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>
+              Weekly rhythm and collective impact.
+            </Text>
           </View>
+          <Pressable
+            style={[styles.sectionToggleBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+            onPress={() => setShowInsights((v) => !v)}
+          >
+            <Text style={[styles.sectionToggleBtnText, { color: c.text }]}>{showInsights ? "Hide" : "Show"}</Text>
+          </Pressable>
         </View>
 
-        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
-          <Text style={[styles.sectionTitle, { color: c.text }]}>Collective Impact</Text>
-          <View style={styles.statsRow}>
-            <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
-              <Text style={[styles.statValue, { color: c.text }]}>{collectiveImpact.liveEventsNow}</Text>
-              <Text style={[styles.statLabel, { color: c.textMuted }]}>Live circles now</Text>
+        {showInsights ? (
+          <>
+            <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+              <Text style={[styles.sectionTitle, { color: c.text }]}>Weekly Rhythm</Text>
+              <Text style={[styles.meta, { color: c.textMuted }]}>
+                Presence activity over the last 14 days by weekday.
+              </Text>
+              <View style={{ gap: 6 }}>
+                {rhythmByDay.map((d) => {
+                  const max = Math.max(1, ...rhythmByDay.map((x) => x.value));
+                  const pct = Math.max(6, Math.round((d.value / max) * 100));
+                  return (
+                    <View key={d.label} style={styles.row}>
+                      <Text style={[styles.meta, { color: c.textMuted, width: 34 }]}>{d.label}</Text>
+                      <View style={[styles.rhythmTrack, { borderColor: c.border, backgroundColor: c.cardAlt }]}>
+                        <View style={[styles.rhythmFill, { backgroundColor: c.primary, width: `${pct}%` }]} />
+                      </View>
+                      <Text style={[styles.meta, { color: c.text, width: 24, textAlign: "right" }]}>{d.value}</Text>
+                    </View>
+                  );
+                })}
+              </View>
             </View>
-            <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
-              <Text style={[styles.statValue, { color: c.text }]}>{collectiveImpact.activeParticipantsNow}</Text>
-              <Text style={[styles.statLabel, { color: c.textMuted }]}>Active now (90s)</Text>
+
+            <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+              <Text style={[styles.sectionTitle, { color: c.text }]}>Collective Impact</Text>
+              <View style={styles.statsRow}>
+                <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+                  <Text style={[styles.statValue, { color: c.text }]}>{collectiveImpact.liveEventsNow}</Text>
+                  <Text style={[styles.statLabel, { color: c.textMuted }]}>Live circles now</Text>
+                </View>
+                <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+                  <Text style={[styles.statValue, { color: c.text }]}>{collectiveImpact.activeParticipantsNow}</Text>
+                  <Text style={[styles.statLabel, { color: c.textMuted }]}>Active now (90s)</Text>
+                </View>
+              </View>
+              <View style={styles.statsRow}>
+                <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+                  <Text style={[styles.statValue, { color: c.text }]}>{collectiveImpact.prayersWeek}</Text>
+                  <Text style={[styles.statLabel, { color: c.textMuted }]}>Prayers this week</Text>
+                </View>
+                <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
+                  <Text style={[styles.statValue, { color: c.text }]}>{collectiveImpact.sharedIntentionsWeek}</Text>
+                  <Text style={[styles.statLabel, { color: c.textMuted }]}>Shared intentions (7d)</Text>
+                </View>
+              </View>
+              <Text style={[styles.tip, { color: c.textMuted }]}>
+                Snapshot based on global events, presence, and chat activity.
+              </Text>
             </View>
-          </View>
-          <View style={styles.statsRow}>
-            <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
-              <Text style={[styles.statValue, { color: c.text }]}>{collectiveImpact.prayersWeek}</Text>
-              <Text style={[styles.statLabel, { color: c.textMuted }]}>Prayers this week</Text>
-            </View>
-            <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
-              <Text style={[styles.statValue, { color: c.text }]}>{collectiveImpact.sharedIntentionsWeek}</Text>
-              <Text style={[styles.statLabel, { color: c.textMuted }]}>Shared intentions (7d)</Text>
-            </View>
-          </View>
-          <Text style={[styles.tip, { color: c.textMuted }]}>
-            Snapshot based on global events, presence, and chat activity.
-          </Text>
-        </View>
+          </>
+        ) : null}
 
         <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
           <Text style={[styles.sectionTitle, { color: c.text }]}>Manifestation Journal</Text>
@@ -1303,7 +1324,26 @@ export default function ProfileScreen() {
           )}
         </View>
 
-        <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
+        <View style={[styles.sectionToggleCard, { backgroundColor: c.card, borderColor: c.border }]}>
+          <View style={{ flex: 1, gap: 4 }}>
+            <Text style={[styles.sectionTitle, { color: c.text }]}>Advanced Tools</Text>
+            <Text style={[styles.meta, { color: c.textMuted }]}>
+              Solo history, preferences, circles, themes, and billing.
+            </Text>
+          </View>
+          <Pressable
+            style={[styles.sectionToggleBtn, { borderColor: c.border, backgroundColor: c.cardAlt }]}
+            onPress={() => setShowAdvancedTools((v) => !v)}
+          >
+            <Text style={[styles.sectionToggleBtnText, { color: c.text }]}>
+              {showAdvancedTools ? "Hide" : "Show"}
+            </Text>
+          </Pressable>
+        </View>
+
+        {showAdvancedTools ? (
+          <>
+            <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
           <Text style={[styles.sectionTitle, { color: c.text }]}>Solo Practice</Text>
           <View style={styles.statsRow}>
             <View style={[styles.statCard, { backgroundColor: c.cardAlt, borderColor: c.border }]}>
@@ -1609,6 +1649,8 @@ export default function ProfileScreen() {
 
           <Text style={[styles.tip, { color: c.textMuted }]}>Theme applies to navigation chrome and core surfaces.</Text>
         </View>
+          </>
+        ) : null}
 
         <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
           <Text style={[styles.sectionTitle, { color: c.text }]}>Account</Text>
@@ -1772,6 +1814,24 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 10,
   },
+  sectionToggleCard: {
+    marginTop: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  sectionToggleBtn: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minWidth: 74,
+    alignItems: "center",
+  },
+  sectionToggleBtnText: { fontSize: 12, fontWeight: "800" },
   sectionTitle: { color: "#DCE4FF", fontSize: 16, fontWeight: "700" },
   statsRow: { flexDirection: "row", gap: 8 },
   statCard: {

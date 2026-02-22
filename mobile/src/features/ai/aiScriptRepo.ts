@@ -33,11 +33,19 @@ export type GeneratedSoloGuidance = {
   source: "openai" | "fallback";
 };
 
+export type GeneratedSoloVoice = {
+  audioBase64: string;
+  mimeType: string;
+  source: "openai" | "fallback";
+  warning?: string;
+};
+
 type GenerateFunctionResponse = {
   ok?: boolean;
   source?: string;
   payload?: any;
   error?: string;
+  warning?: string;
 };
 
 type QuotaRpcRow = {
@@ -53,6 +61,7 @@ const FREE_DAILY_LIMITS: Record<AiGenerationMode, number> = {
   solo_guidance: 2,
 };
 const SOLO_LINE_LIMIT = 8;
+const SOLO_VOICE_LINE_LIMIT = 120;
 const SOLO_LINE_MAX_CHARS = 180;
 
 function safeText(value: unknown, fallback = "") {
@@ -189,7 +198,7 @@ function fallbackEventScript(args: {
   tone: string;
   language: string;
 }): GeneratedEventScript {
-  const intention = safeText(args.intention, "Collective peace and clarity.");
+  const intention = safeText(args.intention, "Collective healing, clarity, and peace.");
   const tone = safeText(args.tone, "calm").toLowerCase();
   const language = safeText(args.language, "English");
   const durationMinutes = clampMinutes(args.durationMinutes, 20);
@@ -211,7 +220,7 @@ function fallbackEventScript(args: {
       {
         name: "Arrival",
         minutes: arrival,
-        text: `Breathe in and arrive with a ${tone} rhythm.`,
+        text: `Arrive in steady breath with a ${tone} rhythm and shared focus.`,
       },
       {
         name: "Intention",
@@ -221,11 +230,11 @@ function fallbackEventScript(args: {
       {
         name: "Integration",
         minutes: integration,
-        text: "Hold this intention with gratitude and grounded focus.",
+        text: "Hold this intention as one field, with gratitude and grounded presence.",
       },
     ],
     speakerNotes:
-      "Speak slowly, pause between lines, and keep the pacing steady for group synchronization.",
+      "Speak slowly, leave gentle pauses, and keep the cadence unified so the room can move as one.",
     source: "fallback",
   };
 }
@@ -251,10 +260,10 @@ function fallbackSoloGuidance(args: {
   return {
     title: "Solo Guided Prayer",
     lines: [
-      `${prefix} slowly and hold ${intention} in your heart.`,
-      `${prefix} in steadiness, breathe out tension, and keep a ${tone} pace.`,
-      "Visualize support, healing, and clarity surrounding this intention.",
-      "Close with gratitude for what is already shifting.",
+      `${prefix} slowly and hold ${intention} in your awareness.`,
+      `${prefix} in steadiness, exhale tension, and keep a ${tone} pace.`,
+      "Feel yourself connected to the wider field of care, support, and healing.",
+      "Close with gratitude for what is already shifting through collective intention.",
     ],
     source: "fallback",
   };
@@ -353,5 +362,64 @@ export async function generateSoloGuidance(args: {
     };
   } catch {
     return fallback;
+  }
+}
+
+export async function generateSoloVoiceAudio(args: {
+  title: string;
+  intention: string;
+  lines: string[];
+  language: string;
+  durationMinutes?: number;
+  voice?: string;
+  speechRate?: number;
+  style?: string;
+}): Promise<GeneratedSoloVoice> {
+  const fallback: GeneratedSoloVoice = {
+    audioBase64: "",
+    mimeType: "audio/mpeg",
+    source: "fallback",
+    warning: "No audio returned.",
+  };
+
+  const lines = (Array.isArray(args.lines) ? args.lines : [])
+    .map((line) => safeText(line, ""))
+    .filter((line) => !!line)
+    .slice(0, SOLO_VOICE_LINE_LIMIT);
+
+  try {
+    const data = await invokeGenerateFunction({
+      mode: "solo_voice",
+      title: safeText(args.title, "Solo Guided Prayer"),
+      intention: safeText(args.intention, "peace and healing"),
+      language: safeText(args.language, "en-US"),
+      durationMinutes: clampMinutes(args.durationMinutes, 5),
+      voice: safeText(args.voice, ""),
+      speechRate: Number.isFinite(Number(args.speechRate)) ? Number(args.speechRate) : undefined,
+      style: safeText(args.style, ""),
+      lines,
+    });
+
+    const payload = data?.payload ?? {};
+    const warning = safeText(data?.warning, "");
+    const audioBase64 = safeText(payload?.audioBase64, "");
+    if (!audioBase64) {
+      return {
+        ...fallback,
+        warning: warning || fallback.warning,
+      };
+    }
+
+    return {
+      audioBase64,
+      mimeType: safeText(payload?.mimeType, "audio/mpeg"),
+      source: data?.source === "openai" ? "openai" : "fallback",
+      warning: warning || undefined,
+    };
+  } catch (error: any) {
+    return {
+      ...fallback,
+      warning: safeText(error?.message, fallback.warning),
+    };
   }
 }

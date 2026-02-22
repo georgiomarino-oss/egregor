@@ -15,6 +15,13 @@ export type AppColors = {
   glowB: string;
 };
 
+export type ScreenContext = "home" | "group" | "solo" | "profile";
+export type DayPeriod = "day" | "evening";
+export type ScreenColors = AppColors & {
+  context: ScreenContext;
+  dayPeriod: DayPeriod;
+};
+
 const COSMIC: AppColors = {
   background: "#0B1020",
   card: "#151C33",
@@ -117,4 +124,81 @@ export function getAppColors(theme: AppTheme, highContrast = false): AppColors {
   if (theme === "light") return LIGHT;
   if (theme === "dark") return DARK;
   return COSMIC;
+}
+
+function clampChannel(value: number) {
+  return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function parseHexColor(hex: string) {
+  const raw = String(hex ?? "").trim();
+  const normalized = raw.startsWith("#") ? raw.slice(1) : raw;
+  if (normalized.length !== 6) return null;
+  const r = Number.parseInt(normalized.slice(0, 2), 16);
+  const g = Number.parseInt(normalized.slice(2, 4), 16);
+  const b = Number.parseInt(normalized.slice(4, 6), 16);
+  if ([r, g, b].some((v) => Number.isNaN(v))) return null;
+  return { r, g, b };
+}
+
+function toHexColor(rgb: { r: number; g: number; b: number }) {
+  const toHex = (v: number) => clampChannel(v).toString(16).padStart(2, "0");
+  return `#${toHex(rgb.r)}${toHex(rgb.g)}${toHex(rgb.b)}`.toUpperCase();
+}
+
+function mixHex(base: string, mix: string, ratio: number) {
+  const a = parseHexColor(base);
+  const b = parseHexColor(mix);
+  if (!a || !b) return base;
+  const t = Math.max(0, Math.min(1, ratio));
+  return toHexColor({
+    r: a.r + (b.r - a.r) * t,
+    g: a.g + (b.g - a.g) * t,
+    b: a.b + (b.b - a.b) * t,
+  });
+}
+
+function shiftForPeriod(base: string, period: DayPeriod) {
+  return period === "day" ? mixHex(base, "#FFFFFF", 0.06) : mixHex(base, "#000000", 0.12);
+}
+
+function getContextHue(context: ScreenContext) {
+  if (context === "home") return "#18B8A2";
+  if (context === "group") return "#4F7BFF";
+  if (context === "solo") return "#8B63FF";
+  return "#F59E0B";
+}
+
+export function getDayPeriod(date: Date = new Date()): DayPeriod {
+  const hour = date.getHours();
+  return hour >= 6 && hour < 18 ? "day" : "evening";
+}
+
+export function getScreenColors(
+  theme: AppTheme,
+  highContrast = false,
+  context: ScreenContext = "home",
+  date: Date = new Date()
+): ScreenColors {
+  const base = getAppColors(theme, highContrast);
+  const dayPeriod = getDayPeriod(date);
+  const hue = getContextHue(context);
+
+  const blendStrength = highContrast ? 0.16 : 0.24;
+  const glowBlendStrength = highContrast ? 0.22 : 0.4;
+
+  return {
+    ...base,
+    context,
+    dayPeriod,
+    background: mixHex(shiftForPeriod(base.background, dayPeriod), hue, blendStrength * 0.38),
+    card: mixHex(shiftForPeriod(base.card, dayPeriod), hue, blendStrength * 0.42),
+    cardAlt: mixHex(shiftForPeriod(base.cardAlt, dayPeriod), hue, blendStrength * 0.5),
+    border: mixHex(base.border, hue, blendStrength * 0.64),
+    primary: mixHex(base.primary, hue, 0.58),
+    chip: mixHex(base.chip, hue, blendStrength * 0.56),
+    chipText: mixHex(base.chipText, hue, 0.18),
+    glowA: mixHex(base.glowA, hue, glowBlendStrength),
+    glowB: mixHex(base.glowB, hue, glowBlendStrength * 0.8),
+  };
 }
